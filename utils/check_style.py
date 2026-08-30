@@ -1,7 +1,6 @@
 # ----------------------------------------------------------------------------
 # Copyright (c) 2026 RobotServer contributors.
-#
-# All rights reserved.
+# SPDX-License-Identifier: MIT
 # ----------------------------------------------------------------------------
 
 import subprocess
@@ -134,8 +133,7 @@ class CppFormatter:
 
     standard_header = """// ----------------------------------------------------------------------------
 // Copyright (c) 2026 RobotServer contributors.
-//
-// All rights reserved.
+// SPDX-License-Identifier: MIT
 // ----------------------------------------------------------------------------
 """
 
@@ -225,8 +223,7 @@ class PythonFormatter:
 
     standard_header = """# ----------------------------------------------------------------------------
 # Copyright (c) 2026 RobotServer contributors.
-#
-# All rights reserved.
+# SPDX-License-Identifier: MIT
 # ----------------------------------------------------------------------------
 """
 
