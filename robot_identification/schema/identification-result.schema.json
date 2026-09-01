@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotserver.local/schema/identification-result-v1.json",
+  "title": "RobotServer candidate identification result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "kind", "status", "dataset_sha256", "model_digest",
+    "joint_names", "parameter_names", "parameters", "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "robot_identification_result"},
+    "status": {"const": "candidate"},
+    "dataset_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "model_digest": {"type": "string", "minLength": 1},
+    "software_revision": {"type": "string"},
+    "joint_names": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "parameter_names": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "parameters": {"type": "array", "minItems": 1, "items": {"type": "number"}},
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["row_count", "rank", "condition_number", "train_rmse", "validation_rmse", "mass_matrix_passed"],
+      "properties": {
+        "row_count": {"type": "integer", "minimum": 1},
+        "rank": {"type": "integer", "minimum": 1},
+        "condition_number": {"type": "number", "minimum": 1},
+        "train_rmse": {"type": "number", "minimum": 0},
+        "validation_rmse": {"type": "number", "minimum": 0},
+        "max_absolute_error": {"type": "number", "minimum": 0},
+        "mass_matrix_passed": {"type": "boolean"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "properties": {
+        "parameters": {"maxItems": 100000},
+        "parameter_names": {"maxItems": 100000}
+      }
+    }
+  ]
+}

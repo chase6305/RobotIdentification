@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "kind": "robot_identification_rollback",
+  "configuration_path": "/opt/robot/config/robot_config.yaml",
+  "configuration_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "profile": "default",
+  "created_at": "2026-08-31T08:00:00+00:00"
+}

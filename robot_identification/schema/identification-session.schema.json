@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotserver.local/schema/identification-session-v1.json",
+  "title": "RobotServer identification recording session v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "kind", "session_id", "input_topic", "time_source", "joint_names",
+    "sample_count", "rejected_count", "torque_source", "dataset_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "robot_identification_raw_joint_state"},
+    "session_id": {"type": "string", "minLength": 1},
+    "model_digest": {"type": "string", "minLength": 1},
+    "input_topic": {"type": "string", "minLength": 1},
+    "time_source": {"const": "process_monotonic"},
+    "joint_names": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "sample_count": {"type": "integer", "minimum": 1},
+    "rejected_count": {"type": "integer", "minimum": 0},
+    "torque_source": {"type": "string", "minLength": 1},
+    "dataset_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotserver.local/schema/identification-review-v1.json",
+  "title": "RobotServer identification review v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "kind", "decision", "candidate_sha256",
+    "reviewer", "reason", "reviewed_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "robot_identification_review"},
+    "decision": {"enum": ["approved", "rejected"]},
+    "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "rollback_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "reviewer": {"type": "string", "minLength": 1},
+    "reason": {"type": "string", "minLength": 1},
+    "reviewed_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [{
+    "if": {"properties": {"decision": {"const": "approved"}}},
+    "then": {"required": ["rollback_sha256"]}
+  }]
+}

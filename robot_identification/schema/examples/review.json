@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "kind": "robot_identification_review",
+  "decision": "approved",
+  "candidate_sha256": "394ee9e2d2f9c2b192e8dec37038f5fda2fe1a007a887ce439c8b0692b1aabde",
+  "rollback_sha256": "8cb4445216dc2e5710581b64cb4d7b59224faeeb33df4f32fe5141fe5e4bb71a",
+  "reviewer": "example-reviewer",
+  "reason": "offline and staged validation passed",
+  "reviewed_at": "2026-08-31T09:00:00+00:00"
+}

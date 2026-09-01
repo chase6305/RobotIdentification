@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "kind": "robot_identification_result",
+  "status": "candidate",
+  "dataset_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "model_digest": "example-model-digest",
+  "software_revision": "example-revision",
+  "joint_names": ["joint_1"],
+  "parameter_names": ["actuator/joint_1/viscous_friction"],
+  "parameters": [0.25],
+  "diagnostics": {
+    "row_count": 100,
+    "rank": 1,
+    "condition_number": 2.0,
+    "train_rmse": 0.1,
+    "validation_rmse": 0.2,
+    "max_absolute_error": 0.5,
+    "mass_matrix_passed": true
+  }
+}

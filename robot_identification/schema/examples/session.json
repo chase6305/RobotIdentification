@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "kind": "robot_identification_raw_joint_state",
+  "session_id": "example-session",
+  "input_topic": "/feedback/joint",
+  "time_source": "process_monotonic",
+  "joint_names": ["joint_1"],
+  "sample_count": 100,
+  "rejected_count": 0,
+  "torque_source": "calibrated_joint_torque",
+  "dataset_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "model_digest": "example-model-digest"
+}
