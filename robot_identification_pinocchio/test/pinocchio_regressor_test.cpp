@@ -1,13 +1,12 @@
+#include "robot_identification_pinocchio/pinocchio_regressor.h"
+
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
-#include <stdexcept>
-
 #include <pinocchio/algorithm/rnea.hpp>
 #include <pinocchio/parsers/urdf.hpp>
-
-#include "robot_identification_pinocchio/pinocchio_regressor.h"
+#include <stdexcept>
 
 int main() {
     const auto path = std::filesystem::temp_directory_path() / "robot_identification_pinocchio_test.urdf";

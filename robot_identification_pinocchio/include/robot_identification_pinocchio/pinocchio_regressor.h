@@ -1,12 +1,11 @@
 #pragma once
 
+#include <robot_identification/identification.h>
+
 #include <memory>
+#include <pinocchio/multibody/model.hpp>
 #include <string>
 #include <vector>
-
-#include <pinocchio/multibody/model.hpp>
-
-#include <robot_identification/identification.h>
 
 namespace robot_identification_pinocchio {
 

@@ -8,6 +8,7 @@ import re
 import os
 import shutil
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import multiprocessing
 from functools import partial
@@ -19,18 +20,20 @@ if sys.version_info < (3, 6):
     raise RuntimeError(
         "Requires Python 3.6+, currently using Python {}.{}.".format(
             sys.version_info.major, sys.version_info.minor))
-# Check and import yapf
-# > not found: throw exception
-# > version mismatch: throw exception
-try:
-    import yapf
-except ImportError:
-    raise ImportError(
-        "yapf not found. Install with `pip install yapf==0.43.0`.")
-if yapf.__version__ != "0.43.0":
-    raise RuntimeError(
-        "yapf 0.43.0 required. Install with `pip install yapf==0.43.0`.")
-print("Using yapf version {}".format(yapf.__version__))
+
+
+def _require_yapf():
+    try:
+        import yapf
+    except ImportError as error:
+        raise ImportError(
+            "yapf not found. Install with `pip install yapf==0.43.0`."
+        ) from error
+    if yapf.__version__ != "0.43.0":
+        raise RuntimeError(
+            "yapf 0.43.0 required. Install with `pip install yapf==0.43.0`.")
+    print("Using yapf version {}".format(yapf.__version__))
+
 
 PYTHON_EXCLUDE_DIRS = [
     "build",
@@ -39,6 +42,8 @@ PYTHON_EXCLUDE_DIRS = [
     "script",
     "deb_build",
     "install",
+    "log",
+    ".cache",
 ]
 
 PYTHON_EXCLUDE_FILES = [
@@ -46,11 +51,14 @@ PYTHON_EXCLUDE_FILES = [
 ]
 
 CPP_EXCLUDE_DIRS = [
-    "build", "install", "log", ".git", "third_party", "deb_build"
+    "build", "install", "log", ".git", "third_party", "deb_build", ".cache"
 ]
 
 
-def _glob_files(exclude_directories, extensions, exclude_files=None):
+def _glob_files(exclude_directories,
+                extensions,
+                exclude_files=None,
+                root_dir=None):
     """
     Find files with certain extensions in the root directory recursively,
     excluding specified directories and files.
@@ -63,35 +71,39 @@ def _glob_files(exclude_directories, extensions, exclude_files=None):
     Return:
         List of file paths.
     """
-    if exclude_files is None:
-        exclude_files = []
-    pwd = Path(os.path.dirname(os.path.abspath(__file__)))
-    root_dir = pwd.parent
+    root_dir = Path(root_dir) if root_dir is not None else Path(
+        __file__).resolve().parent.parent
+    exclude_paths = {root_dir / directory for directory in exclude_directories}
+    excluded_names = set(exclude_files or [])
+    suffixes = tuple(f".{extension}" for extension in extensions)
+    files = []
 
-    all_files = []
-    for extension in extensions:
-        extension_regex = f"*.{extension}"
-        all_files.extend(root_dir.rglob(extension_regex))
+    def on_error(error):
+        raise error
 
-    # Convert excluded dirs to absolute paths for comparison
-    exclude_paths = [root_dir / d for d in exclude_directories]
+    for directory, children, names in os.walk(root_dir, onerror=on_error):
+        parent = Path(directory)
+        children[:] = sorted(
+            name for name in children
+            if parent / name not in exclude_paths and name != "__pycache__")
+        for name in names:
+            path = parent / name
+            if name not in excluded_names and name.endswith(
+                    suffixes) and path.is_file():
+                files.append(str(path))
+    return sorted(files)
 
-    filtered_files = []
-    for file_path in all_files:
-        is_excluded = False
-        # Check directories
-        for exclude_path in exclude_paths:
-            if exclude_path.is_dir() and exclude_path in file_path.parents:
-                is_excluded = True
-                break
-        if is_excluded:
-            continue
-        # Check specific files
-        if file_path.name in exclude_files:
-            continue
-        filtered_files.append(str(file_path))
 
-    return sorted(list(set(filtered_files)))
+def _positive_jobs(value):
+    jobs = int(value)
+    if jobs <= 0:
+        raise argparse.ArgumentTypeError("jobs must be a positive integer")
+    return jobs
+
+
+def _worker_count(file_count, jobs=None):
+    limit = jobs if jobs is not None else min(multiprocessing.cpu_count(), 16)
+    return max(1, min(file_count, limit))
 
 
 def _find_clang_format():
@@ -147,15 +159,6 @@ class CppFormatter:
         Returns (true, true) if (style, header) is valid.
         """
 
-        with open(file_path, 'r') as f:
-            if f.read().startswith(CppFormatter.standard_header):
-                is_valid_header = True
-            else:
-                is_valid_header = False
-
-            # We don't check the header for now.
-            is_valid_header = True
-
         cmd = [
             clang_format_bin,
             "-style=file",
@@ -167,7 +170,7 @@ class CppFormatter:
             is_valid_style = False
         else:
             is_valid_style = True
-        return (is_valid_style, is_valid_header)
+        return (is_valid_style, True)
 
     @staticmethod
     def _apply_style(file_path, clang_format_bin):
@@ -179,7 +182,7 @@ class CppFormatter:
         ]
         subprocess.check_output(cmd)
 
-    def run(self, apply, no_parallel, verbose):
+    def run(self, apply, no_parallel, verbose, jobs=None):
         if apply:
             print("Applying C++/CUDA style...")
         else:
@@ -191,17 +194,21 @@ class CppFormatter:
                 print("> {}".format(file_path))
 
         start_time = time.time()
-        if no_parallel:
+        if no_parallel or len(self.file_paths) <= 1:
             is_valid_files = map(
                 partial(self._check_style,
                         clang_format_bin=self.clang_format_bin),
                 self.file_paths)
         else:
-            with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
-                is_valid_files = pool.map(
-                    partial(self._check_style,
-                            clang_format_bin=self.clang_format_bin),
-                    self.file_paths)
+            # clang-format does its CPU work in child processes; threads
+            # avoid an additional Python process for every concurrent check.
+            with ThreadPoolExecutor(max_workers=_worker_count(
+                    len(self.file_paths), jobs)) as pool:
+                is_valid_files = list(
+                    pool.map(
+                        partial(self._check_style,
+                                clang_format_bin=self.clang_format_bin),
+                        self.file_paths))
 
         changed_files = []
         wrong_header_files = []
@@ -237,28 +244,22 @@ class PythonFormatter:
         Returns (true, true) if (style, header) is valid.
         """
 
-        with open(file_path, 'r') as f:
-            content = f.read()
-            if len(content) == 0 or content.startswith(
-                    PythonFormatter.standard_header):
-                is_valid_header = True
-            else:
-                is_valid_header = False
+        from yapf.yapflib.yapf_api import FormatFile
 
-            # We don't check the header for now.
-            is_valid_header = True
-
-        _, _, changed = yapf.yapflib.yapf_api.FormatFile(
-            file_path, style_config=style_config, in_place=False)
-        return (not changed, is_valid_header)
+        _, _, changed = FormatFile(file_path,
+                                   style_config=style_config,
+                                   in_place=False)
+        return (not changed, True)
 
     @staticmethod
     def _apply_style(file_path, style_config):
-        _, _, _ = yapf.yapflib.yapf_api.FormatFile(file_path,
-                                                   style_config=style_config,
-                                                   in_place=True)
+        from yapf.yapflib.yapf_api import FormatFile
 
-    def run(self, apply, no_parallel, verbose):
+        _, _, _ = FormatFile(file_path,
+                             style_config=style_config,
+                             in_place=True)
+
+    def run(self, apply, no_parallel, verbose, jobs=None):
         if apply:
             print("Applying Python style...")
         else:
@@ -270,12 +271,13 @@ class PythonFormatter:
                 print("> {}".format(file_path))
 
         start_time = time.time()
-        if no_parallel:
+        if no_parallel or len(self.file_paths) <= 1:
             is_valid_files = map(
                 partial(self._check_style, style_config=self.style_config),
                 self.file_paths)
         else:
-            with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+            with multiprocessing.Pool(_worker_count(len(self.file_paths),
+                                                    jobs)) as pool:
                 is_valid_files = pool.map(
                     partial(self._check_style, style_config=self.style_config),
                     self.file_paths)
@@ -326,9 +328,14 @@ if __name__ == "__main__":
         default=False,
         help="If true, prints file names while formatting.",
     )
+    parser.add_argument(
+        "--jobs",
+        type=_positive_jobs,
+        help="Maximum parallel checks (default: min(CPU count, 16)).")
     args = parser.parse_args()
 
     # Check formatting libs
+    _require_yapf()
     clang_format_bin = _find_clang_format()
     pwd = Path(os.path.dirname(os.path.abspath(__file__)))
     python_style_config = str(pwd.parent / ".style.yapf")
@@ -345,13 +352,19 @@ if __name__ == "__main__":
     changed_files = []
     wrong_header_files = []
     changed_files_cpp, wrong_header_files_cpp = cpp_formatter.run(
-        apply=args.apply, no_parallel=args.no_parallel, verbose=args.verbose)
+        apply=args.apply,
+        no_parallel=args.no_parallel,
+        verbose=args.verbose,
+        jobs=args.jobs)
     changed_files.extend(changed_files_cpp)
     wrong_header_files.extend(wrong_header_files_cpp)
     print(f"apply cpp file num is {len(changed_files_cpp)}")
 
     changed_files_python, wrong_header_files_python = python_formatter.run(
-        apply=args.apply, no_parallel=args.no_parallel, verbose=args.verbose)
+        apply=args.apply,
+        no_parallel=args.no_parallel,
+        verbose=args.verbose,
+        jobs=args.jobs)
     changed_files.extend(changed_files_python)
     wrong_header_files.extend(wrong_header_files_python)
     print(f"apply python file num is {len(changed_files_python)}")

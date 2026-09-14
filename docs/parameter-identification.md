@@ -24,6 +24,8 @@ robot_identification（不依赖中间件）
 
 当前交付包括中间件无关核心和最小 ROS 2 recorder。核心提供数据集、原始/处理后 CSV、预处理、回归器接口、任意 DoF 驱动惯量/黏性摩擦/库仑摩擦/偏置列扩展、加权/ridge/Huber 求解、可观测性诊断、协方差、独立集指标和质量矩阵正定性验证。`robot_identification_ros2` 从具名 `JointState.position/effort` 采集原始 CSV，按稳定关节名重排并使用进程单调时钟；它不发送运动命令。ROS 2 仅承担采集和会话编排，不进入算法库，也不要求算法测试启动 ROS graph。
 
+记录器在写入时增量计算 CSV 摘要，仅用有效样本确定关节顺序和表头。CSV 与元数据先分别写入并同步 `.partial`，再以不覆盖已有文件的硬链接逐个发布；两份文件不是一次原子事务。写入失败时保留临时数据，发布冲突时保留恢复文件并报错。使用会话前应确认两份正式文件齐全且摘要匹配，具体恢复语义见 [recorder README](../robot_identification_ros2/README.md)。
+
 可选的 `robot_identification_pinocchio` 使用 Pinocchio 官方 joint-torque regressor 生成刚体参数列，并保持 Pinocchio 依赖不进入核心包。当前明确支持 `nq == nv` 的固定基模型；浮动基模型需要版本化扩展数据契约。
 
 `HarmonicTrajectory` 使用任意 DoF、任意谐波数的正余弦系数解析生成位置、速度、加速度和 jerk。`ValidateExcitationTrajectory()` 先以各谐波幅值之和计算保守解析包络，再依据所选机器人 profile 的逐关节限制采样完整轨迹。验证通过不授权节点发送运动；实际执行层仍需碰撞检查、watchdog 和状态联锁。
@@ -59,6 +61,7 @@ time_s,q/<joint>...,dq/<joint>...,ddq/<joint>...,tau/<joint>...
 - 力矩必须标明来源，例如驱动电流估算、关节传感器或外部传感器映射；
 - 原始数据、处理参数和处理后数据分别保存；
 - 使用原始 CSV 的 SHA-256 将 session metadata、候选结果和实际输入绑定；
+- 候选结果创建在同一次读取中校验并计算 CSV 摘要，避免校验与摘要阶段读取到不同内容；
 - 接触、饱和、watchdog、错误和丢帧区间不得作为正常辨识样本。
 
 ### 数值诊断
@@ -74,6 +77,26 @@ time_s,q/<joint>...,dq/<joint>...,ddq/<joint>...,tau/<joint>...
 - 参数量纲、符号和物理范围。
 
 ridge 可以改善数值稳定性，但不能把秩亏伪装成充分激励。Huber IRLS 用于降低少量异常点的影响，不能代替接触/通信异常剔除。
+
+RMSE 和平均绝对误差先按最大绝对值缩放再统计，避免平方或求和的中间溢出/下溢。无法表示的预测残差会报错；参考观测全为零而误差非零时，归一化 RMSE 仍为无穷大。该处理不扩展回归求解器或协方差计算本身的数值范围。
+
+求解器在协方差信息矩阵、残差方差和最终协方差出现非有限值时抛出溢出异常，避免返回不可用的不确定性估计。鲁棒迭代达到次数上限时省去未使用的下一轮权重计算，返回的权重仍对应实际完成的最后一次求解。
+
+鲁棒迭代的收敛判定使用缩放后的参数变化范数与相对比值，保留原有绝对/相对容差语义，避免大参数的平方范数或容差乘积溢出后提前报告收敛。
+
+质量矩阵物理验证先归一化再检查对称性和特征值，避免极端尺度掩盖非对称项。特征值恢复至原始尺度后必须有限，再与配置的最小特征值阈值比较；零矩阵及非正定矩阵仍判定失败。
+
+批量验证复用位置缓冲区和特征值求解器，并原地归一化回调返回的矩阵，减少逐姿态内存分配。某个矩阵验证失败后仍继续检查后续姿态，累计失败数和可计算的最小特征值；回调本身抛出的异常仍向调用者传播。
+
+预处理的大窗口平滑使用带补偿和定期重算的滚动求和，保持对称窗口与边界均值规则，总计算量随样本数线性增长。非均匀三点差分以相邻割线斜率求值，使恒定位置偏置先相消，减少虚假速度和加速度。
+
+小窗口求和发生溢出时使用归一化回退，避免把仍可表示的有限均值误判为无效数据。窗口为 1 时直接读取原始位置/力矩矩阵，减少整份数据复制。JSON 工件导入拒绝非零数下溢为零，保留真实零和可表示的次正规数。
+
+矩阵形式和 `RawDataset` 形式的预处理入口共用输入校验，在数值计算前检查关节名、维度、有限值和时间戳严格递增。内部差分复用这项前置保证，避免重复扫描；差分的算术溢出检查和最终数据集校验仍保留。
+
+原始和预处理 CSV 均在逐行解析时检查时间戳顺序，遇到重复或倒退立即停止读取并报告实际行号，空行也计入行号。负起始时间仍然有效，只要所有时间戳有限且严格递增。
+
+两个 CSV 读取入口也会在解析数据行前拒绝重复关节名或包含回车等 CSV 分隔字符的名称，与写入端的名称限制保持一致，避免读取整份无效数据后才报错。
 
 ### 推荐迁移顺序
 
@@ -97,6 +120,10 @@ The migration separates robot-specific regressor construction from reusable prep
 
 Processed CSV uses `time_s`, followed by ordered `q/`, `dq/`, `ddq/`, and `tau/` columns for every joint. Names must be unique, timestamps strictly increasing, and all values finite. Keep raw recordings immutable and record torque provenance, preprocessing settings, model digest, software revision, exclusions, and operating context.
 
+Candidate creation validates and hashes the CSV in a single read so its digest always describes the byte stream that passed validation.
+
 Every accepted result needs full numerical rank, reviewed conditioning, uncertainty, per-joint training and holdout errors, robust-weight diagnostics, and physical validation such as symmetric positive-definite mass matrices over the intended workspace. Ridge and robust regression improve numerical behavior but do not repair insufficient excitation or a wrong model.
+
+Large preprocessing windows use compensated rolling sums with periodic recomputation, preserving symmetric windows and boundary means with linear work in sample count. Nonuniform three-point derivatives are evaluated using adjacent secant slopes so constant position offsets cancel before time division.
 
 The `robot_identification_ros2` recorder consumes named `JointState.position/effort`, reorders a stable joint set, uses process-monotonic callback timestamps, and atomically finalizes the raw CSV without commanding motion. ROS 2 remains an orchestration layer and must never apply an identified model automatically. Produce a candidate artifact, review it offline, retain rollback parameters, and perform staged low-speed hardware validation before changing a runtime profile or URDF.

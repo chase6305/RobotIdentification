@@ -1,12 +1,11 @@
 #pragma once
 
+#include <Eigen/Core>
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
-
-#include <Eigen/Core>
 
 namespace robot_identification {
 
@@ -112,19 +111,17 @@ struct ExcitationValidationResult {
     std::string reason;
 };
 
-[[nodiscard]] ExcitationValidationResult ValidateExcitationTrajectory(
-    const HarmonicTrajectory& trajectory,
-    const ExcitationLimits& limits,
-    double duration_seconds,
-    double sample_period_seconds);
+[[nodiscard]] ExcitationValidationResult ValidateExcitationTrajectory(const HarmonicTrajectory& trajectory,
+                                                                      const ExcitationLimits& limits,
+                                                                      double duration_seconds,
+                                                                      double sample_period_seconds);
 
 [[nodiscard]] Dataset PreprocessPositionAndTorque(const std::vector<std::string>& joint_names,
                                                   const Eigen::VectorXd& time_seconds,
                                                   const Eigen::MatrixXd& position,
                                                   const Eigen::MatrixXd& torque,
                                                   const PreprocessOptions& options = {});
-[[nodiscard]] Dataset PreprocessPositionAndTorque(const RawDataset& dataset,
-                                                  const PreprocessOptions& options = {});
+[[nodiscard]] Dataset PreprocessPositionAndTorque(const RawDataset& dataset, const PreprocessOptions& options = {});
 
 class RegressorBackend {
 public:
@@ -170,8 +167,7 @@ struct RegressionProblem {
     [[nodiscard]] bool Validate(std::string* reason = nullptr) const;
 };
 
-[[nodiscard]] RegressionProblem BuildRegressionProblem(const Dataset& dataset,
-                                                       const RegressorBackend& backend);
+[[nodiscard]] RegressionProblem BuildRegressionProblem(const Dataset& dataset, const RegressorBackend& backend);
 
 struct SolverOptions {
     double ridge{0.0};
@@ -197,8 +193,7 @@ struct IdentificationResult {
     bool converged{false};
 };
 
-[[nodiscard]] IdentificationResult Solve(const RegressionProblem& problem,
-                                         const SolverOptions& options = {});
+[[nodiscard]] IdentificationResult Solve(const RegressionProblem& problem, const SolverOptions& options = {});
 
 struct ValidationMetrics {
     double rmse{0.0};
@@ -208,8 +203,7 @@ struct ValidationMetrics {
     std::size_t row_count{0};
 };
 
-[[nodiscard]] ValidationMetrics ValidateParameters(const RegressionProblem& problem,
-                                                   const Eigen::VectorXd& parameters);
+[[nodiscard]] ValidationMetrics ValidateParameters(const RegressionProblem& problem, const Eigen::VectorXd& parameters);
 
 using MassMatrixFunction = std::function<Eigen::MatrixXd(const Eigen::VectorXd&, const Eigen::VectorXd&)>;
 

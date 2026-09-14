@@ -49,6 +49,28 @@ if(BUILD_TESTING)
   target_link_libraries(robot_identification_test PRIVATE robot_identification::robot_identification)
   add_test(NAME robot_identification_test COMMAND robot_identification_test)
 
+  add_executable(robot_identification_preprocessing_test test/preprocessing_test.cpp)
+  target_link_libraries(robot_identification_preprocessing_test PRIVATE robot_identification::robot_identification)
+  add_test(NAME robot_identification_preprocessing_test COMMAND robot_identification_preprocessing_test)
+
+  add_executable(robot_identification_csv_test test/csv_test.cpp)
+  target_link_libraries(robot_identification_csv_test PRIVATE robot_identification::robot_identification)
+  add_test(NAME robot_identification_csv_test COMMAND robot_identification_csv_test)
+
+  # Interchange tests use the repository's pure-Python tools, without ROS.
+  # A standalone copy of this library can still build its own C++ tests.
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../robot_server_tools/robot_server_tools/dataset_inspect.py"
+     AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../robot_identification_ros2/robot_identification_ros2/raw_joint_state_session.py")
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+      add_executable(robot_identification_csv_roundtrip test/csv_roundtrip.cpp)
+      target_link_libraries(robot_identification_csv_roundtrip PRIVATE robot_identification::robot_identification)
+      add_test(NAME robot_identification_csv_interop
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test/csv_interop_test.py
+          $<TARGET_FILE:robot_identification_csv_roundtrip>)
+    endif()
+  endif()
+
   set(ROBOT_IDENTIFICATION_CONSUMER_INSTALL "${CMAKE_CURRENT_BINARY_DIR}/consumer-install")
   set(ROBOT_IDENTIFICATION_CONSUMER_BUILD "${CMAKE_CURRENT_BINARY_DIR}/consumer-build")
   add_test(NAME robot_identification_install

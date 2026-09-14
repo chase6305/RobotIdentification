@@ -1,19 +1,21 @@
 #include "robot_identification/identification.h"
 
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <fstream>
-#include <iomanip>
-#include <limits>
-#include <sstream>
-#include <stdexcept>
-#include <utility>
-
 #include <Eigen/Cholesky>
 #include <Eigen/Eigenvalues>
 #include <Eigen/QR>
 #include <Eigen/SVD>
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <limits>
+#include <locale>
+#include <sstream>
+#include <stdexcept>
+#include <string_view>
+#include <utility>
 
 namespace robot_identification {
 namespace {
@@ -23,43 +25,157 @@ bool Fail(std::string* reason, const std::string& message) {
     return false;
 }
 
+bool ValidateRawInputs(const std::vector<std::string>& joint_names,
+                       const Eigen::VectorXd& time_seconds,
+                       const Eigen::MatrixXd& position,
+                       const Eigen::MatrixXd& torque,
+                       std::string* reason) {
+    if (joint_names.empty()) return Fail(reason, "joint_names must not be empty");
+    auto names = joint_names;
+    std::sort(names.begin(), names.end());
+    if (names.front().empty() || std::adjacent_find(names.begin(), names.end()) != names.end()) {
+        return Fail(reason, "joint names must be non-empty and unique");
+    }
+    if (time_seconds.size() < 3 || position.rows() != time_seconds.size() || torque.rows() != time_seconds.size() ||
+        position.cols() != static_cast<Eigen::Index>(joint_names.size()) || torque.cols() != position.cols() ||
+        !time_seconds.allFinite() || !position.allFinite() || !torque.allFinite()) {
+        return Fail(reason, "raw dataset dimensions are inconsistent or values are non-finite");
+    }
+    for (Eigen::Index index = 1; index < time_seconds.size(); ++index) {
+        if (time_seconds[index] <= time_seconds[index - 1]) {
+            return Fail(reason, "raw timestamps must be strictly increasing");
+        }
+    }
+    return true;
+}
+
+struct ErrorMagnitudes {
+    double rms{0.0};
+    double mean_absolute{0.0};
+    double maximum{0.0};
+};
+
+bool ParametersConverged(const Eigen::VectorXd& current, const Eigen::VectorXd& previous, double tolerance) {
+    const double scale = std::max({1.0, current.cwiseAbs().maxCoeff(), previous.cwiseAbs().maxCoeff()});
+    double previous_norm = 0.0;
+    double change_norm = 0.0;
+    for (Eigen::Index row = 0; row < current.size(); ++row) {
+        const double difference = current[row] - previous[row];
+        // Subtract first to retain small updates; normalize first only when
+        // opposite-sign finite parameters overflow their difference.
+        const double change = std::isfinite(difference) ? difference / scale :
+                              current[row] / scale - previous[row] / scale;
+        previous_norm = std::hypot(previous_norm, previous[row] / scale);
+        change_norm = std::hypot(change_norm, change);
+    }
+    return change_norm / std::max(1.0 / scale, previous_norm) <= tolerance;
+}
+
+ErrorMagnitudes MeasureErrors(const Eigen::VectorXd& values) {
+    if (!values.allFinite()) throw std::overflow_error("error metrics require finite predictions and residuals");
+    ErrorMagnitudes result;
+    result.maximum = values.cwiseAbs().maxCoeff();
+    if (result.maximum == 0.0) return result;
+    // Scale before squaring or summing: the final metrics are bounded by the
+    // largest magnitude even when the unscaled squared norm is not representable.
+    long double absolute_sum = 0.0L;
+    long double squared_sum = 0.0L;
+    for (Eigen::Index row = 0; row < values.size(); ++row) {
+        const long double normalized = std::abs(static_cast<long double>(values[row])) / result.maximum;
+        absolute_sum += normalized;
+        squared_sum += normalized * normalized;
+    }
+    result.rms = static_cast<double>(std::min(1.0L, std::sqrt(squared_sum / values.size())) * result.maximum);
+    result.mean_absolute = static_cast<double>(std::min(1.0L, absolute_sum / values.size()) * result.maximum);
+    return result;
+}
+
 Eigen::MatrixXd SmoothSymmetric(const Eigen::MatrixXd& values, std::size_t window) {
     if (window == 1) return values;
-    const Eigen::Index radius = static_cast<Eigen::Index>(window / 2);
+    const Eigen::Index radius =
+        static_cast<Eigen::Index>(std::min(window / 2, static_cast<std::size_t>(values.rows() - 1)));
     Eigen::MatrixXd output(values.rows(), values.cols());
-    for (Eigen::Index row = 0; row < values.rows(); ++row) {
-        const Eigen::Index begin = std::max<Eigen::Index>(0, row - radius);
-        const Eigen::Index end = std::min<Eigen::Index>(values.rows() - 1, row + radius);
-        output.row(row) = values.middleRows(begin, end - begin + 1).colwise().mean();
+    // Eigen's short reductions are faster for the usual small windows.
+    if (radius <= 32) {
+        for (Eigen::Index row = 0; row < values.rows(); ++row) {
+            const Eigen::Index begin = std::max<Eigen::Index>(0, row - radius);
+            const Eigen::Index end = row + std::min(radius, values.rows() - 1 - row);
+            output.row(row) = values.middleRows(begin, end - begin + 1).colwise().mean();
+            for (Eigen::Index column = 0; column < values.cols(); ++column) {
+                if (std::isfinite(output(row, column))) continue;
+                // A finite mean can have an overflowing intermediate sum.
+                // Normalize only exceptional windows, keeping the common path fast.
+                const double scale = values.col(column).segment(begin, end - begin + 1).cwiseAbs().maxCoeff();
+                long double normalized_sum = 0.0L;
+                for (Eigen::Index index = begin; index <= end; ++index) {
+                    normalized_sum += static_cast<long double>(values(index, column)) / scale;
+                }
+                const long double mean = normalized_sum / (end - begin + 1);
+                output(row, column) = static_cast<double>(std::clamp(mean, -1.0L, 1.0L) * scale);
+            }
+        }
+        return output;
+    }
+    const Eigen::Index rebase_interval =
+        static_cast<Eigen::Index>(std::min(window, static_cast<std::size_t>(values.rows())));
+    for (Eigen::Index column = 0; column < values.cols(); ++column) {
+        long double sum = 0.0L;
+        long double correction = 0.0L;
+        const auto add = [&](long double value) {
+            const long double next = sum + value;
+            correction += std::abs(sum) >= std::abs(value) ? (sum - next) + value : (value - next) + sum;
+            sum = next;
+        };
+        Eigen::Index previous_begin = 0;
+        Eigen::Index previous_end = -1;
+        Eigen::Index until_rebase = 0;
+        for (Eigen::Index row = 0; row < values.rows(); ++row) {
+            const Eigen::Index begin = std::max<Eigen::Index>(0, row - radius);
+            const Eigen::Index end = row + std::min(radius, values.rows() - 1 - row);
+            if (until_rebase == 0) {
+                // Rebuild once per window to bound roundoff accumulation;
+                // the total work remains linear in the number of samples.
+                sum = correction = 0.0L;
+                for (Eigen::Index index = begin; index <= end; ++index) add(values(index, column));
+                until_rebase = rebase_interval;
+            } else {
+                if (begin != previous_begin) add(-static_cast<long double>(values(previous_begin, column)));
+                if (end != previous_end) add(values(end, column));
+            }
+            output(row, column) = static_cast<double>((sum + correction) / (end - begin + 1));
+            previous_begin = begin;
+            previous_end = end;
+            --until_rebase;
+        }
     }
     return output;
 }
 
 Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time, const Eigen::MatrixXd& values) {
-    if (time.size() < 3 || values.rows() != time.size()) {
-        throw std::invalid_argument("differentiation requires at least three matching samples");
-    }
-    for (Eigen::Index row = 1; row < time.size(); ++row) {
-        if (!std::isfinite(time[row]) || time[row] <= time[row - 1]) {
-            throw std::invalid_argument("timestamps must be finite and strictly increasing");
-        }
-    }
+    // Internal preprocessing helper: dimensions and timestamps were checked by
+    // ValidateRawInputs before smoothing. Keep arithmetic checks below.
     Eigen::MatrixXd derivative(values.rows(), values.cols());
     for (Eigen::Index row = 0; row < values.rows(); ++row) {
         const Eigen::Index first = row == 0 ? 0 : row + 1 == values.rows() ? row - 2 : row - 1;
         const Eigen::Index second = first + 1;
         const Eigen::Index third = first + 2;
-        const double x0 = time[first] - time[row];
-        const double x1 = time[second] - time[row];
-        const double x2 = time[third] - time[row];
-        const double c0 = -(x1 + x2) / ((x0 - x1) * (x0 - x2));
-        const double c1 = -(x0 + x2) / ((x1 - x0) * (x1 - x2));
-        const double c2 = -(x0 + x1) / ((x2 - x0) * (x2 - x1));
-        if (!std::isfinite(c0) || !std::isfinite(c1) || !std::isfinite(c2)) {
+        const double left_step = time[second] - time[first];
+        const double right_step = time[third] - time[second];
+        const double span = left_step + right_step;
+        if (!std::isfinite(span)) {
             throw std::overflow_error("timestamp spacing is numerically unusable for differentiation");
         }
-        derivative.row(row) = c0 * values.row(first) + c1 * values.row(second) + c2 * values.row(third);
+        // Differentiate the same three-point quadratic through its secant
+        // slopes, so a constant position offset cancels before division.
+        const double ratio = row == first ? -left_step / span : row == third ? right_step / span : left_step / span;
+        for (Eigen::Index column = 0; column < values.cols(); ++column) {
+            const double left_slope = (values(second, column) - values(first, column)) / left_step;
+            const double right_slope = (values(third, column) - values(second, column)) / right_step;
+            const double base = row == third ? right_slope : left_slope;
+            derivative(row, column) = base + ratio * (right_slope - left_slope);
+        }
     }
+    if (!derivative.allFinite()) throw std::overflow_error("differentiation produced non-finite values");
     return derivative;
 }
 
@@ -74,13 +190,75 @@ std::vector<std::string> SplitCsvLine(const std::string& line) {
     return fields;
 }
 
-double ParseFinite(const std::string& field) {
-    std::size_t consumed = 0;
-    const double value = std::stod(field, &consumed);
-    if (consumed != field.size() || !std::isfinite(value)) {
-        throw std::runtime_error("CSV numeric field is invalid: " + field);
+void ValidateCsvJointNames(const std::vector<std::string>& names) {
+    // Sort views to detect duplicates without copying every joint-name string.
+    std::vector<std::string_view> ordered;
+    ordered.reserve(names.size());
+    for (const auto& name : names) {
+        if (name.empty() || name.find_first_of(",\r\n") != std::string::npos) {
+            throw std::runtime_error("CSV joint names must be non-empty and contain no commas or newlines");
+        }
+        ordered.emplace_back(name);
     }
-    return value;
+    std::sort(ordered.begin(), ordered.end());
+    if (std::adjacent_find(ordered.begin(), ordered.end()) != ordered.end()) {
+        throw std::runtime_error("CSV joint names must be unique");
+    }
+}
+
+bool ParseCsvRow(std::string& line, std::vector<double>& values, std::size_t line_number, double& previous_time) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    const char* cursor = line.data();
+    const char* end = cursor + line.size();
+    if (cursor == end) return false;
+
+    // from_chars bounds conversion to each field without changing the buffer
+    // or consulting the process locale. Preserve leading ASCII whitespace,
+    // an explicit plus sign, and the existing 0x-prefixed hexadecimal syntax.
+    std::size_t column = 0;
+    while (true) {
+        if (column == values.size()) {
+            throw std::runtime_error("dataset row has the wrong field count at line " + std::to_string(line_number));
+        }
+        const char* field_end = std::find(cursor, end, ',');
+        const char* number = cursor;
+        while (number != field_end && (*number == ' ' || (*number >= '\t' && *number <= '\r'))) ++number;
+        const bool negative = number != field_end && *number == '-';
+        if (number != field_end && (*number == '+' || *number == '-')) ++number;
+        auto format = std::chars_format::general;
+        if (field_end - number >= 2 && number[0] == '0' && (number[1] == 'x' || number[1] == 'X')) {
+            number += 2;
+            format = std::chars_format::hex;
+        }
+        const auto location = [&]() {
+            return " at line " + std::to_string(line_number) + ", column " + std::to_string(column + 1);
+        };
+        if (number == field_end || *number == '+' || *number == '-') {
+            throw std::invalid_argument("CSV numeric field is empty or invalid" + location());
+        }
+        double value = 0.0;
+        const auto conversion = std::from_chars(number, field_end, value, format);
+        if (conversion.ec == std::errc::invalid_argument) {
+            throw std::invalid_argument("CSV numeric field is empty or invalid" + location());
+        }
+        if (conversion.ec == std::errc::result_out_of_range) {
+            throw std::out_of_range("CSV numeric field is out of range" + location());
+        }
+        if (conversion.ptr != field_end || !std::isfinite(value)) {
+            throw std::runtime_error("CSV numeric field is invalid" + location());
+        }
+        values[column++] = negative ? -value : value;
+        if (field_end == end) break;
+        cursor = field_end + 1;
+    }
+    if (column != values.size()) {
+        throw std::runtime_error("dataset row has the wrong field count at line " + std::to_string(line_number));
+    }
+    if (values[0] <= previous_time) {
+        throw std::runtime_error("CSV timestamp must be strictly increasing at line " + std::to_string(line_number));
+    }
+    previous_time = values[0];
+    return true;
 }
 
 struct LinearSolveResult {
@@ -93,32 +271,45 @@ LinearSolveResult SolveWeighted(const RegressionProblem& problem,
                                 const Eigen::VectorXd& weights,
                                 const SolverOptions& options) {
     const Eigen::VectorXd sqrt_weights = weights.array().sqrt();
-    Eigen::MatrixXd weighted_regressor = problem.regressor.array().colwise() * sqrt_weights.array();
-    Eigen::VectorXd weighted_observation = problem.observation.array() * sqrt_weights.array();
+    const Eigen::Index data_rows = problem.regressor.rows();
+    const Eigen::Index parameter_count = problem.regressor.cols();
+    const Eigen::Index ridge_rows = options.ridge > 0.0 ? parameter_count : 0;
+    if (data_rows > std::numeric_limits<Eigen::Index>::max() - ridge_rows) {
+        throw std::overflow_error("regularized regression row count overflowed");
+    }
+    Eigen::MatrixXd weighted_regressor(data_rows + ridge_rows, parameter_count);
+    Eigen::VectorXd weighted_observation(data_rows + ridge_rows);
+    weighted_regressor.topRows(data_rows) = problem.regressor.array().colwise() * sqrt_weights.array();
+    weighted_observation.head(data_rows) = problem.observation.array() * sqrt_weights.array();
+    if (!weighted_regressor.topRows(data_rows).allFinite() || !weighted_observation.head(data_rows).allFinite()) {
+        throw std::overflow_error("weighted regression values are non-finite");
+    }
 
     // Observability is a property of measured data. Diagnose it before adding
     // ridge rows, otherwise regularization would make every problem appear
     // full rank even when the experiment did not excite some parameters.
-    Eigen::JacobiSVD<Eigen::MatrixXd> diagnostic_svd(weighted_regressor);
-    diagnostic_svd.setThreshold(options.relative_rank_tolerance);
-    const Eigen::VectorXd diagnostic_singular_values = diagnostic_svd.singularValues();
-    const std::size_t diagnostic_rank = static_cast<std::size_t>(diagnostic_svd.rank());
-
-    if (options.ridge > 0.0) {
-        const Eigen::Index old_rows = weighted_regressor.rows();
-        const Eigen::Index parameter_count = weighted_regressor.cols();
-        weighted_regressor.conservativeResize(old_rows + parameter_count, Eigen::NoChange);
-        weighted_regressor.bottomRows(parameter_count) =
-            std::sqrt(options.ridge) * Eigen::MatrixXd::Identity(parameter_count, parameter_count);
-        weighted_observation.conservativeResize(old_rows + parameter_count);
-        weighted_observation.tail(parameter_count).setZero();
+    Eigen::JacobiSVD<Eigen::MatrixXd> diagnostic_svd;
+    if (ridge_rows == 0) {
+        diagnostic_svd.compute(weighted_regressor, Eigen::ComputeThinU | Eigen::ComputeThinV);
+    } else {
+        diagnostic_svd.compute(weighted_regressor.topRows(data_rows));
     }
+    diagnostic_svd.setThreshold(options.relative_rank_tolerance);
+    LinearSolveResult result;
+    result.singular_values = diagnostic_svd.singularValues();
+    result.rank = static_cast<std::size_t>(diagnostic_svd.rank());
+    if (ridge_rows == 0) {
+        // Ordinary and unregularized IRLS solves use the same factorization
+        // for the parameter estimate and the measured-data diagnostics.
+        result.parameters = diagnostic_svd.solve(weighted_observation);
+        return result;
+    }
+    weighted_regressor.bottomRows(ridge_rows).setZero();
+    weighted_regressor.bottomRows(ridge_rows).diagonal().setConstant(std::sqrt(options.ridge));
+    weighted_observation.tail(ridge_rows).setZero();
     Eigen::JacobiSVD<Eigen::MatrixXd> svd(weighted_regressor, Eigen::ComputeThinU | Eigen::ComputeThinV);
     svd.setThreshold(options.relative_rank_tolerance);
-    LinearSolveResult result;
     result.parameters = svd.solve(weighted_observation);
-    result.singular_values = diagnostic_singular_values;
-    result.rank = diagnostic_rank;
     return result;
 }
 
@@ -148,23 +339,7 @@ bool Dataset::Validate(std::string* reason) const {
 }
 
 bool RawDataset::Validate(std::string* reason) const {
-    if (joint_names.empty()) return Fail(reason, "joint_names must not be empty");
-    std::vector<std::string> names = joint_names;
-    std::sort(names.begin(), names.end());
-    if (names.front().empty() || std::adjacent_find(names.begin(), names.end()) != names.end()) {
-        return Fail(reason, "joint names must be non-empty and unique");
-    }
-    if (time_seconds.size() < 3 || position.rows() != time_seconds.size() || torque.rows() != time_seconds.size() ||
-        position.cols() != static_cast<Eigen::Index>(joint_names.size()) || torque.cols() != position.cols() ||
-        !time_seconds.allFinite() || !position.allFinite() || !torque.allFinite()) {
-        return Fail(reason, "raw dataset dimensions are inconsistent or values are non-finite");
-    }
-    for (Eigen::Index index = 1; index < time_seconds.size(); ++index) {
-        if (time_seconds[index] <= time_seconds[index - 1]) {
-            return Fail(reason, "raw timestamps must be strictly increasing");
-        }
-    }
-    return true;
+    return ValidateRawInputs(joint_names, time_seconds, position, torque, reason);
 }
 
 HarmonicTrajectory::HarmonicTrajectory(Eigen::VectorXd offset,
@@ -178,8 +353,8 @@ HarmonicTrajectory::HarmonicTrajectory(Eigen::VectorXd offset,
     if (offset_.size() == 0 || sin_coefficients_.rows() != offset_.size() ||
         cos_coefficients_.rows() != offset_.size() || sin_coefficients_.cols() == 0 ||
         cos_coefficients_.cols() != sin_coefficients_.cols() || !offset_.allFinite() ||
-        !sin_coefficients_.allFinite() || !cos_coefficients_.allFinite() ||
-        !std::isfinite(angular_frequency_) || angular_frequency_ <= 0.0) {
+        !sin_coefficients_.allFinite() || !cos_coefficients_.allFinite() || !std::isfinite(angular_frequency_) ||
+        angular_frequency_ <= 0.0) {
         throw std::invalid_argument("harmonic trajectory configuration is invalid");
     }
 }
@@ -190,14 +365,12 @@ std::size_t HarmonicTrajectory::harmonic_count() const noexcept {
     return static_cast<std::size_t>(sin_coefficients_.cols());
 }
 
-double HarmonicTrajectory::period_seconds() const noexcept {
-    return 2.0 * std::acos(-1.0) / angular_frequency_;
-}
+double HarmonicTrajectory::period_seconds() const noexcept { return 2.0 * std::acos(-1.0) / angular_frequency_; }
 
 ExcitationSample HarmonicTrajectory::Evaluate(double time_seconds) const {
     if (!std::isfinite(time_seconds)) throw std::invalid_argument("trajectory time must be finite");
-    ExcitationSample sample{offset_, Eigen::VectorXd::Zero(offset_.size()),
-                            Eigen::VectorXd::Zero(offset_.size()), Eigen::VectorXd::Zero(offset_.size())};
+    ExcitationSample sample{offset_, Eigen::VectorXd::Zero(offset_.size()), Eigen::VectorXd::Zero(offset_.size()),
+                            Eigen::VectorXd::Zero(offset_.size())};
     for (Eigen::Index harmonic = 0; harmonic < sin_coefficients_.cols(); ++harmonic) {
         const double frequency = static_cast<double>(harmonic + 1) * angular_frequency_;
         const double phase = frequency * time_seconds;
@@ -226,8 +399,7 @@ HarmonicBounds HarmonicTrajectory::ConservativeBounds() const {
     for (Eigen::Index harmonic = 0; harmonic < sin_coefficients_.cols(); ++harmonic) {
         const double frequency = static_cast<double>(harmonic + 1) * angular_frequency_;
         const Eigen::VectorXd amplitude =
-            (sin_coefficients_.col(harmonic).array().square() +
-             cos_coefficients_.col(harmonic).array().square())
+            (sin_coefficients_.col(harmonic).array().square() + cos_coefficients_.col(harmonic).array().square())
                 .sqrt()
                 .matrix();
         position_envelope += amplitude;
@@ -246,15 +418,15 @@ ExcitationValidationResult ValidateExcitationTrajectory(const HarmonicTrajectory
                                                         double sample_period_seconds) {
     const Eigen::Index dof = static_cast<Eigen::Index>(trajectory.dof());
     const bool dimensions_match = limits.minimum_position.size() == dof && limits.maximum_position.size() == dof &&
-                                  limits.maximum_velocity.size() == dof &&
-                                  limits.maximum_acceleration.size() == dof && limits.maximum_jerk.size() == dof;
+                                  limits.maximum_velocity.size() == dof && limits.maximum_acceleration.size() == dof &&
+                                  limits.maximum_jerk.size() == dof;
     if (!dimensions_match || !limits.minimum_position.allFinite() || !limits.maximum_position.allFinite() ||
         !limits.maximum_velocity.allFinite() || !limits.maximum_acceleration.allFinite() ||
         !limits.maximum_jerk.allFinite() ||
         (limits.minimum_position.array() >= limits.maximum_position.array()).any() ||
         (limits.maximum_velocity.array() <= 0.0).any() || (limits.maximum_acceleration.array() <= 0.0).any() ||
-        (limits.maximum_jerk.array() <= 0.0).any() || !std::isfinite(duration_seconds) ||
-        duration_seconds <= 0.0 || !std::isfinite(sample_period_seconds) || sample_period_seconds <= 0.0) {
+        (limits.maximum_jerk.array() <= 0.0).any() || !std::isfinite(duration_seconds) || duration_seconds <= 0.0 ||
+        !std::isfinite(sample_period_seconds) || sample_period_seconds <= 0.0) {
         throw std::invalid_argument("excitation validation configuration is invalid");
     }
     const double requested_steps = std::ceil(duration_seconds / sample_period_seconds);
@@ -272,8 +444,7 @@ ExcitationValidationResult ValidateExcitationTrajectory(const HarmonicTrajectory
     result.conservative_acceleration_bound = Eigen::VectorXd::Zero(dof);
     result.conservative_jerk_bound = Eigen::VectorXd::Zero(dof);
     const HarmonicBounds conservative = trajectory.ConservativeBounds();
-    result.conservative_position_envelope =
-        (conservative.maximum_position - conservative.minimum_position) * 0.5;
+    result.conservative_position_envelope = (conservative.maximum_position - conservative.minimum_position) * 0.5;
     result.conservative_velocity_bound = conservative.maximum_absolute_velocity;
     result.conservative_acceleration_bound = conservative.maximum_absolute_acceleration;
     result.conservative_jerk_bound = conservative.maximum_absolute_jerk;
@@ -303,8 +474,7 @@ ExcitationValidationResult ValidateExcitationTrajectory(const HarmonicTrajectory
         const ExcitationSample sample = trajectory.Evaluate(time);
         ++result.sample_count;
         result.peak_absolute_velocity = result.peak_absolute_velocity.cwiseMax(sample.velocity.cwiseAbs());
-        result.peak_absolute_acceleration =
-            result.peak_absolute_acceleration.cwiseMax(sample.acceleration.cwiseAbs());
+        result.peak_absolute_acceleration = result.peak_absolute_acceleration.cwiseMax(sample.acceleration.cwiseAbs());
         result.peak_absolute_jerk = result.peak_absolute_jerk.cwiseMax(sample.jerk.cwiseAbs());
         if ((sample.position.array() < limits.minimum_position.array()).any() ||
             (sample.position.array() > limits.maximum_position.array()).any()) {
@@ -343,6 +513,7 @@ void WriteRawDatasetCsv(const RawDataset& dataset, const std::string& path) {
     }
     std::ofstream output(path, std::ios::trunc);
     if (!output) throw std::runtime_error("cannot open raw dataset output: " + path);
+    output.imbue(std::locale::classic());
     output << "time_s";
     for (const char* prefix : {"q/", "tau/"}) {
         for (const auto& name : dataset.joint_names) output << ',' << prefix << name;
@@ -358,6 +529,7 @@ void WriteRawDatasetCsv(const RawDataset& dataset, const std::string& path) {
         }
         output << '\n';
     }
+    output.close();
     if (!output) throw std::runtime_error("failed while writing raw dataset: " + path);
 }
 
@@ -372,7 +544,10 @@ RawDataset ReadRawDatasetCsv(const std::string& path) {
         throw std::runtime_error("raw dataset CSV header has an invalid shape");
     }
     const std::size_t dof = (header.size() - 1) / 2;
+    const auto maximum_values = static_cast<std::size_t>(std::numeric_limits<Eigen::Index>::max());
+    if (header.size() > maximum_values) throw std::overflow_error("raw dataset CSV has too many columns");
     RawDataset dataset;
+    dataset.joint_names.reserve(dof);
     for (std::size_t joint = 0; joint < dof; ++joint) {
         if (header[1 + joint].rfind("q/", 0) != 0 || header[1 + joint].size() <= 2) {
             throw std::runtime_error("invalid raw q column name");
@@ -382,35 +557,26 @@ RawDataset ReadRawDatasetCsv(const std::string& path) {
             throw std::runtime_error("raw torque columns do not share the q joint order");
         }
     }
-    std::vector<double> times;
-    std::vector<Eigen::VectorXd> positions;
-    std::vector<Eigen::VectorXd> torques;
+    ValidateCsvJointNames(dataset.joint_names);
+    std::vector<double> rows;
+    std::vector<double> values(header.size());
     std::size_t line_number = 1;
+    double previous_time = -std::numeric_limits<double>::infinity();
     while (std::getline(input, line)) {
         ++line_number;
-        if (line.empty()) continue;
-        const auto fields = SplitCsvLine(line);
-        if (fields.empty()) continue;
-        if (fields.size() != header.size()) {
-            throw std::runtime_error("raw dataset row has the wrong field count at line " +
-                                     std::to_string(line_number));
+        if (!ParseCsvRow(line, values, line_number, previous_time)) continue;
+        if (rows.size() > maximum_values - values.size()) {
+            throw std::overflow_error("raw dataset CSV contains too many values");
         }
-        times.push_back(ParseFinite(fields[0]));
-        positions.emplace_back(static_cast<Eigen::Index>(dof));
-        torques.emplace_back(static_cast<Eigen::Index>(dof));
-        for (std::size_t joint = 0; joint < dof; ++joint) {
-            positions.back()[static_cast<Eigen::Index>(joint)] = ParseFinite(fields[1 + joint]);
-            torques.back()[static_cast<Eigen::Index>(joint)] = ParseFinite(fields[1 + dof + joint]);
-        }
+        rows.insert(rows.end(), values.begin(), values.end());
     }
-    dataset.time_seconds.resize(static_cast<Eigen::Index>(times.size()));
-    dataset.position.resize(static_cast<Eigen::Index>(times.size()), static_cast<Eigen::Index>(dof));
-    dataset.torque.resize(dataset.position.rows(), dataset.position.cols());
-    for (std::size_t row = 0; row < times.size(); ++row) {
-        dataset.time_seconds[static_cast<Eigen::Index>(row)] = times[row];
-        dataset.position.row(static_cast<Eigen::Index>(row)) = positions[row].transpose();
-        dataset.torque.row(static_cast<Eigen::Index>(row)) = torques[row].transpose();
-    }
+    if (input.bad() || !input.eof()) throw std::runtime_error("failed while reading raw dataset: " + path);
+    using RowMatrix = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+    const Eigen::Map<const RowMatrix> parsed(rows.data(), static_cast<Eigen::Index>(rows.size() / header.size()),
+                                             static_cast<Eigen::Index>(header.size()));
+    dataset.time_seconds = parsed.col(0);
+    dataset.position = parsed.middleCols(1, static_cast<Eigen::Index>(dof));
+    dataset.torque = parsed.rightCols(static_cast<Eigen::Index>(dof));
     std::string reason;
     if (!dataset.Validate(&reason)) throw std::runtime_error("raw dataset CSV is invalid: " + reason);
     return dataset;
@@ -428,6 +594,7 @@ void WriteDatasetCsv(const Dataset& dataset, const std::string& path) {
     }
     std::ofstream output(path, std::ios::trunc);
     if (!output) throw std::runtime_error("cannot open dataset output: " + path);
+    output.imbue(std::locale::classic());
     output << "time_s";
     for (const char* prefix : {"q/", "dq/", "ddq/", "tau/"}) {
         for (const auto& name : dataset.joint_names) output << ',' << prefix << name;
@@ -440,6 +607,7 @@ void WriteDatasetCsv(const Dataset& dataset, const std::string& path) {
         }
         output << '\n';
     }
+    output.close();
     if (!output) throw std::runtime_error("failed while writing dataset: " + path);
 }
 
@@ -454,6 +622,9 @@ Dataset ReadDatasetCsv(const std::string& path) {
         throw std::runtime_error("dataset CSV header has an invalid shape");
     }
     const std::size_t dof = (header.size() - 1) / 4;
+    if (dof > static_cast<std::size_t>(std::numeric_limits<Eigen::Index>::max())) {
+        throw std::overflow_error("dataset CSV has too many joints");
+    }
     Dataset dataset;
     dataset.joint_names.reserve(dof);
     for (std::size_t joint = 0; joint < dof; ++joint) {
@@ -470,31 +641,24 @@ Dataset ReadDatasetCsv(const std::string& path) {
             }
         }
     }
+    ValidateCsvJointNames(dataset.joint_names);
+    std::vector<double> values(header.size());
     std::size_t line_number = 1;
+    double previous_time = -std::numeric_limits<double>::infinity();
     while (std::getline(input, line)) {
         ++line_number;
-        if (line.empty()) continue;
-        const auto fields = SplitCsvLine(line);
-        if (fields.empty()) continue;
-        if (fields.size() != header.size()) {
-            throw std::runtime_error("dataset CSV row has the wrong field count at line " +
-                                     std::to_string(line_number));
-        }
+        if (!ParseCsvRow(line, values, line_number, previous_time)) continue;
         Sample sample;
-        sample.time_seconds = ParseFinite(fields[0]);
-        sample.position.resize(static_cast<Eigen::Index>(dof));
-        sample.velocity.resize(static_cast<Eigen::Index>(dof));
-        sample.acceleration.resize(static_cast<Eigen::Index>(dof));
-        sample.torque.resize(static_cast<Eigen::Index>(dof));
+        sample.time_seconds = values[0];
         std::array<Eigen::VectorXd*, 4> vectors{&sample.position, &sample.velocity, &sample.acceleration,
-                                               &sample.torque};
+                                                &sample.torque};
         for (std::size_t group = 0; group < vectors.size(); ++group) {
-            for (std::size_t joint = 0; joint < dof; ++joint) {
-                (*vectors[group])[static_cast<Eigen::Index>(joint)] = ParseFinite(fields[1 + group * dof + joint]);
-            }
+            *vectors[group] =
+                Eigen::Map<const Eigen::VectorXd>(values.data() + 1 + group * dof, static_cast<Eigen::Index>(dof));
         }
         dataset.samples.push_back(std::move(sample));
     }
+    if (input.bad() || !input.eof()) throw std::runtime_error("failed while reading dataset: " + path);
     std::string reason;
     if (!dataset.Validate(&reason)) throw std::runtime_error("dataset CSV is invalid: " + reason);
     return dataset;
@@ -505,24 +669,34 @@ Dataset PreprocessPositionAndTorque(const std::vector<std::string>& joint_names,
                                     const Eigen::MatrixXd& position,
                                     const Eigen::MatrixXd& torque,
                                     const PreprocessOptions& options) {
-    if (joint_names.empty() || time_seconds.size() < 3 || position.rows() != time_seconds.size() ||
-        torque.rows() != time_seconds.size() || position.cols() != static_cast<Eigen::Index>(joint_names.size()) ||
-        torque.cols() != position.cols() || !time_seconds.allFinite() || !position.allFinite() || !torque.allFinite()) {
-        throw std::invalid_argument("preprocessing inputs have inconsistent dimensions or non-finite values");
+    std::string reason;
+    if (!ValidateRawInputs(joint_names, time_seconds, position, torque, &reason)) {
+        throw std::invalid_argument("invalid raw dataset: " + reason);
     }
-    if (options.smoothing_window == 0 || options.smoothing_window % 2 == 0 ||
-        options.torque_smoothing_window == 0 || options.torque_smoothing_window % 2 == 0) {
+    if (options.smoothing_window == 0 || options.smoothing_window % 2 == 0 || options.torque_smoothing_window == 0 ||
+        options.torque_smoothing_window % 2 == 0) {
         throw std::invalid_argument("position and torque smoothing windows must be positive odd numbers");
     }
-    if (options.trim_front + options.trim_back >= static_cast<std::size_t>(time_seconds.size())) {
+    const std::size_t sample_count = static_cast<std::size_t>(time_seconds.size());
+    if (options.trim_front >= sample_count || options.trim_back >= sample_count - options.trim_front) {
         throw std::invalid_argument("trimming removes every sample");
     }
-    const Eigen::MatrixXd filtered_position = SmoothSymmetric(position, options.smoothing_window);
-    const Eigen::MatrixXd filtered_velocity =
-        SmoothSymmetric(Differentiate(time_seconds, filtered_position), options.smoothing_window);
-    const Eigen::MatrixXd filtered_acceleration =
-        SmoothSymmetric(Differentiate(time_seconds, filtered_velocity), options.smoothing_window);
-    const Eigen::MatrixXd filtered_torque = SmoothSymmetric(torque, options.torque_smoothing_window);
+    // Keep caller-owned position/torque as views when smoothing is disabled.
+    // Derivative matrices already own their storage and can be reused directly.
+    const Eigen::MatrixXd position_storage = options.smoothing_window == 1 ? Eigen::MatrixXd{} :
+                                            SmoothSymmetric(position, options.smoothing_window);
+    const auto& filtered_position = options.smoothing_window == 1 ? position : position_storage;
+    Eigen::MatrixXd filtered_velocity = Differentiate(time_seconds, filtered_position);
+    if (options.smoothing_window != 1) {
+        filtered_velocity = SmoothSymmetric(filtered_velocity, options.smoothing_window);
+    }
+    Eigen::MatrixXd filtered_acceleration = Differentiate(time_seconds, filtered_velocity);
+    if (options.smoothing_window != 1) {
+        filtered_acceleration = SmoothSymmetric(filtered_acceleration, options.smoothing_window);
+    }
+    const Eigen::MatrixXd torque_storage = options.torque_smoothing_window == 1 ? Eigen::MatrixXd{} :
+                                          SmoothSymmetric(torque, options.torque_smoothing_window);
+    const auto& filtered_torque = options.torque_smoothing_window == 1 ? torque : torque_storage;
 
     Dataset dataset;
     dataset.joint_names = joint_names;
@@ -530,19 +704,15 @@ Dataset PreprocessPositionAndTorque(const std::vector<std::string>& joint_names,
     const Eigen::Index end = time_seconds.size() - static_cast<Eigen::Index>(options.trim_back);
     dataset.samples.reserve(static_cast<std::size_t>(end - begin));
     for (Eigen::Index row = begin; row < end; ++row) {
-        dataset.samples.push_back(Sample{time_seconds[row], filtered_position.row(row).transpose(),
-                                         filtered_velocity.row(row).transpose(),
-                                         filtered_acceleration.row(row).transpose(),
-                                         filtered_torque.row(row).transpose()});
+        dataset.samples.push_back(
+            Sample{time_seconds[row], filtered_position.row(row).transpose(), filtered_velocity.row(row).transpose(),
+                   filtered_acceleration.row(row).transpose(), filtered_torque.row(row).transpose()});
     }
-    std::string reason;
     if (!dataset.Validate(&reason)) throw std::invalid_argument("preprocessed dataset is invalid: " + reason);
     return dataset;
 }
 
 Dataset PreprocessPositionAndTorque(const RawDataset& dataset, const PreprocessOptions& options) {
-    std::string reason;
-    if (!dataset.Validate(&reason)) throw std::invalid_argument("invalid raw dataset: " + reason);
     return PreprocessPositionAndTorque(dataset.joint_names, dataset.time_seconds, dataset.position, dataset.torque,
                                        options);
 }
@@ -551,7 +721,8 @@ bool RegressionProblem::Validate(std::string* reason) const {
     if (sample_count == 0 || dof == 0 || regressor.rows() == 0 || regressor.cols() == 0) {
         return Fail(reason, "regression problem must not be empty");
     }
-    if (regressor.rows() != observation.size() || row_weights.size() != observation.size() ||
+    if (sample_count > static_cast<std::size_t>(std::numeric_limits<Eigen::Index>::max()) / dof ||
+        regressor.rows() != observation.size() || row_weights.size() != observation.size() ||
         regressor.rows() != static_cast<Eigen::Index>(sample_count * dof)) {
         return Fail(reason, "regression problem dimensions are inconsistent");
     }
@@ -569,8 +740,7 @@ RegressionProblem BuildRegressionProblem(const Dataset& dataset, const Regressor
     auto parameter_names = backend.parameter_names();
     auto sorted_parameter_names = parameter_names;
     std::sort(sorted_parameter_names.begin(), sorted_parameter_names.end());
-    if (parameter_count == 0 || parameter_names.size() != parameter_count ||
-        sorted_parameter_names.front().empty() ||
+    if (parameter_count == 0 || parameter_names.size() != parameter_count || sorted_parameter_names.front().empty() ||
         std::adjacent_find(sorted_parameter_names.begin(), sorted_parameter_names.end()) !=
             sorted_parameter_names.end()) {
         throw std::invalid_argument("regressor backend has an invalid parameter contract");
@@ -609,10 +779,9 @@ JointActuatorRegressor::JointActuatorRegressor(std::shared_ptr<const RegressorBa
     if (std::adjacent_find(sorted_names.begin(), sorted_names.end()) != sorted_names.end()) {
         throw std::invalid_argument("joint actuator regressor names must be unique");
     }
-    terms_per_joint_ = static_cast<std::size_t>(options_.drive_inertia) +
-                       static_cast<std::size_t>(options_.viscous_friction) +
-                       static_cast<std::size_t>(options_.coulomb_friction) +
-                       static_cast<std::size_t>(options_.torque_bias);
+    terms_per_joint_ =
+        static_cast<std::size_t>(options_.drive_inertia) + static_cast<std::size_t>(options_.viscous_friction) +
+        static_cast<std::size_t>(options_.coulomb_friction) + static_cast<std::size_t>(options_.torque_bias);
     if (terms_per_joint_ == 0) throw std::invalid_argument("joint actuator regressor enables no terms");
 }
 
@@ -639,8 +808,7 @@ Eigen::MatrixXd JointActuatorRegressor::Compute(const Sample& sample) const {
         throw std::invalid_argument("joint actuator regressor sample dimension is invalid");
     }
     const Eigen::MatrixXd base = base_->Compute(sample);
-    if (base.rows() != dof || base.cols() != static_cast<Eigen::Index>(base_->parameter_count()) ||
-        !base.allFinite()) {
+    if (base.rows() != dof || base.cols() != static_cast<Eigen::Index>(base_->parameter_count()) || !base.allFinite()) {
         throw std::runtime_error("base regressor returned an invalid block");
     }
     Eigen::MatrixXd output = Eigen::MatrixXd::Zero(dof, static_cast<Eigen::Index>(parameter_count()));
@@ -662,10 +830,10 @@ Eigen::MatrixXd JointActuatorRegressor::Compute(const Sample& sample) const {
 IdentificationResult Solve(const RegressionProblem& problem, const SolverOptions& options) {
     std::string reason;
     if (!problem.Validate(&reason)) throw std::invalid_argument("invalid regression problem: " + reason);
-    if (!std::isfinite(options.ridge) || options.ridge < 0.0 ||
-        !std::isfinite(options.relative_rank_tolerance) || options.relative_rank_tolerance <= 0.0 ||
-        !std::isfinite(options.huber_delta) || options.huber_delta < 0.0 || options.max_iterations == 0 ||
-        !std::isfinite(options.convergence_tolerance) || options.convergence_tolerance <= 0.0) {
+    if (!std::isfinite(options.ridge) || options.ridge < 0.0 || !std::isfinite(options.relative_rank_tolerance) ||
+        options.relative_rank_tolerance <= 0.0 || !std::isfinite(options.huber_delta) || options.huber_delta < 0.0 ||
+        options.max_iterations == 0 || !std::isfinite(options.convergence_tolerance) ||
+        options.convergence_tolerance <= 0.0) {
         throw std::invalid_argument("solver options are invalid");
     }
     Eigen::VectorXd weights = problem.row_weights;
@@ -680,16 +848,17 @@ IdentificationResult Solve(const RegressionProblem& problem, const SolverOptions
         linear = SolveWeighted(problem, weights, options);
         if (!linear.parameters.allFinite()) throw std::runtime_error("parameter solution is non-finite");
         if (previous.size() == linear.parameters.size()) {
-            const double scale = std::max(1.0, previous.norm());
-            if ((linear.parameters - previous).norm() <= options.convergence_tolerance * scale) {
+            if (ParametersConverged(linear.parameters, previous, options.convergence_tolerance)) {
                 converged = true;
                 ++iterations;
                 break;
             }
         }
-        previous = linear.parameters;
-        if (options.huber_delta > 0.0) {
+        // Only prepare another weighted solve when an iteration remains.
+        if (options.huber_delta > 0.0 && iterations + 1 < limit) {
+            previous = linear.parameters;
             const Eigen::VectorXd residual = problem.observation - problem.regressor * linear.parameters;
+            if (!residual.allFinite()) throw std::overflow_error("robust regression residuals are non-finite");
             for (Eigen::Index row = 0; row < residual.size(); ++row) {
                 const double absolute = std::abs(residual[row]);
                 const double robust = absolute <= options.huber_delta ? 1.0 : options.huber_delta / absolute;
@@ -710,21 +879,23 @@ IdentificationResult Solve(const RegressionProblem& problem, const SolverOptions
                                       linear.singular_values.size() == 0 || linear.singular_values.tail(1)[0] <= 0.0
                                   ? std::numeric_limits<double>::infinity()
                                   : linear.singular_values[0] / linear.singular_values.tail(1)[0];
-    result.rmse = std::sqrt(result.residual.squaredNorm() / static_cast<double>(result.residual.size()));
-    result.max_absolute_error = result.residual.cwiseAbs().maxCoeff();
+    const auto errors = MeasureErrors(result.residual);
+    result.rmse = errors.rms;
+    result.max_absolute_error = errors.maximum;
     result.iterations = iterations;
     result.converged = converged;
     const Eigen::MatrixXd information =
         problem.regressor.transpose() * solve_weights.asDiagonal() * problem.regressor +
-                                        options.ridge * Eigen::MatrixXd::Identity(problem.regressor.cols(),
-                                                                                  problem.regressor.cols());
+        options.ridge * Eigen::MatrixXd::Identity(problem.regressor.cols(), problem.regressor.cols());
+    if (!information.allFinite()) throw std::overflow_error("covariance information matrix is non-finite");
+    const double weighted_squared_error = result.residual.dot(solve_weights.asDiagonal() * result.residual);
+    const double variance =
+        weighted_squared_error / static_cast<double>(std::max<Eigen::Index>(
+                                     1, problem.regressor.rows() - static_cast<Eigen::Index>(result.rank)));
+    if (!std::isfinite(variance)) throw std::overflow_error("covariance residual variance is non-finite");
     Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> decomposition(information);
-    const double weighted_squared_error =
-        result.residual.dot(solve_weights.asDiagonal() * result.residual);
-    const double variance = weighted_squared_error /
-                            static_cast<double>(std::max<Eigen::Index>(1, problem.regressor.rows() -
-                                                                             static_cast<Eigen::Index>(result.rank)));
     result.covariance = variance * decomposition.pseudoInverse();
+    if (!result.covariance.allFinite()) throw std::overflow_error("parameter covariance is non-finite");
     return result;
 }
 
@@ -736,14 +907,13 @@ ValidationMetrics ValidateParameters(const RegressionProblem& problem, const Eig
     const Eigen::VectorXd residual = problem.observation - problem.regressor * parameters;
     ValidationMetrics metrics;
     metrics.row_count = static_cast<std::size_t>(residual.size());
-    metrics.rmse = std::sqrt(residual.squaredNorm() / static_cast<double>(residual.size()));
-    metrics.mean_absolute_error = residual.cwiseAbs().mean();
-    metrics.max_absolute_error = residual.cwiseAbs().maxCoeff();
-    const double scale = std::sqrt(problem.observation.squaredNorm() / static_cast<double>(problem.observation.size()));
+    const auto errors = MeasureErrors(residual);
+    metrics.rmse = errors.rms;
+    metrics.mean_absolute_error = errors.mean_absolute;
+    metrics.max_absolute_error = errors.maximum;
+    const double scale = MeasureErrors(problem.observation).rms;
     metrics.normalized_rmse =
-        scale > 0.0
-            ? metrics.rmse / scale
-            : (metrics.rmse == 0.0 ? 0.0 : std::numeric_limits<double>::infinity());
+        scale > 0.0 ? metrics.rmse / scale : (metrics.rmse == 0.0 ? 0.0 : std::numeric_limits<double>::infinity());
     return metrics;
 }
 
@@ -759,22 +929,34 @@ PhysicalValidationResult ValidateMassMatrices(const Eigen::MatrixXd& joint_posit
     PhysicalValidationResult result;
     result.passed = true;
     result.minimum_eigenvalue = std::numeric_limits<double>::infinity();
+    Eigen::VectorXd position(joint_positions.cols());
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(joint_positions.cols());
     for (Eigen::Index row = 0; row < joint_positions.rows(); ++row) {
-        const Eigen::MatrixXd mass = mass_matrix(joint_positions.row(row).transpose(), parameters);
+        position = joint_positions.row(row).transpose();
+        Eigen::MatrixXd mass = mass_matrix(position, parameters);
         ++result.tested;
-        if (mass.rows() != joint_positions.cols() || mass.cols() != joint_positions.cols() || !mass.allFinite() ||
-            !mass.isApprox(mass.transpose(), 1e-9)) {
+        if (mass.rows() != joint_positions.cols() || mass.cols() != joint_positions.cols() || !mass.allFinite()) {
             ++result.failed;
             result.passed = false;
             continue;
         }
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(mass, Eigen::EigenvaluesOnly);
-        if (solver.info() != Eigen::Success) {
+        // Normalize the symmetry comparison so squared Frobenius norms cannot
+        // hide asymmetry through overflow or underflow. The zero matrix keeps
+        // its zero eigenvalue and fails the positive threshold below.
+        const double scale = mass.cwiseAbs().maxCoeff();
+        if (scale != 0.0) mass /= scale;
+        if (!mass.isApprox(mass.transpose(), 1e-9)) {
             ++result.failed;
             result.passed = false;
             continue;
         }
-        const double value = solver.eigenvalues().minCoeff();
+        solver.compute(mass, Eigen::EigenvaluesOnly);
+        if (solver.info() != Eigen::Success || !(solver.eigenvalues() * scale).allFinite()) {
+            ++result.failed;
+            result.passed = false;
+            continue;
+        }
+        const double value = solver.eigenvalues().minCoeff() * scale;
         result.minimum_eigenvalue = std::min(result.minimum_eigenvalue, value);
         if (value < minimum_eigenvalue) {
             ++result.failed;

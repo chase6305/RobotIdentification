@@ -38,19 +38,18 @@ int main() {
         {"axis_a", "axis_b"}, time, position, Eigen::MatrixXd::Zero(sample_count, 2), {5, 3, 3});
     for (std::size_t i = 0; i < provisional.samples.size(); ++i) {
         const auto& sample = provisional.samples[i];
-        torque(static_cast<Eigen::Index>(i + 3), 0) = expected[0] * sample.position[0] +
-                                                     expected[1] * sample.velocity[0];
+        torque(static_cast<Eigen::Index>(i + 3), 0) =
+            expected[0] * sample.position[0] + expected[1] * sample.velocity[0];
         torque(static_cast<Eigen::Index>(i + 3), 1) = expected[2] * sample.acceleration[1] + expected[3];
     }
-    const auto dataset = robot_identification::PreprocessPositionAndTorque(
-        {"axis_a", "axis_b"}, time, position, torque, {5, 6, 6});
+    const auto dataset =
+        robot_identification::PreprocessPositionAndTorque({"axis_a", "axis_b"}, time, position, torque, {5, 6, 6});
     TwoJointBackend backend;
     const auto problem = robot_identification::BuildRegressionProblem(dataset, backend);
     robot_identification::SolverOptions options;
     options.ridge = 1e-10;
     const auto result = robot_identification::Solve(problem, options);
     std::cout << std::fixed << std::setprecision(6) << "parameters=" << result.parameters.transpose()
-              << " rmse=" << result.rmse << " rank=" << result.rank
-              << " condition=" << result.condition_number << '\n';
+              << " rmse=" << result.rmse << " rank=" << result.rank << " condition=" << result.condition_number << '\n';
     return result.rank == 4 && result.parameters.allFinite() ? 0 : 1;
 }

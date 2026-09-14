@@ -1,10 +1,9 @@
 #include "robot_identification_pinocchio/pinocchio_regressor.h"
 
 #include <array>
+#include <pinocchio/algorithm/regressor.hpp>
 #include <stdexcept>
 #include <utility>
-
-#include <pinocchio/algorithm/regressor.hpp>
 
 namespace robot_identification_pinocchio {
 
@@ -12,8 +11,8 @@ PinocchioRegressor::PinocchioRegressor(std::shared_ptr<const pinocchio::Model> m
     if (!model_ || model_->nq == 0 || model_->nv == 0 || model_->nq != model_->nv || model_->njoints <= 1) {
         throw std::invalid_argument("Pinocchio regressor requires a non-empty fixed-base model with nq equal to nv");
     }
-    static constexpr std::array<const char*, 10> kParameterSuffixes{
-        "mass", "mcx", "mcy", "mcz", "Ixx", "Ixy", "Iyy", "Ixz", "Iyz", "Izz"};
+    static constexpr std::array<const char*, 10> kParameterSuffixes{"mass", "mcx", "mcy", "mcz", "Ixx",
+                                                                    "Ixy",  "Iyy", "Ixz", "Iyz", "Izz"};
     parameter_names_.reserve(10 * (model_->njoints - 1));
     for (pinocchio::JointIndex joint = 1; joint < model_->njoints; ++joint) {
         if (model_->names[joint].empty()) throw std::invalid_argument("Pinocchio model contains an unnamed joint");
@@ -36,8 +35,8 @@ Eigen::MatrixXd PinocchioRegressor::Compute(const robot_identification::Sample& 
     // Data is deliberately local: identification is offline, and this keeps a
     // shared backend safe when independent datasets are assembled concurrently.
     pinocchio::Data data(*model_);
-    Eigen::MatrixXd regressor = pinocchio::computeJointTorqueRegressor(
-        *model_, data, sample.position, sample.velocity, sample.acceleration);
+    Eigen::MatrixXd regressor =
+        pinocchio::computeJointTorqueRegressor(*model_, data, sample.position, sample.velocity, sample.acceleration);
     if (regressor.rows() != model_->nv || regressor.cols() != static_cast<Eigen::Index>(parameter_count()) ||
         !regressor.allFinite()) {
         throw std::runtime_error("Pinocchio produced an invalid joint-torque regressor");
