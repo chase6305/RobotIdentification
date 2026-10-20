@@ -113,8 +113,8 @@ void TestTimestampDiagnostics() {
         for (const std::string timestamp : {"0", "-1"}) {
             // The invalid timestamp must be diagnosed before a later malformed
             // numeric row, and blank lines must count toward the physical line.
-            fixture.Write(Header(raw) + "\n" + Row(raw, "0", "1") + "\n\n" +
-                          Row(raw, timestamp, "2") + "\n" + Row(raw, "2", "bad"));
+            fixture.Write(Header(raw) + "\n" + Row(raw, "0", "1") + "\n\n" + Row(raw, timestamp, "2") + "\n" +
+                          Row(raw, "2", "bad"));
             bool rejected = false;
             try {
                 Read(raw, fixture.path);
@@ -124,8 +124,8 @@ void TestTimestampDiagnostics() {
             }
             if (!rejected) throw std::runtime_error("CSV did not locate the first invalid timestamp");
         }
-        fixture.Write(Header(raw) + "\r\n" + Row(raw, "-3", "1") + "\r\n\r\n" +
-                      Row(raw, "-2", "2") + "\r\n" + Row(raw, "-1", "3"));
+        fixture.Write(Header(raw) + "\r\n" + Row(raw, "-3", "1") + "\r\n\r\n" + Row(raw, "-2", "2") + "\r\n" +
+                      Row(raw, "-1", "3"));
         Read(raw, fixture.path);
     }
 }
@@ -133,11 +133,11 @@ void TestTimestampDiagnostics() {
 void TestHeaderNamesBeforeRows() {
     const Fixture fixture;
     for (bool raw : {false, true}) {
-        for (const auto& names : {std::vector<std::string>{"same", "same"},
-                                  std::vector<std::string>{"a\rb", "other"}}) {
+        for (const auto& names :
+             {std::vector<std::string>{"same", "same"}, std::vector<std::string>{"a\rb", "other"}}) {
             std::string header = "time_s";
-            for (const auto& prefix : raw ? std::vector<std::string>{"q/", "tau/"} :
-                                           std::vector<std::string>{"q/", "dq/", "ddq/", "tau/"}) {
+            for (const auto& prefix :
+                 raw ? std::vector<std::string>{"q/", "tau/"} : std::vector<std::string>{"q/", "dq/", "ddq/", "tau/"}) {
                 for (const auto& name : names) header += "," + prefix + name;
             }
             fixture.Write(header + "\ninvalid-data-must-not-be-read\n");

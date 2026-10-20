@@ -125,13 +125,12 @@ class RawJointStateSessionTest(unittest.TestCase):
     def test_malformed_sample_fields_are_rejected_without_losing_session(self):
         session = self.session(joint_names=["a", "b"])
         self.assertIsNone(session.append(["a", "b"], [1, 2], [3, 4]))
-        for names, position, effort in (
-                (["a", []], [1, 2], [3, 4]),
-                (["a", None], [1, 2], [3, 4]),
-                ("ab", [1, 2], [3, 4]),
-                (["a", "b"], ["invalid", 2], [3, 4]),
-                (["a", "b"], [1, 2], [10**400, 4]),
-                (["a", "b"], [1, 2], [None, 4])):
+        for names, position, effort in ((["a", []], [1, 2], [3, 4]), ([
+                "a", None
+        ], [1, 2], [3, 4]), ("ab", [1, 2], [3, 4]), (["a", "b"], ["invalid",
+                                                                  2], [3, 4]),
+                                        (["a", "b"], [1, 2], [10**400, 4]),
+                                        (["a", "b"], [1, 2], [None, 4])):
             with self.subTest(names=names, position=position, effort=effort):
                 self.assertIsNotNone(session.append(names, position, effort))
                 self.assertEqual(session.sample_count, 1)

@@ -125,12 +125,12 @@ void TestFiniteExtremeMeans() {
         for (Eigen::Index row = 0; row < 101; ++row) {
             const Eigen::Index begin = std::max<Eigen::Index>(0, row - radius);
             const Eigen::Index end = std::min<Eigen::Index>(100, row + radius);
-            const double expected = (end - begin + 1) % 2 == 0 ? 0.0 :
-                                    (begin % 2 == 0 ? maximum : -maximum) / (end - begin + 1);
+            const double expected =
+                (end - begin + 1) % 2 == 0 ? 0.0 : (begin % 2 == 0 ? maximum : -maximum) / (end - begin + 1);
             const auto& sample = result.samples[static_cast<std::size_t>(row)];
             if (!sample.torque.allFinite() || sample.torque[0] != maximum || sample.torque[1] != -maximum ||
-                std::abs(sample.torque[2] / maximum - expected / maximum) > 1e-15 ||
-                !sample.velocity.isZero(0) || !sample.acceleration.isZero(0)) {
+                std::abs(sample.torque[2] / maximum - expected / maximum) > 1e-15 || !sample.velocity.isZero(0) ||
+                !sample.acceleration.isZero(0)) {
                 throw std::runtime_error("finite extreme window means overflowed or changed stationary motion");
             }
         }
@@ -142,8 +142,7 @@ void TestInvalidNamesBeforeNumericalWork() {
     Eigen::MatrixXd position(3, 2);
     position << -1e308, 0, 1e308, 0, -1e308, 0;
     const Eigen::MatrixXd torque = Eigen::MatrixXd::Zero(3, 2);
-    for (const auto& names : {std::vector<std::string>{"same", "same"},
-                              std::vector<std::string>{"", "joint"}}) {
+    for (const auto& names : {std::vector<std::string>{"same", "same"}, std::vector<std::string>{"", "joint"}}) {
         bool rejected = false;
         try {
             (void)robot_identification::PreprocessPositionAndTorque(names, time, position, torque, {1, 0, 0});
@@ -176,8 +175,8 @@ void TestPreprocessingEntryValidation() {
                 if (structured) {
                     (void)robot_identification::PreprocessPositionAndTorque(raw);
                 } else {
-                    (void)robot_identification::PreprocessPositionAndTorque(
-                        raw.joint_names, raw.time_seconds, raw.position, raw.torque);
+                    (void)robot_identification::PreprocessPositionAndTorque(raw.joint_names, raw.time_seconds,
+                                                                            raw.position, raw.torque);
                 }
             } catch (const std::invalid_argument& error) {
                 rejected = std::string(error.what()) == "invalid raw dataset: " + reason;

@@ -125,16 +125,14 @@ void TestMetricScales() {
     for (const double magnitude : {0.0, 1e-300, 1.0, 1e200, std::numeric_limits<double>::max()}) {
         problem.observation = Eigen::VectorXd::Constant(4, magnitude);
         const auto metrics = robot_identification::ValidateParameters(problem, Eigen::VectorXd::Zero(1));
-        if (!std::isfinite(metrics.rmse) || metrics.rmse != magnitude ||
-            metrics.mean_absolute_error != magnitude || metrics.max_absolute_error != magnitude ||
-            metrics.normalized_rmse != (magnitude == 0 ? 0.0 : 1.0)) {
+        if (!std::isfinite(metrics.rmse) || metrics.rmse != magnitude || metrics.mean_absolute_error != magnitude ||
+            metrics.max_absolute_error != magnitude || metrics.normalized_rmse != (magnitude == 0 ? 0.0 : 1.0)) {
             throw std::runtime_error("representable validation metrics changed with numeric scale");
         }
     }
     problem.observation = Eigen::Vector4d(3e200, -4e200, 0, 0);
     const auto mixed = robot_identification::ValidateParameters(problem, Eigen::VectorXd::Zero(1));
-    if (std::abs(mixed.rmse / 1e200 - 2.5) > 1e-14 ||
-        std::abs(mixed.mean_absolute_error / 1e200 - 1.75) > 1e-14) {
+    if (std::abs(mixed.rmse / 1e200 - 2.5) > 1e-14 || std::abs(mixed.mean_absolute_error / 1e200 - 1.75) > 1e-14) {
         throw std::runtime_error("scaled mixed-sign validation metrics are incorrect");
     }
     problem.observation.setZero();
@@ -197,8 +195,7 @@ void TestLargeParameterConvergence() {
     }
     options.max_iterations = 50;
     const auto converged = robot_identification::Solve(scaled, options);
-    if (!converged.converged || converged.iterations <= 2 ||
-        std::abs(converged.predicted[0] / 1e55 - 1.0) > 1e-9) {
+    if (!converged.converged || converged.iterations <= 2 || std::abs(converged.predicted[0] / 1e55 - 1.0) > 1e-9) {
         throw std::runtime_error("large-parameter IRLS did not continue suppressing the outlier");
     }
 }
@@ -212,8 +209,7 @@ void TestMassMatrixScaleChecks() {
         auto evaluate = [&]() {
             return robot_identification::ValidateMassMatrices(
                 positions, parameters,
-                [&](const Eigen::VectorXd&, const Eigen::VectorXd&) -> Eigen::MatrixXd { return mass; },
-                scale * 0.1);
+                [&](const Eigen::VectorXd&, const Eigen::VectorXd&) -> Eigen::MatrixXd { return mass; }, scale * 0.1);
         };
         const auto asymmetric = evaluate();
         if (asymmetric.passed || asymmetric.failed != 1 || asymmetric.tested != 1) {
@@ -227,8 +223,7 @@ void TestMassMatrixScaleChecks() {
         }
     }
     const auto overflow = robot_identification::ValidateMassMatrices(
-        positions, parameters,
-        [](const Eigen::VectorXd&, const Eigen::VectorXd&) -> Eigen::MatrixXd {
+        positions, parameters, [](const Eigen::VectorXd&, const Eigen::VectorXd&) -> Eigen::MatrixXd {
             Eigen::Matrix2d mass;
             mass << 1.4e308, 7e307, 7e307, 1.4e308;
             return mass;
@@ -238,8 +233,7 @@ void TestMassMatrixScaleChecks() {
     }
     for (double diagonal : {0.0, -1.0}) {
         const auto invalid = robot_identification::ValidateMassMatrices(
-            positions, parameters,
-            [&](const Eigen::VectorXd&, const Eigen::VectorXd&) -> Eigen::MatrixXd {
+            positions, parameters, [&](const Eigen::VectorXd&, const Eigen::VectorXd&) -> Eigen::MatrixXd {
                 return diagonal * Eigen::Matrix2d::Identity();
             });
         if (invalid.passed || invalid.failed != 1 || invalid.minimum_eigenvalue != diagonal) {
@@ -268,8 +262,7 @@ void TestMassMatrixBatchRecovery() {
             if (row == 4) mass(0, 0) = -0.5;
             return mass;
         });
-    if (calls != 6 || result.tested != 6 || result.failed != 4 || result.passed ||
-        result.minimum_eigenvalue != -0.5) {
+    if (calls != 6 || result.tested != 6 || result.failed != 4 || result.passed || result.minimum_eigenvalue != -0.5) {
         throw std::runtime_error("batch validation lost failures or retained stale eigensolver state");
     }
 }

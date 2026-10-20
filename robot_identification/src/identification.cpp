@@ -63,8 +63,8 @@ bool ParametersConverged(const Eigen::VectorXd& current, const Eigen::VectorXd& 
         const double difference = current[row] - previous[row];
         // Subtract first to retain small updates; normalize first only when
         // opposite-sign finite parameters overflow their difference.
-        const double change = std::isfinite(difference) ? difference / scale :
-                              current[row] / scale - previous[row] / scale;
+        const double change =
+            std::isfinite(difference) ? difference / scale : current[row] / scale - previous[row] / scale;
         previous_norm = std::hypot(previous_norm, previous[row] / scale);
         change_norm = std::hypot(change_norm, change);
     }
@@ -683,8 +683,8 @@ Dataset PreprocessPositionAndTorque(const std::vector<std::string>& joint_names,
     }
     // Keep caller-owned position/torque as views when smoothing is disabled.
     // Derivative matrices already own their storage and can be reused directly.
-    const Eigen::MatrixXd position_storage = options.smoothing_window == 1 ? Eigen::MatrixXd{} :
-                                            SmoothSymmetric(position, options.smoothing_window);
+    const Eigen::MatrixXd position_storage =
+        options.smoothing_window == 1 ? Eigen::MatrixXd{} : SmoothSymmetric(position, options.smoothing_window);
     const auto& filtered_position = options.smoothing_window == 1 ? position : position_storage;
     Eigen::MatrixXd filtered_velocity = Differentiate(time_seconds, filtered_position);
     if (options.smoothing_window != 1) {
@@ -694,8 +694,9 @@ Dataset PreprocessPositionAndTorque(const std::vector<std::string>& joint_names,
     if (options.smoothing_window != 1) {
         filtered_acceleration = SmoothSymmetric(filtered_acceleration, options.smoothing_window);
     }
-    const Eigen::MatrixXd torque_storage = options.torque_smoothing_window == 1 ? Eigen::MatrixXd{} :
-                                          SmoothSymmetric(torque, options.torque_smoothing_window);
+    const Eigen::MatrixXd torque_storage = options.torque_smoothing_window == 1
+                                               ? Eigen::MatrixXd{}
+                                               : SmoothSymmetric(torque, options.torque_smoothing_window);
     const auto& filtered_torque = options.torque_smoothing_window == 1 ? torque : torque_storage;
 
     Dataset dataset;

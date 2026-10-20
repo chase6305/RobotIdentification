@@ -190,7 +190,7 @@ class IdentificationContractTest(unittest.TestCase):
 
     def test_creation_rejects_nonzero_json_underflow(self):
         for index, token in enumerate(
-                ("1e-999", "-1E-999", "0." + "0" * 400 + "1")):
+            ("1e-999", "-1E-999", "0." + "0" * 400 + "1")):
             with self.subTest(token=token):
                 self.parameters.write_text('{"mass": ' + token + '}')
                 output = self.root / f"underflow-{index}.json"
@@ -201,7 +201,7 @@ class IdentificationContractTest(unittest.TestCase):
 
     def test_json_zero_and_representable_subnormals_are_preserved(self):
         for index, token in enumerate(
-                ("0e-999", "-0.0E-999", "5e-324", "-5e-324")):
+            ("0e-999", "-0.0E-999", "5e-324", "-5e-324")):
             with self.subTest(token=token):
                 self.parameters.write_text('{"mass": ' + token + '}')
                 output = self.root / f"small-{index}.json"
