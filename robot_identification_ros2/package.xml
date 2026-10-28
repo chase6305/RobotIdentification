@@ -5,7 +5,7 @@
   <description>ROS 2 recording and session tools for robot parameter identification</description>
   <maintainer email="maintainers@example.com">RobotServer maintainers</maintainer>
   <license>MIT</license>
-  <buildtool_depend>ament_python</buildtool_depend>
+  <buildtool_depend>python3-setuptools</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>robot_identification</exec_depend>
