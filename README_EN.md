@@ -75,3 +75,4 @@ Extracted from RobotServer commit `a6c70ec`, preserving relevant Git history and
 Identification produces candidate artifacts. Applying parameters requires a separate review, validation, and rollback process. Synthetic examples provide no hardware parameter sets or timing guarantees.
 
 See the [2026-10-28 optimization record](docs/optimization-2026-10-28.md) for numeric fixes, synthetic comparisons and sustained recording evidence, with reproducible programs in the [benchmark guide](benchmarks/README.md).
+See the [second session](docs/optimization-2026-10-28-round-2.md) for workspace reuse, CSV peak storage and subsequent validation.

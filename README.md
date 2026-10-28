@@ -78,3 +78,4 @@ ros2 run robot_identification_ros2 joint_state_recorder --ros-args \
 结果仅作为候选工件生成。实际参数应用仍需独立评审、验证和回滚流程；合成示例不提供硬件参数或时序保证。
 
 本地拆分后的数值修复、合成对照与持续采集证据见 [2026-10-28 优化记录](docs/optimization-2026-10-28.md)，复现程序见[基准说明](benchmarks/README.md)。
+工作区复用、CSV 峰值存储和后续验证见[第二轮记录](docs/optimization-2026-10-28-round-2.md)。
