@@ -79,13 +79,21 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND}
       -S ${CMAKE_CURRENT_SOURCE_DIR}/test/consumer
       -B ${ROBOT_IDENTIFICATION_CONSUMER_BUILD}
-      -DCMAKE_PREFIX_PATH=${ROBOT_IDENTIFICATION_CONSUMER_INSTALL})
+      -DCMAKE_PREFIX_PATH=${ROBOT_IDENTIFICATION_CONSUMER_INSTALL}
+      "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+      "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
+      "-DCMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}")
   add_test(NAME robot_identification_consumer_build
     COMMAND ${CMAKE_COMMAND} --build ${ROBOT_IDENTIFICATION_CONSUMER_BUILD})
+  add_test(NAME robot_identification_consumer_run
+    COMMAND ${ROBOT_IDENTIFICATION_CONSUMER_BUILD}/robot_identification_consumer)
   set_tests_properties(robot_identification_consumer_configure PROPERTIES
     DEPENDS robot_identification_install)
   set_tests_properties(robot_identification_consumer_build PROPERTIES
     DEPENDS robot_identification_consumer_configure)
+  set_tests_properties(robot_identification_consumer_run PROPERTIES
+    DEPENDS robot_identification_consumer_build)
 endif()
 
 if(ROBOT_IDENTIFICATION_BUILD_EXAMPLES)

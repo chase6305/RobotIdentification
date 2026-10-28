@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Run installed core/Pinocchio consumers as part of CTest. Forward the selected
+  compiler, build type, and instrumentation flags to consumer configurations so
+  static sanitizer builds link and execute against their required runtimes.
 - Reuse weighted data matrices, singular-value decompositions, and residual
   scratch across Huber IRLS iterations. Keep measured-data rank, regularization,
   final weights, and covariance contracts unchanged. Avoid dynamic per-harmonic
