@@ -338,16 +338,50 @@ public:
         }
     }
 
-    Eigen::MatrixXd Covariance(double variance) const {
+    Eigen::MatrixXd Covariance(const Eigen::VectorXd& residual, std::size_t measured_rank) const {
+        const auto degrees_of_freedom =
+            std::max<Eigen::Index>(1, data_rows_ - static_cast<Eigen::Index>(measured_rank));
+        const double variance =
+            (residual.array() * sqrt_weights_.array()).matrix().squaredNorm() / static_cast<double>(degrees_of_freedom);
+        double residual_scale = std::sqrt(variance);
+        int scale_exponent = 0;
+        if (!std::isfinite(variance) || variance < std::numeric_limits<double>::min()) {
+            // Keep the root weighted error as a mantissa/exponent pair when
+            // squaring it would lose range. Its ratio to a singular value can
+            // still yield a representable parameter uncertainty.
+            residual_scale = 0.0;
+            bool initialized = false;
+            for (Eigen::Index row = 0; row < residual.size(); ++row) {
+                if (residual[row] == 0.0 || sqrt_weights_[row] == 0.0) continue;
+                int residual_exponent, weight_exponent;
+                const double fraction = std::frexp(std::abs(residual[row]), &residual_exponent) *
+                                        std::frexp(sqrt_weights_[row], &weight_exponent);
+                const int exponent = residual_exponent + weight_exponent;
+                if (!initialized || exponent > scale_exponent) {
+                    residual_scale = std::ldexp(residual_scale, scale_exponent - exponent);
+                    scale_exponent = exponent;
+                    initialized = true;
+                }
+                residual_scale = std::hypot(residual_scale, std::ldexp(fraction, exponent - scale_exponent));
+            }
+            residual_scale /= std::sqrt(static_cast<double>(degrees_of_freedom));
+        }
         // Use the same retained singular directions as the parameter solve.
         // Forming A'WA squares its condition number and a second decomposition
         // can incorrectly erase observable, weakly excited directions.
         const auto& decomposition = ridge_rows_ == 0 ? *diagnostic_svd_ : *regularized_svd_;
         const Eigen::Index rank = decomposition.rank();
         Eigen::MatrixXd scaled_basis = decomposition.matrixV().leftCols(rank);
-        const double residual_scale = std::sqrt(variance);
         for (Eigen::Index column = 0; column < rank; ++column) {
-            scaled_basis.col(column) *= residual_scale / decomposition.singularValues()[column];
+            double uncertainty;
+            if (scale_exponent == 0) {
+                uncertainty = residual_scale / decomposition.singularValues()[column];
+            } else {
+                int singular_exponent;
+                const double fraction = std::frexp(decomposition.singularValues()[column], &singular_exponent);
+                uncertainty = std::ldexp(residual_scale / fraction, scale_exponent - singular_exponent);
+            }
+            scaled_basis.col(column) *= uncertainty;
         }
         Eigen::MatrixXd covariance = scaled_basis * scaled_basis.transpose();
         if (!covariance.allFinite()) throw std::overflow_error("parameter covariance is non-finite");
@@ -951,12 +985,7 @@ IdentificationResult Solve(const RegressionProblem& problem, const SolverOptions
     result.max_absolute_error = errors.maximum;
     result.iterations = iterations;
     result.converged = converged;
-    const double weighted_squared_error = result.residual.dot(solve_weights.asDiagonal() * result.residual);
-    const double variance =
-        weighted_squared_error / static_cast<double>(std::max<Eigen::Index>(
-                                     1, problem.regressor.rows() - static_cast<Eigen::Index>(result.rank)));
-    if (!std::isfinite(variance)) throw std::overflow_error("covariance residual variance is non-finite");
-    result.covariance = workspace.Covariance(variance);
+    result.covariance = workspace.Covariance(result.residual, result.rank);
     return result;
 }
 

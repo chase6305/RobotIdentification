@@ -105,3 +105,10 @@ Covariance reuses the last consumed solve's SVD and retained singular directions
 using the augmented decomposition for ridge. Reported observability still uses
 weighted measured data. A rank-deficient pseudoinverse has zero covariance in
 its nullspace; this is a minimum-norm convention, not evidence of certainty.
+
+当加权残差平方和发生范围损失时，协方差保留根误差的尾数/指数，先除以奇异值
+再平方，支持一致行权重缩放后的可表示结果。不可表示的最终协方差仍明确报错。
+
+If the weighted residual squared norm loses range, covariance retains a scaled
+root error until division by singular values. Uniform weight scaling preserves
+representable uncertainty; an unrepresentable final covariance still fails.

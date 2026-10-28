@@ -58,5 +58,18 @@ int main() {
             throw std::runtime_error("representable covariance changed with regressor scale");
         }
     }
+    // Uniform row-weight scaling cancels between residual variance and
+    // information. Neither intermediate must erase a representable covariance.
+    for (double scale : {1e-100, 1.0, 1e100}) {
+        problem.regressor = Eigen::MatrixXd::Constant(4, 1, scale);
+        problem.observation = Eigen::Vector4d(scale, -scale, scale, -scale);
+        for (double weight : {1e-300, 1.0, 1e300}) {
+            problem.row_weights.setConstant(weight);
+            const auto result = robot_identification::Solve(problem);
+            if (result.rank != 1 || std::abs(result.covariance(0, 0) - 1.0 / 3.0) > 1e-13) {
+                throw std::runtime_error("uniform weights changed representable covariance");
+            }
+        }
+    }
     return 0;
 }

@@ -2,11 +2,23 @@
 
 ## Unreleased
 
+- Preserve covariance across uniform row-weight scaling when a residual variance
+  intermediate would overflow or underflow. Keep a scaled root error through the
+  singular-value ratio, and continue rejecting non-finite final covariance.
+
+- Declare recorder pytest requirements in setuptools as well as the ROS manifest,
+  so colcon executes its unit tests instead of accepting an empty unittest run.
+
+- Add `scripts/test_ros2.sh` to build, test and exercise installed recording with
+  the same root-package discovery. Exclude nested generated CMake projects from
+  colcon tests, support external output roots, and propagate build/test failures.
+  Use the wrapper in ROS CI and quick-start instructions.
+
 - Compute covariance from the final consumed solve's SVD and its retained
   directions. Avoid squaring the condition number in a separately decomposed
   information matrix, which could report zero variance for weak observable
   parameters. Ridge uses the augmented SVD; measured-data rank is unchanged.
-  Non-finite residual variance or covariance still fails explicitly.
+  Non-finite final covariance still fails explicitly.
 
 - Pinocchio backend 0.2.0 adds `BuildProblem(dataset)`, reusing a call-local
   workspace across samples while retaining core dataset validation and ordering.
