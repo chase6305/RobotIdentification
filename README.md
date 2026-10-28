@@ -74,3 +74,5 @@ ros2 run robot_identification_ros2 joint_state_recorder --ros-args \
 本仓库从 RobotServer 的 `a6c70ec` 拆出，保留相关文件的 Git 历史和 MIT 许可。三个辨识包名、C++ 命名空间、CMake 目标和 JSON/CSV 契约保持不变。离线工具的 Python 导入由 `robot_server_tools` 改为 `robot_identification_tools`；`ros2 run` 的包名同样改为 `robot_identification_tools`。两个工具的命令名称保持不变。RobotServer 的运行时状态监测、控制和设备验收代码继续由原仓库维护。
 
 结果仅作为候选工件生成。实际参数应用仍需独立评审、验证和回滚流程；合成示例不提供硬件参数或时序保证。
+
+本地拆分后的数值修复、合成对照与持续采集证据见 [2026-10-28 优化记录](docs/optimization-2026-10-28.md)，复现程序见[基准说明](benchmarks/README.md)。

@@ -71,3 +71,5 @@ Run `python3 utils/ros2_recording_smoke.py` to exercise the installed recorder w
 Extracted from RobotServer commit `a6c70ec`, preserving relevant Git history and the MIT license. The three existing identification package names, C++ namespaces, CMake targets, and JSON/CSV contracts remain compatible. Python imports move from `robot_server_tools` to `robot_identification_tools`; the corresponding `ros2 run` package also changes. The `dataset_inspect` and `identification_artifact` command names remain available. Runtime state monitoring, control, and device commissioning stay in RobotServer.
 
 Identification produces candidate artifacts. Applying parameters requires a separate review, validation, and rollback process. Synthetic examples provide no hardware parameter sets or timing guarantees.
+
+See the [2026-10-28 optimization record](docs/optimization-2026-10-28.md) for numeric fixes, synthetic comparisons and sustained recording evidence, with reproducible programs in the [benchmark guide](benchmarks/README.md).
