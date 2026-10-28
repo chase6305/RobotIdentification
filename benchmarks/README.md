@@ -116,9 +116,19 @@ Each worker has a fixed seed; runtime and scheduling determine the case count.
 long-double Lagrange weights, varying nonuniform time steps and position scales.
 It requires an extended-range long double oracle, covers finite results with
 overflowing double secants, and requires rejection of unrepresentable results.
-Accepted velocity/acceleration comparisons use a per-column tolerance of
-`1e-10 * max_abs(reference) + 32 * denorm_min(double)`. The subnormal allowance
-accounts for double quantization. The seed is fixed and the duration bounds work.
+For Lagrange weights `w`, its rounding allowance is
+`64 * epsilon(double) * sum(abs(w * input)) + sum(abs(w) * input_error) +
+32 * denorm_min(double)`. The acceleration comparison propagates the velocity
+allowances through the second derivative. This remains meaningful when a nearly
+linear position makes acceleration much smaller than the differentiated inputs;
+a relative tolerance on acceleration alone can reject ordinary rounding. The
+subnormal term accounts for double quantization. The seed is fixed.
+
+An optional second argument replays from a case index (0–100000000):
+`preprocessing_stress 10 7342120`. Prefix RNG replay occurs before the requested
+campaign duration and can take time. Rejections and accepted cases are counted
+only in the measured campaign, with the first index reported. Failure output
+includes the captured input and the compared coefficients.
 
 The reported parameter error is `norm(actual-reference) / max(1, norm(reference))`;
 covariance error is the Frobenius norm of its difference divided by
@@ -134,7 +144,8 @@ being a pure relative error.
 `pinocchio_stress` 以四个线程检查后端共享、所有权切换、具名批量与通用组装、
 执行器组合及原生逆动力学参考。它们只验证合成软件行为，不能替代硬件测试。
 `preprocessing_stress` 用独立的扩展范围拉格朗日权重检查时间/位置尺度、可表示导数
-和不可表示结果拒绝；比较采用逐列相对容差与次正规数绝对量化余量。
+和不可表示结果拒绝；容差按差分权重的绝对贡献和前一阶段舍入误差传播计算，
+并保留次正规量化余量。可用第二参数重放指定编号的用例。
 
 After sourcing the installed ROS packages, run an independent 14-axis recorder
 load test on Linux:

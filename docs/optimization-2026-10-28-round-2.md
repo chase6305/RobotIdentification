@@ -95,8 +95,11 @@ Use the committed generator with a new path and retain the digest for comparison
 `norm(actual-reference) / max(1, norm(reference))`。`csv_stress` 覆盖分块边界、
 负零、最小非正规数、最大有限值、LF/CRLF/CR 和文件末尾非法行；结果按位比较。
 `preprocessing_stress` 则用独立的扩展范围拉格朗日权重，在非均匀时间及宽位置/
-时间尺度上检查速度、加速度和超范围拒绝。逐列容差为参考最大绝对值的 `1e-10`
-加 `32 * denorm_min(double)`，保留次正规量化余量。性能表分别测于组装/TLS 和
+时间尺度上检查速度、加速度和超范围拒绝。验证余量按 `64*eps*sum(abs(w*input))`
+加前一阶段误差传播及次正规量化项计算。初始相对容差在第 7342120 号用例失败；
+重放确认速度差 1 ULP，经近线性二次差分相消放大后，超出纯加速度相对容差。
+按差分权重传播的余量内则通过，没有为此修改生产算法。保留原失败日志、输入、
+Decimal 分析和更正后的重放结果；后续一小时结果待补。性能表分别测于组装/TLS 和
 CSV 实现快照，导数修复没有改动这些被测函数。
 
 Local raw evidence is under `build/optimization-20261028-r2/`: `pin-before.txt`,
