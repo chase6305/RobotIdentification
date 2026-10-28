@@ -145,7 +145,11 @@ void TestHeaderNamesBeforeRows() {
             try {
                 Read(raw, fixture.path);
             } catch (const std::runtime_error& error) {
-                rejected = std::string(error.what()).find("CSV joint names") != std::string::npos;
+                const std::string message = error.what();
+                // A CR inside a name may end a malformed CR-style header.
+                // Both diagnoses must reject it before parsing the bad row.
+                rejected =
+                    message.find("CSV joint names") != std::string::npos || message.find("header") != std::string::npos;
             }
             if (!rejected) throw std::runtime_error("invalid CSV header names reached row parsing");
         }

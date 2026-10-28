@@ -19,7 +19,7 @@ sys.path[:0] = [
 ]
 
 from robot_identification_ros2 import raw_joint_state_session as recording
-from robot_identification_tools.dataset_inspect import inspect_dataset_with_digest
+from robot_identification_tools.dataset_inspect import inspect_dataset, inspect_dataset_with_digest
 
 
 class CsvInteropTest(unittest.TestCase):
@@ -104,8 +104,8 @@ class CsvInteropTest(unittest.TestCase):
 
     def test_numeric_acceptance_matches_cpp_for_raw_and_processed(self):
         valid = [
-            "0", "-0", " +1.25", "\t-2.5e+2", "\v\f1.25", "0x1.8p+2", "-0x.8",
-            " +0X1.8P+2", "0x1e2", "1.", ".5", "0e-9999", "-0x0p-9999",
+            "0", "-0", " +1.25", "\t-2.5e+2", "\v\f1.25", "\r1.25", "0x1.8p+2",
+            "-0x.8", " +0X1.8P+2", "0x1e2", "1.", ".5", "0e-9999", "-0x0p-9999",
             "1.7976931348623157e308", "2.2250738585072014e-308", "1e-310",
             "4.9406564584124654e-324", "0x1p-1074"
         ]
@@ -139,6 +139,7 @@ class CsvInteropTest(unittest.TestCase):
                                      result.stderr)
                     if expected:
                         summary, _ = inspect_dataset_with_digest(source)
+                        self.assertEqual(summary, inspect_dataset(source))
                         self.assertEqual(
                             summary,
                             inspect_dataset_with_digest(restored)[0])
@@ -149,6 +150,65 @@ class CsvInteropTest(unittest.TestCase):
                     else:
                         with self.assertRaises(ValueError):
                             inspect_dataset_with_digest(source)
+
+    def test_cr_only_record_separators_roundtrip_through_both_readers(self):
+        source = self.root / "cr-only.csv"
+        self.names = ["a"]
+        for kind in ("raw", "processed"):
+            header = "time_s,q/a,tau/a" if kind == "raw" else "time_s,q/a,dq/a,ddq/a,tau/a"
+            rows = [
+                f"{index},1,2" if kind == "raw" else f"{index},1,0,0,2"
+                for index in range(3)
+            ]
+            for final_separator in ("", "\r"):
+                source.write_bytes((header + "\r" + "\r".join(rows) +
+                                    final_separator).encode("ascii"))
+                restored = self.root / "restored.csv"
+                result = subprocess.run(
+                    [self.executable, kind,
+                     str(source),
+                     str(restored)],
+                    capture_output=True,
+                    text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                summary, digest = inspect_dataset_with_digest(source)
+                self.assertEqual(summary, inspect_dataset(source))
+                self.assertEqual(summary, inspect_dataset(restored))
+                self.assertEqual(
+                    digest,
+                    hashlib.sha256(source.read_bytes()).hexdigest())
+
+    def test_leading_linefeed_in_cr_records_matches_cpp(self):
+        source = self.root / "cr-whitespace.csv"
+        restored = self.root / "restored.csv"
+        for kind in ("raw", "processed"):
+            header = "time_s,q/a,tau/a" if kind == "raw" else "time_s,q/a,dq/a,ddq/a,tau/a"
+            rows = [
+                f"{index},\n1.25,\n2.5"
+                if kind == "raw" else f"{index},\n1.25,0,0,\n2.5"
+                for index in range(3)
+            ]
+            source.write_bytes(
+                (header + "\r" + "\r".join(rows) + "\r").encode("ascii"))
+            result = subprocess.run(
+                [self.executable, kind,
+                 str(source), str(restored)],
+                capture_output=True,
+                text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(inspect_dataset(source), inspect_dataset(restored))
+            # A trailing LF is numeric garbage, even on an unterminated last
+            # record; it must not be silently removed as the record delimiter.
+            source.write_bytes(
+                (header + "\r" + "\r".join(rows) + "\n").encode("ascii"))
+            result = subprocess.run(
+                [self.executable, kind,
+                 str(source), str(restored)],
+                capture_output=True,
+                text=True)
+            self.assertNotEqual(result.returncode, 0)
+            with self.assertRaises(ValueError):
+                inspect_dataset_with_digest(source)
 
     def test_blank_lines_and_literal_headers_match_cpp(self):
         source = self.root / "blank-lines.csv"

@@ -76,9 +76,9 @@ interpreted; quotes inside joint names remain literal characters. Python/C++
 interoperability tests cover accepted numeric syntax, rejected extensions,
 subnormal boundaries, and blank rows in addition to exact signal values.
 
-CSV import parses numeric fields in the reusable line buffer; raw recordings accumulate in contiguous storage before conversion to the output matrices. LF/CRLF, blank lines, and a final row without a newline remain supported. Readers report I/O failures, and writers check the final buffered write when closing the file.
+CSV import parses numeric fields in the reusable line buffer; raw recordings accumulate in contiguous storage before conversion to the output matrices. LF/CRLF/CR, blank lines, and a final row without a newline remain supported. Readers report I/O failures, and writers check the final buffered write when closing the file.
 
-CSV 导入直接复用行缓冲区解析数值，原始记录先连续存储，再转换为输出矩阵，减少逐字段字符串复制和逐行向量分配。继续支持 LF/CRLF、空行及末行无换行符；读取发生 I/O 错误或关闭文件时最后一次缓冲写入失败，均会抛出异常。
+CSV 导入直接复用行缓冲区解析数值，原始记录先连续存储，再转换为输出矩阵，减少逐字段字符串复制和逐行向量分配。继续支持 LF/CRLF/CR、空行及末行无换行符；读取发生 I/O 错误或关闭文件时最后一次缓冲写入失败，均会抛出异常。
 
 C++ 数值解析使用有界的 `std::from_chars`，不修改输入缓冲区，也不读取进程语言环境。写出时固定使用小数点 `.` 且不插入数字分组符。可表示的极小非零数（次正规数）和正负零能够精确往返；数值溢出或非零值过小而只能表示为零时仍会报错，并给出行列位置。保留前导 ASCII 空白、显式正负号及 `0x` 十六进制格式；尾随垃圾字符仍被拒绝。
 
@@ -112,3 +112,12 @@ its nullspace; this is a minimum-norm convention, not evidence of certainty.
 If the weighted residual squared norm loses range, covariance retains a scaled
 root error until division by singular values. Uniform weight scaling preserves
 representable uncertainty; an unrepresentable final covariance still fails.
+
+Python 检查器与 C++ 读取器根据文件头识别 LF、CRLF 或 CR 记录分隔；写出统一使用
+LF。LF/CRLF 文件中的前导 ASCII 回车保留为数字空白，不会提前拆开记录。摘要始终
+绑定原始字节，包括原换行形式与 Unicode 编码。
+
+Python inspection and C++ readers select LF, CRLF or CR record boundaries from
+the header. Writers use LF. Leading ASCII carriage returns inside LF/CRLF numeric
+fields remain whitespace. Digests bind the original bytes, including line endings
+and Unicode encoding.

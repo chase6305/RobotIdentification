@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Detect CSV record boundaries from the header in both Python and C++ readers.
+  Retain Python's existing CR-only support and extend C++ readers to match it.
+  Preserve leading carriage-return whitespace inside LF/CRLF numeric fields and
+  original bytes in digest-enabled inspection.
+
 - Preserve covariance across uniform row-weight scaling when a residual variance
   intermediate would overflow or underflow. Keep a scaled root error through the
   singular-value ratio, and continue rejecting non-finite final covariance.

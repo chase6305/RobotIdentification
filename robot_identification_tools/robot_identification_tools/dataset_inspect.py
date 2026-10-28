@@ -16,11 +16,11 @@ from typing import BinaryIO, TextIO
 # Numeric rows are unquoted, with optional leading ASCII whitespace per field.
 # float() completes decimal grammar validation after this inexpensive alphabet
 # check, rejecting malformed exponents and repeated signs/decimal points.
-_DECIMAL_FIELD = r"[ \t\v\f\r]*[+\-.0-9eE]+"
+_DECIMAL_FIELD = r"[ \t\n\v\f\r]*[+\-.0-9eE]+"
 _DECIMAL_ROW = re.compile(r"[+\-.0-9eE,]+")
 _DECIMAL_NUMBER = re.compile(_DECIMAL_FIELD)
 _HEX_NUMBER = re.compile(
-    r"[ \t\v\f\r]*[+-]?0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)"
+    r"[ \t\n\v\f\r]*[+-]?0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)"
     r"(?:[pP][+-]?[0-9]+)?")
 _NONZERO_DECIMAL = re.compile(r"[^eE]*[1-9]")
 _NONZERO_HEX = re.compile(r"[^pP]*[1-9a-fA-F]")
@@ -96,27 +96,48 @@ class _HashingReader(io.RawIOBase):
         return count
 
 
+def _inspect_binary_stream(source: io.BufferedReader) -> dict[str, object]:
+    # Choose record boundaries from the header. In LF/CRLF files, a carriage
+    # return inside a numeric field is whitespace rather than a new record.
+    header = bytearray()
+    separator = "\n"
+    while True:
+        character = source.read(1)
+        if not character:
+            if not header:
+                raise ValueError("dataset is empty")
+            break
+        if character == b"\n":
+            break
+        if character == b"\r":
+            if source.peek(1).startswith(b"\n"):
+                source.read(1)
+            else:
+                separator = "\r"
+            break
+        header.extend(character)
+    with io.TextIOWrapper(source, encoding="utf-8",
+                          newline=separator) as stream:
+        return _inspect_stream(stream,
+                               header.decode("utf-8").split(","), separator)
+
+
 def inspect_dataset(path: Path) -> dict[str, object]:
-    with path.open(newline="", encoding="utf-8") as stream:
-        return _inspect_stream(stream)
+    with path.open("rb") as stream:
+        return _inspect_binary_stream(stream)
 
 
 def inspect_dataset_with_digest(path: Path) -> tuple[dict[str, object], str]:
     """Validate and hash the same byte stream with one bounded-memory read."""
     with path.open("rb", buffering=0) as source:
         reader = _HashingReader(source)
-        with io.TextIOWrapper(io.BufferedReader(reader),
-                              encoding="utf-8",
-                              newline="") as stream:
-            summary = _inspect_stream(stream)
+        with io.BufferedReader(reader) as stream:
+            summary = _inspect_binary_stream(stream)
         return summary, reader.digest.hexdigest()
 
 
-def _inspect_stream(stream: TextIO) -> dict[str, object]:
-    try:
-        header = next(stream).removesuffix("\n").removesuffix("\r").split(",")
-    except StopIteration as error:
-        raise ValueError("dataset is empty") from error
+def _inspect_stream(stream: TextIO, header: list[str],
+                    separator: str) -> dict[str, object]:
     if not header or header[0] != "time_s":
         raise ValueError("first column must be time_s")
     q_columns = [name for name in header if name.startswith("q/")]
@@ -150,7 +171,9 @@ def _inspect_stream(stream: TextIO) -> dict[str, object]:
     maximum_torque = [0.0] * len(joint_names)
     torque_offset = 1 + len(joint_names) * (1 if kind == "raw" else 3)
     for line_number, line in enumerate(stream, start=2):
-        line = line.removesuffix("\n").removesuffix("\r")
+        line = line.removesuffix(separator)
+        if separator == "\n":
+            line = line.removesuffix("\r")
         if not line:
             continue
         row = line.split(",")

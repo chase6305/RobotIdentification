@@ -193,6 +193,25 @@ Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time, const Eigen::MatrixXd
     return derivative;
 }
 
+bool ReadCsvHeader(std::istream& input, std::string& line, char& separator) {
+    line.clear();
+    separator = '\n';
+    char character;
+    while (input.get(character)) {
+        if (character == '\n') return true;
+        if (character == '\r') {
+            if (input.peek() == '\n') {
+                input.get();
+            } else {
+                separator = '\r';
+            }
+            return true;
+        }
+        line.push_back(character);
+    }
+    return !line.empty();
+}
+
 std::vector<std::string> SplitCsvLine(const std::string& line) {
     std::string normalized = line;
     if (!normalized.empty() && normalized.back() == '\r') normalized.pop_back();
@@ -635,7 +654,8 @@ RawDataset ReadRawDatasetCsv(const std::string& path) {
     std::ifstream input(path);
     if (!input) throw std::runtime_error("cannot open raw dataset input: " + path);
     std::string line;
-    if (!std::getline(input, line)) throw std::runtime_error("raw dataset CSV is empty");
+    char separator;
+    if (!ReadCsvHeader(input, line, separator)) throw std::runtime_error("raw dataset CSV is empty");
     const auto header = SplitCsvLine(line);
     if (header.size() < 3 || header[0] != "time_s" || (header.size() - 1) % 2 != 0) {
         throw std::runtime_error("raw dataset CSV header has an invalid shape");
@@ -659,7 +679,7 @@ RawDataset ReadRawDatasetCsv(const std::string& path) {
     std::vector<double> values(header.size());
     std::size_t line_number = 1;
     double previous_time = -std::numeric_limits<double>::infinity();
-    while (std::getline(input, line)) {
+    while (std::getline(input, line, separator)) {
         ++line_number;
         if (!ParseCsvRow(line, values, line_number, previous_time)) continue;
         if (rows.size() > maximum_values - values.size()) {
@@ -713,7 +733,8 @@ Dataset ReadDatasetCsv(const std::string& path) {
     std::ifstream input(path);
     if (!input) throw std::runtime_error("cannot open dataset input: " + path);
     std::string line;
-    if (!std::getline(input, line)) throw std::runtime_error("dataset CSV is empty");
+    char separator;
+    if (!ReadCsvHeader(input, line, separator)) throw std::runtime_error("dataset CSV is empty");
     const auto header = SplitCsvLine(line);
     if (header.size() < 5 || header[0] != "time_s" || (header.size() - 1) % 4 != 0) {
         throw std::runtime_error("dataset CSV header has an invalid shape");
@@ -742,7 +763,7 @@ Dataset ReadDatasetCsv(const std::string& path) {
     std::vector<double> values(header.size());
     std::size_t line_number = 1;
     double previous_time = -std::numeric_limits<double>::infinity();
-    while (std::getline(input, line)) {
+    while (std::getline(input, line, separator)) {
         ++line_number;
         if (!ParseCsvRow(line, values, line_number, previous_time)) continue;
         Sample sample;
