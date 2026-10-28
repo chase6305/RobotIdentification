@@ -18,6 +18,13 @@ int main() {
     sample.acceleration = Eigen::VectorXd::Zero(1);
     sample.torque = Eigen::VectorXd::Zero(1);
     const auto regressor = backend.Compute(sample);
+    robot_identification::Dataset dataset;
+    dataset.joint_names = {"joint"};
+    for (int index = 0; index < 3; ++index) {
+        sample.time_seconds = index;
+        dataset.samples.push_back(sample);
+    }
+    const auto assembled = backend.BuildProblem(dataset);
     return backend.parameter_count() == 10 && regressor.rows() == 1 && regressor.cols() == 10 && regressor.allFinite()
                ? 0
                : 1;

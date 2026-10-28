@@ -3,10 +3,12 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <pinocchio/algorithm/rnea.hpp>
 #include <pinocchio/parsers/urdf.hpp>
 #include <stdexcept>
+#include <utility>
 
 int main() {
     const auto path = std::filesystem::temp_directory_path() / "robot_identification_pinocchio_test.urdf";
@@ -46,10 +48,44 @@ int main() {
     }
 
     sample.velocity.resize(2);
+    bool invalid_sample_rejected = false;
     try {
         static_cast<void>(backend.Compute(sample));
     } catch (const std::invalid_argument&) {
-        return 0;
+        invalid_sample_rejected = true;
     }
-    throw std::runtime_error("Pinocchio regressor accepted an invalid sample");
+    if (!invalid_sample_rejected) throw std::runtime_error("Pinocchio regressor accepted an invalid sample");
+    sample.velocity = Eigen::VectorXd::Constant(1, -0.2);
+    robot_identification::Dataset dataset;
+    dataset.joint_names = {"joint"};
+    for (int index = 0; index < 20; ++index) {
+        auto value = sample;
+        value.time_seconds = index * 0.01;
+        value.position[0] = 0.1 * std::sin(index);
+        value.velocity[0] = 0.2 * std::cos(index);
+        value.acceleration[0] = -0.2 * std::sin(index);
+        value.torque[0] = 0.01 * index;
+        dataset.samples.push_back(std::move(value));
+    }
+    const auto generic = robot_identification::BuildRegressionProblem(dataset, backend);
+    const auto verify = [&](const robot_identification::RegressionProblem& result) {
+        if (!result.Validate() || result.sample_count != generic.sample_count || result.dof != generic.dof ||
+            !result.regressor.isApprox(generic.regressor, 0) || !result.observation.isApprox(generic.observation, 0) ||
+            !result.row_weights.isApprox(generic.row_weights, 0)) {
+            throw std::runtime_error("reused Pinocchio workspace changed dataset assembly");
+        }
+    };
+    verify(backend.BuildProblem(dataset));
+    auto concurrent = std::async(std::launch::async, [&] { return backend.BuildProblem(dataset); });
+    verify(backend.BuildProblem(dataset));
+    verify(concurrent.get());
+    dataset.samples.back().velocity.conservativeResize(0);
+    bool invalid_rejected = false;
+    try {
+        (void)backend.BuildProblem(dataset);
+    } catch (const std::invalid_argument&) {
+        invalid_rejected = true;
+    }
+    if (!invalid_rejected) throw std::runtime_error("batch assembly accepted invalid samples");
+    return 0;
 }

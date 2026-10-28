@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(robot_identification_pinocchio VERSION 0.1.0 LANGUAGES CXX)
+project(robot_identification_pinocchio VERSION 0.2.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -45,8 +45,9 @@ install(FILES README.md ../LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/robot_id
 
 include(CTest)
 if(BUILD_TESTING)
+  find_package(Threads REQUIRED)
   add_executable(pinocchio_regressor_test test/pinocchio_regressor_test.cpp)
-  target_link_libraries(pinocchio_regressor_test PRIVATE robot_identification::pinocchio)
+  target_link_libraries(pinocchio_regressor_test PRIVATE robot_identification::pinocchio Threads::Threads)
   add_test(NAME pinocchio_regressor_test COMMAND pinocchio_regressor_test)
 
   set(PINOCCHIO_CONSUMER_INSTALL "${CMAKE_CURRENT_BINARY_DIR}/consumer-install")

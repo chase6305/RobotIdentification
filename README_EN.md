@@ -13,6 +13,8 @@ Robot dynamics parameter identification: named joint datasets, preprocessing, re
 
 Recorders and model adapters depend on the identification core. No RobotServer, controller, or vendor SDK is required.
 
+For complete Pinocchio datasets, `backend.BuildProblem(dataset)` reuses call-local scratch. Individual samples and generic backend composition retain `Compute`; see the [Pinocchio backend](robot_identification_pinocchio/README.md).
+
 ## Standalone build
 
 Requires CMake 3.15+, C++17, and Eigen 3.3+. Full validation also requires Python 3.10+ and `jsonschema==4.23.0`.

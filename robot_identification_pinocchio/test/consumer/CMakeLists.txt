@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 project(robot_identification_pinocchio_consumer LANGUAGES CXX)
 
-find_package(robot_identification_pinocchio REQUIRED)
+find_package(robot_identification_pinocchio 0.2 REQUIRED)
 add_executable(robot_identification_pinocchio_consumer main.cpp)
 target_link_libraries(robot_identification_pinocchio_consumer PRIVATE robot_identification::pinocchio)

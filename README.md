@@ -13,6 +13,8 @@
 
 依赖由采集、模型后端指向辨识核心。库中不包含 RobotServer、控制器或厂商 SDK 依赖。
 
+整批 Pinocchio 数据可用 `backend.BuildProblem(dataset)` 复用调用内工作区；单样本和通用后端组合继续使用 `Compute`。详见 [Pinocchio 后端](robot_identification_pinocchio/README.md)。
+
 ## 独立构建
 
 需要 CMake 3.15+、C++17、Eigen 3.3+；完整测试还需要 Python 3.10+ 和 `jsonschema==4.23.0`。

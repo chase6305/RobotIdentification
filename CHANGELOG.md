@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Pinocchio backend 0.2.0 adds `BuildProblem(dataset)`, reusing a call-local
+  workspace across samples while retaining core dataset validation and ordering.
+  Concurrent calls keep independent scratch. The API is additive with no object
+  layout or vtable change; consumers using it must link version 0.2.0.
+
 - Preserve representable Huber row weights when the residual ratio is subnormal
   or underflows before multiplication by a large base weight. Keep ordinary
   ratios on the existing fast path and cover rank/covariance at extreme scales.
@@ -22,7 +27,7 @@
 - Extract the core, optional Pinocchio regressor, ROS 2 recorder, schemas, tests,
   and offline artifact tools from RobotServer `a6c70ec`, retaining relevant Git history.
 - Preserve the existing public C++ targets, dataset formats, and artifact schemas.
-  Core and Pinocchio packages remain at 0.1.0. Recorder 0.1.1 explicitly declares
+  Core remains at 0.1.0. Recorder 0.1.1 explicitly declares
   string-array joint names so ROS Humble accepts configured joint ordering, and
   closes its context idempotently after SIGINT.
 - Publish offline inspection and artifact commands under the new

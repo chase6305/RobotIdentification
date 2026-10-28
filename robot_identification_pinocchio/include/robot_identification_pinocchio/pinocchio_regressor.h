@@ -19,6 +19,11 @@ public:
     [[nodiscard]] std::vector<std::string> parameter_names() const override;
     [[nodiscard]] Eigen::MatrixXd Compute(const robot_identification::Sample& sample) const override;
 
+    // Assemble one dataset with a call-local Pinocchio workspace reused for
+    // all samples. Independent calls on this immutable backend may overlap.
+    [[nodiscard]] robot_identification::RegressionProblem BuildProblem(
+        const robot_identification::Dataset& dataset) const;
+
     [[nodiscard]] const pinocchio::Model& model() const noexcept { return *model_; }
 
 private:
