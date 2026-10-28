@@ -22,6 +22,10 @@ class JointStateRecorderTest(unittest.TestCase):
         self.nodes = []
         self.subscribe = mock.Mock()
         options, nodes, subscribe = self.options, self.nodes, self.subscribe
+        string_array_type = object()
+
+        class UninitializedParameter(Exception):
+            pass
 
         class StubNode:
 
@@ -35,6 +39,8 @@ class JointStateRecorderTest(unittest.TestCase):
                 self.parameters[name] = options.get(name, default)
 
             def get_parameter(self, name):
+                if self.parameters[name] is string_array_type:
+                    raise UninitializedParameter(name)
                 return types.SimpleNamespace(value=self.parameters[name])
 
             def create_subscription(self, *args):
@@ -49,9 +55,14 @@ class JointStateRecorderTest(unittest.TestCase):
         self.ros = types.ModuleType("rclpy")
         self.ros.init = mock.Mock()
         self.ros.spin = mock.Mock()
-        self.ros.shutdown = mock.Mock()
+        self.ros.try_shutdown = mock.Mock()
         node_module = types.ModuleType("rclpy.node")
         node_module.Node = StubNode
+        parameter_module = types.ModuleType("rclpy.parameter")
+        parameter_module.Parameter = types.SimpleNamespace(
+            Type=types.SimpleNamespace(STRING_ARRAY=string_array_type))
+        exceptions_module = types.ModuleType("rclpy.exceptions")
+        exceptions_module.ParameterUninitializedException = UninitializedParameter
         qos_module = types.ModuleType("rclpy.qos")
         qos_module.QoSProfile = mock.Mock()
         qos_module.ReliabilityPolicy = types.SimpleNamespace(
@@ -66,6 +77,8 @@ class JointStateRecorderTest(unittest.TestCase):
                 sys.modules, {
                     "rclpy": self.ros,
                     "rclpy.node": node_module,
+                    "rclpy.parameter": parameter_module,
+                    "rclpy.exceptions": exceptions_module,
                     "rclpy.qos": qos_module,
                     "sensor_msgs": types.ModuleType("sensor_msgs"),
                     "sensor_msgs.msg": message_module
@@ -80,7 +93,7 @@ class JointStateRecorderTest(unittest.TestCase):
 
     def assert_released(self):
         self.nodes[0].destroy.assert_called_once_with()
-        self.ros.shutdown.assert_called_once_with()
+        self.ros.try_shutdown.assert_called_once_with()
 
     def test_callback_validation_and_normal_interrupt_finalize(self):
         self.options.update(input_topic="/robot/joints",

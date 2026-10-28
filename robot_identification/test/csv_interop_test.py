@@ -14,12 +14,12 @@ from unittest import mock
 
 repository = Path(__file__).resolve().parents[2]
 sys.path[:0] = [
-    str(repository / "robot_server_tools"),
+    str(repository / "robot_identification_tools"),
     str(repository / "robot_identification_ros2")
 ]
 
 from robot_identification_ros2 import raw_joint_state_session as recording
-from robot_server_tools.dataset_inspect import inspect_dataset_with_digest
+from robot_identification_tools.dataset_inspect import inspect_dataset_with_digest
 
 
 class CsvInteropTest(unittest.TestCase):

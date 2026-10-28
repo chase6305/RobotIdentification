@@ -1,0 +1,38 @@
+name: ros2-ci
+on:
+  push:
+  pull_request:
+jobs:
+  humble-and-pinocchio:
+    runs-on: ubuntu-22.04
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      MAKEFLAGS: -j2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: humble
+      - name: Install dependencies
+        run: |
+          source /opt/ros/humble/setup.bash
+          rosdep update
+          rosdep install --from-paths . --ignore-src --rosdistro humble -y
+          python3 -m pip install --user jsonschema==4.23.0
+      - name: Build and test isolated workspace
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --paths robot_identification robot_identification_pinocchio robot_identification_ros2 robot_identification_tools \
+            --parallel-workers 2 --cmake-args -DBUILD_TESTING=ON -DROBOT_IDENTIFICATION_BUILD_EXAMPLES=ON
+          source install/setup.bash
+          colcon test --return-code-on-test-failure
+          colcon test-result --verbose
+          python3 utils/ros2_recording_smoke.py
+          ros2 run robot_identification_tools dataset_inspect --help
+          ros2 run robot_identification_tools identification_artifact --help
+      - name: Validate schema and Python contracts
+        run: |
+          source /opt/ros/humble/setup.bash
+          PYTHONPATH=robot_identification_tools python3 -m unittest discover -s robot_identification_tools/test
+          PYTHONPATH=robot_identification_ros2 python3 -m unittest discover -s robot_identification_ros2/test
+          python3 utils/check_schemas.py

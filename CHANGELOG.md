@@ -1,0 +1,16 @@
+# Changelog
+
+## Unreleased
+
+- Extract the core, optional Pinocchio regressor, ROS 2 recorder, schemas, tests,
+  and offline artifact tools from RobotServer `a6c70ec`, retaining relevant Git history.
+- Preserve the existing public C++ targets, dataset formats, and artifact schemas.
+  Core and Pinocchio packages remain at 0.1.0. Recorder 0.1.1 explicitly declares
+  string-array joint names so ROS Humble accepts configured joint ordering, and
+  closes its context idempotently after SIGINT.
+- Publish offline inspection and artifact commands under the new
+  `robot_identification_tools` 0.1.0 package. Python imports and `ros2 run` package
+  selection move from `robot_server_tools`; console-script names are unchanged.
+- Add independent validation, Python packaging, formatting, schema checks, and
+  standalone/ROS 2 CI definitions, including an installed-recorder integration
+  check with synthetic standard JointState messages.

@@ -2,6 +2,10 @@
 
 ROS 2 recording/session utilities for the middleware-independent `robot_identification` library.
 
+Version 0.1.1 declares `joint_names` as a string array and handles an already
+stopped ROS context during shutdown. Omit joint names to learn the ordering
+from the first valid sample, or set an explicit list of names.
+
 The first recorder consumes a generic `sensor_msgs/msg/JointState`, treats `position` as `q` and `effort` as the measured torque selected by the hardware adapter, reorders by stable joint name, timestamps each callback with the process monotonic clock, and writes the raw CSV contract accepted by `ReadRawDatasetCsv()`.
 
 ```bash

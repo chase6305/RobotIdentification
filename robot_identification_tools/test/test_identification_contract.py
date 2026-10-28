@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from robot_server_tools import identification_artifact as artifact
+from robot_identification_tools import identification_artifact as artifact
 
 
 class IdentificationContractTest(unittest.TestCase):

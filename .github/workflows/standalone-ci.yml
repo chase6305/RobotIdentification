@@ -1,0 +1,26 @@
+name: standalone-ci
+on:
+  push:
+  pull_request:
+jobs:
+  core-and-tools:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev python3-pip
+          python3 -m pip install --user -r requirements-dev.txt
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Check formatting and shell syntax
+        run: |
+          ./check_style.sh
+          bash -n scripts/*.sh
+      - name: Test core, installed C++ consumers, Python tools, recorder, and schemas
+        run: ./scripts/test.sh /tmp/robot-identification-ci
+      - name: Verify Python packaging and console scripts
+        run: |
+          python3 -m pip install --no-deps --no-build-isolation --target /tmp/identification-tools ./robot_identification_tools
+          PYTHONPATH=/tmp/identification-tools /tmp/identification-tools/bin/dataset_inspect --help
+          PYTHONPATH=/tmp/identification-tools /tmp/identification-tools/bin/identification_artifact --help

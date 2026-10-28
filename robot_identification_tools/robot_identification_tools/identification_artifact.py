@@ -12,7 +12,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from robot_server_tools.dataset_inspect import inspect_dataset_with_digest
+from robot_identification_tools.dataset_inspect import inspect_dataset_with_digest
 
 
 def _sha256(path: Path) -> str:

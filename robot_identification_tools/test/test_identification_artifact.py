@@ -6,10 +6,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from robot_server_tools import identification_artifact as artifact
-from robot_server_tools.identification_artifact import create_candidate
-from robot_server_tools.identification_artifact import create_review
-from robot_server_tools.identification_artifact import create_rollback
+from robot_identification_tools import identification_artifact as artifact
+from robot_identification_tools.identification_artifact import create_candidate
+from robot_identification_tools.identification_artifact import create_review
+from robot_identification_tools.identification_artifact import create_rollback
 
 
 class IdentificationArtifactTest(unittest.TestCase):

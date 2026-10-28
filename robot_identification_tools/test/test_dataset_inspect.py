@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from robot_server_tools import dataset_inspect as inspection
-from robot_server_tools.dataset_inspect import inspect_dataset
-from robot_server_tools.dataset_inspect import inspect_dataset_with_digest
+from robot_identification_tools import dataset_inspect as inspection
+from robot_identification_tools.dataset_inspect import inspect_dataset
+from robot_identification_tools.dataset_inspect import inspect_dataset_with_digest
 
 
 class DatasetInspectTest(unittest.TestCase):

@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import rclpy
+from rclpy.exceptions import ParameterUninitializedException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
 
@@ -31,17 +33,21 @@ class JointStateRecorder(Node):
     def _configure(self) -> None:
         self.declare_parameter("input_topic", "/feedback/joint")
         self.declare_parameter("output_path", "")
-        self.declare_parameter("joint_names", [])
+        self.declare_parameter("joint_names", Parameter.Type.STRING_ARRAY)
         self.declare_parameter("flush_interval", 100)
         self.declare_parameter("session_id", "")
         self.declare_parameter("model_digest", "")
         self.declare_parameter("torque_source", "sensor_msgs/JointState.effort")
 
+        try:
+            joint_names = self.get_parameter("joint_names").value
+        except ParameterUninitializedException:
+            joint_names = []
         input_topic = self.get_parameter("input_topic").value
         self._session = RawJointStateSession(
             self.get_parameter("output_path").value,
             input_topic=input_topic,
-            joint_names=self.get_parameter("joint_names").value,
+            joint_names=joint_names,
             flush_interval=self.get_parameter("flush_interval").value,
             session_id=self.get_parameter("session_id").value,
             model_digest=self.get_parameter("model_digest").value,
@@ -93,7 +99,7 @@ def main(args=None) -> None:
                 finally:
                     recorder.destroy_node()
         finally:
-            rclpy.shutdown()
+            rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

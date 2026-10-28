@@ -59,7 +59,7 @@ if(BUILD_TESTING)
 
   # Interchange tests use the repository's pure-Python tools, without ROS.
   # A standalone copy of this library can still build its own C++ tests.
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../robot_server_tools/robot_server_tools/dataset_inspect.py"
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../robot_identification_tools/robot_identification_tools/dataset_inspect.py"
      AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../robot_identification_ros2/robot_identification_ros2/raw_joint_state_session.py")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)

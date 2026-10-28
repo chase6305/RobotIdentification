@@ -1,13 +1,17 @@
-# robot_server_tools
+# robot_identification_tools
 
-机器人无关的只读诊断工具。工具通过命令行参数接收文件或 topic，不包含机器人型号、固定关节数或硬件写操作。
+离线数据集校验，以及候选、评审和回滚工件管理。Python 包只依赖标准库，可直接用 pip 安装。
+Offline dataset inspection and immutable candidate, review, and rollback artifacts. The package uses the Python standard library and installs with pip.
 
 ```bash
-ros2 run robot_server_tools state_monitor --topic /feedback/robot_server_state
-ros2 run robot_server_tools dataset_inspect session.csv --json
+python3 -m pip install ./robot_identification_tools
+dataset_inspect session.csv --json
+identification_artifact --help
 ```
 
-`state_monitor` validates the basic JSON state envelope before printing status.
+在 ROS 2 工作区安装后，也可用 `ros2 run robot_identification_tools dataset_inspect` 和 `ros2 run robot_identification_tools identification_artifact` 调用。
+The same console scripts are available through `ros2 run` after a colcon installation.
+
 `dataset_inspect` works without a ROS graph and strictly validates raw or
 processed identification CSV headers, finite values, monotonic timestamps,
 sample rate, timing spread, and peak absolute torque.
@@ -38,12 +42,12 @@ path.
 Candidate parameters use an explicit, non-mutating workflow:
 
 ```bash
-ros2 run robot_server_tools identification_artifact rollback \
+ros2 run robot_identification_tools identification_artifact rollback \
   --configuration robot_config.yaml --profile default --output rollback.json
-ros2 run robot_server_tools identification_artifact candidate \
+ros2 run robot_identification_tools identification_artifact candidate \
   --dataset session.csv --model-digest MODEL_SHA --joints joint_1 joint_2 \
   --parameters parameters.json --diagnostics diagnostics.json --output candidate.json
-ros2 run robot_server_tools identification_artifact review \
+ros2 run robot_identification_tools identification_artifact review \
   --candidate candidate.json --decision approved --reviewer NAME \
   --reason "offline and low-speed validation passed" \
   --rollback rollback.json --output review.json
