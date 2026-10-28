@@ -65,6 +65,7 @@ class JointStateRecorderTest(unittest.TestCase):
         exceptions_module.ParameterUninitializedException = UninitializedParameter
         qos_module = types.ModuleType("rclpy.qos")
         qos_module.QoSProfile = mock.Mock()
+        self.qos_profile = qos_module.QoSProfile
         qos_module.ReliabilityPolicy = types.SimpleNamespace(
             RELIABLE="reliable")
         message_module = types.ModuleType("sensor_msgs.msg")
@@ -113,6 +114,8 @@ class JointStateRecorderTest(unittest.TestCase):
         self.ros.init.assert_called_once_with(args=["--ros-args"])
         self.assert_released()
         self.assertEqual(self.subscribe.call_args.args[1], "/robot/joints")
+        self.qos_profile.assert_called_once_with(depth=10,
+                                                 reliability="reliable")
         self.nodes[0].logger.warning.assert_has_calls([
             mock.call(
                 "rejected JointState sample: joint set changed during the session; rejected=1"
@@ -130,6 +133,29 @@ class JointStateRecorderTest(unittest.TestCase):
         self.nodes[0].close()
         self.nodes[0]._on_sample(self.sample())
         self.assertEqual(self.nodes[0]._session.sample_count, 3)
+
+    def test_configured_qos_depth_reaches_subscription(self):
+        self.options["qos_depth"] = 1000
+        self.ros.spin.side_effect = lambda node: [
+            node._on_sample(self.sample()) for _ in range(3)
+        ]
+        self.recorder.main()
+        self.qos_profile.assert_called_once_with(depth=1000,
+                                                 reliability="reliable")
+        self.assert_released()
+        self.assertTrue(self.path.exists())
+
+    def test_invalid_qos_depth_fails_before_creating_artifacts(self):
+        for depth in (0, -1, 1.5, True, "10"):
+            with self.subTest(depth=depth):
+                self.nodes.clear()
+                self.ros.try_shutdown.reset_mock()
+                self.options["qos_depth"] = depth
+                with self.assertRaisesRegex(ValueError, "qos_depth"):
+                    self.recorder.main()
+                self.assert_released()
+                self.subscribe.assert_not_called()
+                self.assertEqual(list(self.path.parent.iterdir()), [])
 
     def test_configuration_failure_destroys_node_and_shuts_down(self):
         self.options["flush_interval"] = 0

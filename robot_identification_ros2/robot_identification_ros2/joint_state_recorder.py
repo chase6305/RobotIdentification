@@ -35,6 +35,7 @@ class JointStateRecorder(Node):
         self.declare_parameter("output_path", "")
         self.declare_parameter("joint_names", Parameter.Type.STRING_ARRAY)
         self.declare_parameter("flush_interval", 100)
+        self.declare_parameter("qos_depth", 10)
         self.declare_parameter("session_id", "")
         self.declare_parameter("model_digest", "")
         self.declare_parameter("torque_source", "sensor_msgs/JointState.effort")
@@ -44,6 +45,9 @@ class JointStateRecorder(Node):
         except ParameterUninitializedException:
             joint_names = []
         input_topic = self.get_parameter("input_topic").value
+        qos_depth = self.get_parameter("qos_depth").value
+        if type(qos_depth) is not int or qos_depth <= 0:
+            raise ValueError("qos_depth must be a positive integer")
         self._session = RawJointStateSession(
             self.get_parameter("output_path").value,
             input_topic=input_topic,
@@ -52,11 +56,13 @@ class JointStateRecorder(Node):
             session_id=self.get_parameter("session_id").value,
             model_digest=self.get_parameter("model_digest").value,
             torque_source=self.get_parameter("torque_source").value)
-        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        qos = QoSProfile(depth=qos_depth,
+                         reliability=ReliabilityPolicy.RELIABLE)
         self._subscription = self.create_subscription(JointState, input_topic,
                                                       self._on_sample, qos)
         self.get_logger().info(
-            f"recording {input_topic} to {self._session.partial_path}")
+            f"recording {input_topic} to {self._session.partial_path}; qos_depth={qos_depth}"
+        )
 
     def _on_sample(self, message: JointState) -> None:
         if self._closed:

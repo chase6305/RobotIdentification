@@ -10,6 +10,8 @@ import uuid
 from pathlib import Path
 
 import rclpy
+from rcl_interfaces.msg import ParameterType
+from rcl_interfaces.srv import GetParameters
 from ament_index_python.packages import get_package_prefix
 from sensor_msgs.msg import JointState
 
@@ -29,7 +31,7 @@ def main():
             process = subprocess.Popen([
                 str(executable), "--ros-args", "-p", f"input_topic:={topic}",
                 "-p", f"output_path:={output}", "-p", "flush_interval:=1", "-p",
-                "joint_names:=[joint_a,joint_b]"
+                "joint_names:=[joint_a,joint_b]", "-p", "qos_depth:=1000"
             ],
                                        stdout=log,
                                        stderr=subprocess.STDOUT)
@@ -45,6 +47,29 @@ def main():
                     if time.monotonic() >= deadline:
                         raise TimeoutError("recorder discovery timed out")
                     rclpy.spin_once(node, timeout_sec=0.05)
+                parameters = node.create_client(
+                    GetParameters,
+                    "/robot_identification_recorder/get_parameters")
+                deadline = time.monotonic() + 10
+                while not parameters.service_is_ready():
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            "recorder parameter service timed out")
+                    rclpy.spin_once(node, timeout_sec=0.05)
+                request = GetParameters.Request()
+                request.names = ["qos_depth"]
+                future = parameters.call_async(request)
+                while not future.done():
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("recorder parameter query timed out")
+                    rclpy.spin_once(node, timeout_sec=0.05)
+                values = future.result().values
+                if (len(values) != 1 or
+                        values[0].type != ParameterType.PARAMETER_INTEGER or
+                        values[0].integer_value != 1000):
+                    raise AssertionError(
+                        "installed recorder did not apply qos_depth")
+                node.destroy_client(parameters)
                 for index in range(20):
                     sample = JointState()
                     if index % 2:

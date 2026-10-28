@@ -52,7 +52,18 @@ PYTHONPATH=robot_identification_ros2 \
   python3 -m unittest discover -s robot_identification_ros2/test
 ```
 
-Run this from the repository root, or use `./scripts/test_repository.sh`. Adapter
+Run this from the repository root, or use `./scripts/test.sh`. Adapter
 tests use ROS stubs and do not replace integration testing on a ROS graph.
 
 This node never commands motion and cannot establish that a trajectory is safe or sufficiently exciting. `JointState.effort` provenance is adapter-specific and must be documented in the session record.
+
+Version 0.2.0 adds `qos_depth`, a positive integer with the existing default of 10.
+For example, pass `-p qos_depth:=1000` to absorb a longer publication burst.
+Larger queues use more memory and can increase callback delay. Receipt timestamps
+remain process-monotonic callback times; queue depth does not establish source
+sampling times or loss-free delivery. Validate acquisition timing separately for
+identification. Python packaging requires version 3.10 or newer.
+
+0.2.0 新增正整数参数 `qos_depth`，默认仍为 10。高频录制可按实测情况配置，例如
+`-p qos_depth:=1000`；更深的队列增加内存和回调延迟。时间戳继续使用回调时的进程
+单调时钟，队列深度不保证原始采样时序或无丢包，辨识采集时应另行验证。
