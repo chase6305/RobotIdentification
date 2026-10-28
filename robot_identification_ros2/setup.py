@@ -12,6 +12,7 @@ setup(
         ("share/" + package_name, ["package.xml", "README.md", "../LICENSE"]),
     ],
     install_requires=["setuptools"],
+    tests_require=["pytest"],
     zip_safe=True,
     maintainer="RobotServer maintainers",
     maintainer_email="maintainers@example.com",

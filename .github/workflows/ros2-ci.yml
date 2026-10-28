@@ -22,12 +22,8 @@ jobs:
       - name: Build and test isolated workspace
         run: |
           source /opt/ros/humble/setup.bash
-          colcon build --paths robot_identification robot_identification_pinocchio robot_identification_ros2 robot_identification_tools \
-            --parallel-workers 2 --cmake-args -DBUILD_TESTING=ON -DROBOT_IDENTIFICATION_BUILD_EXAMPLES=ON
-          source install/setup.bash
-          colcon test --return-code-on-test-failure
-          colcon test-result --verbose
-          python3 utils/ros2_recording_smoke.py
+          ./scripts/test_ros2.sh
+          source build/ros2/install/setup.bash
           ros2 run robot_identification_tools dataset_inspect --help
           ros2 run robot_identification_tools identification_artifact --help
       - name: Validate schema and Python contracts

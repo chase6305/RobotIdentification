@@ -25,6 +25,7 @@ export PYTHONDONTWRITEBYTECODE=1
 export PYTHONPATH="$ROOT_DIR/robot_identification_tools:$ROOT_DIR/robot_identification_ros2${PYTHONPATH:+:$PYTHONPATH}"
 "$PYTHON_BIN" -m unittest discover -s robot_identification_tools/test
 "$PYTHON_BIN" -m unittest discover -s robot_identification_ros2/test
+"$PYTHON_BIN" -m unittest discover -s utils/tests
 "$PYTHON_BIN" utils/check_schemas.py
 
 if [[ "$WITH_PINOCCHIO" == "--with-pinocchio" ]]; then

@@ -53,11 +53,8 @@ identification_artifact --help
 ```bash
 source /opt/ros/humble/setup.bash
 rosdep install --from-paths . --ignore-src --rosdistro humble -y
-colcon build --paths robot_identification robot_identification_pinocchio robot_identification_ros2 robot_identification_tools \
-  --parallel-workers 2 --cmake-args -DBUILD_TESTING=ON
-source install/setup.bash
-colcon test --return-code-on-test-failure
-colcon test-result --verbose
+./scripts/test_ros2.sh
+source build/ros2/install/setup.bash
 ros2 run robot_identification_ros2 joint_state_recorder --ros-args \
   -p input_topic:=/joint_states -p output_path:=/tmp/session-001.csv
 ```
