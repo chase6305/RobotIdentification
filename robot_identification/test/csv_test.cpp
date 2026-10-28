@@ -8,6 +8,7 @@
 #include <locale>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include "robot_identification/identification.h"
 
@@ -397,9 +398,53 @@ void TestFinalWriteFailure() {
 }
 #endif
 
+void TestLargeRawStorageBoundaries() {
+    const Fixture fixture;
+    for (const auto dimensions : {std::make_pair(14, 10003), std::make_pair(257, 1029)}) {
+        const auto [dof, rows] = dimensions;
+        robot_identification::RawDataset original;
+        for (int joint = 0; joint < dof; ++joint) original.joint_names.push_back("axis_" + std::to_string(joint));
+        original.time_seconds.resize(rows);
+        original.position.resize(rows, dof);
+        original.torque.resize(rows, dof);
+        for (int row = 0; row < rows; ++row) {
+            original.time_seconds[row] = row * .015625;
+            for (int joint = 0; joint < dof; ++joint) {
+                original.position(row, joint) = row * .125 - joint * .25;
+                original.torque(row, joint) = -row * .5 + joint * .0625;
+            }
+        }
+        original.position(0, 0) = original.torque(0, 0) = -0.;
+        robot_identification::WriteRawDatasetCsv(original, fixture.path);
+        const auto actual = robot_identification::ReadRawDatasetCsv(fixture.path);
+        const auto same_bits = [](const auto& left, const auto& right) {
+            return left.rows() == right.rows() && left.cols() == right.cols() &&
+                   std::memcmp(left.data(), right.data(), static_cast<std::size_t>(left.size()) * sizeof(double)) == 0;
+        };
+        if (actual.joint_names != original.joint_names || !same_bits(actual.time_seconds, original.time_seconds) ||
+            !same_bits(actual.position, original.position) || !same_bits(actual.torque, original.torque)) {
+            throw std::runtime_error("large raw CSV lost/reordered rows, columns, or signed zero");
+        }
+        {
+            std::ofstream append(fixture.path, std::ios::app);
+            append << "100000,nan";
+            for (int column = 1; column < 2 * dof; ++column) append << ",0";
+            append << '\n';
+        }
+        bool rejected = false;
+        try {
+            (void)robot_identification::ReadRawDatasetCsv(fixture.path);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        if (!rejected) throw std::runtime_error("late malformed row bypassed raw CSV validation");
+    }
+}
+
 }  // namespace
 
 int main() {
+    TestLargeRawStorageBoundaries();
     TestHeaderNamesBeforeRows();
     TestTimestampDiagnostics();
     TestNumericGrammar();

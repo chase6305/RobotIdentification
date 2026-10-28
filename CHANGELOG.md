@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Read raw CSV once into growing column-oriented chunks, then release each
+  consumed field while assembling the owning output matrices. Avoid retaining
+  the complete flat parse buffer beside all outputs. Preserve numeric grammar,
+  row/joint order and validation, with large bitwise round-trip/late-error tests.
+  Add synthetic file generation and read/RSS benchmarks; bounded chunks trade
+  additional allocation calls for reduced peak memory.
+
 - Reuse bounded thread-local Pinocchio Data in the individual-sample regressor,
   preserving independent concurrent calls and owning returned matrices. Track
   shared ownership as well as model address so a reused address rebuilds scratch.

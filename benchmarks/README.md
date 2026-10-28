@@ -60,6 +60,26 @@ these CMake consumers outside workspace package discovery.
 被覆盖函数捕获的 C++ new/new[]/对齐 new；共享库内部直接 C 分配可能不被捕获。
 保存原始输出和运行环境，区分每次调用与每批数据的统计单位。
 
+Measure raw CSV read/checksum/destruction as a complete file operation:
+
+```bash
+python3 benchmarks/generate_raw_csv.py --samples 200000 --dof 14 --output build/raw-fixture.csv
+build/benchmarks/csv_bench build/raw-fixture.csv 1
+build/benchmarks/csv_bench build/raw-fixture.csv 5
+```
+
+The generator refuses to overwrite and prints the file size and SHA-256. One
+repetition skips warmup; use a fresh process for peak-RSS comparisons. Multiple
+repetitions warm once and report the median. `peak_rss_kib` comes from Linux
+`getrusage` for the entire process, including any warmup. Allocation counts are
+per read, with the same scope limitations above. Compare the same fixture and
+retain its digest. Filesystem cache, allocator and host activity affect results.
+
+CSV 基准包含读取、校验和计算及返回值销毁；与控制热调用的范围不同。单轮不预热，
+峰值 RSS 比较使用独立新进程；多轮先预热一次，报告中位数。生成器拒绝覆盖已有
+文件，输出大小与摘要。分块读取仍须为最终数据集保留与行数/关节数成正比的存储，
+并非恒定内存接口；减少峰值的代价可能是更多块分配。
+
 Enable `-DROBOT_IDENTIFICATION_BENCH_STRESS_TARGETS=ON` for deterministic analytic
 solver campaigns:
 

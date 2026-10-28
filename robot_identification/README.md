@@ -76,9 +76,9 @@ interpreted; quotes inside joint names remain literal characters. Python/C++
 interoperability tests cover accepted numeric syntax, rejected extensions,
 subnormal boundaries, and blank rows in addition to exact signal values.
 
-CSV import parses numeric fields in the reusable line buffer; raw recordings accumulate in contiguous storage before conversion to the output matrices. LF/CRLF/CR, blank lines, and a final row without a newline remain supported. Readers report I/O failures, and writers check the final buffered write when closing the file.
+CSV import parses numeric fields in the reusable line buffer. Raw recordings use growing column-oriented chunks; consumed time, position and torque chunks are released as the owning outputs are assembled. This single pass reduces peak temporary memory without seeking or retaining a complete flat parse buffer. Final dataset storage still scales with sample/joint count, and chunking adds allocation calls. LF/CRLF/CR, blank lines, and a final row without a newline remain supported. Readers report I/O failures, and writers check the final buffered write when closing the file.
 
-CSV 导入直接复用行缓冲区解析数值，原始记录先连续存储，再转换为输出矩阵，减少逐字段字符串复制和逐行向量分配。继续支持 LF/CRLF/CR、空行及末行无换行符；读取发生 I/O 错误或关闭文件时最后一次缓冲写入失败，均会抛出异常。
+CSV 导入复用行缓冲解析数值；原始记录按列分块暂存，构造输出时逐字段释放已消费的块。一遍读取即可减少峰值临时内存，不需要回退文件或保留完整平铺副本；最终数据仍与样本/关节数成正比，分块会增加分配次数。继续支持 LF/CRLF/CR、空行及末行无换行符；读取发生 I/O 错误或关闭文件时最后一次缓冲写入失败，均会抛出异常。
 
 C++ 数值解析使用有界的 `std::from_chars`，不修改输入缓冲区，也不读取进程语言环境。写出时固定使用小数点 `.` 且不插入数字分组符。可表示的极小非零数（次正规数）和正负零能够精确往返；数值溢出或非零值过小而只能表示为零时仍会报错，并给出行列位置。保留前导 ASCII 空白、显式正负号及 `0x` 十六进制格式；尾随垃圾字符仍被拒绝。
 

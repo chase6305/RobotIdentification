@@ -663,7 +663,8 @@ RawDataset ReadRawDatasetCsv(const std::string& path) {
         throw std::runtime_error("raw dataset CSV header has an invalid shape");
     }
     const std::size_t dof = (header.size() - 1) / 2;
-    const auto maximum_values = static_cast<std::size_t>(std::numeric_limits<Eigen::Index>::max());
+    const auto maximum_values = std::min(static_cast<std::size_t>(std::numeric_limits<Eigen::Index>::max()),
+                                         std::numeric_limits<std::size_t>::max() / sizeof(double));
     if (header.size() > maximum_values) throw std::overflow_error("raw dataset CSV has too many columns");
     RawDataset dataset;
     dataset.joint_names.reserve(dof);
@@ -677,25 +678,66 @@ RawDataset ReadRawDatasetCsv(const std::string& path) {
         }
     }
     ValidateCsvJointNames(dataset.joint_names);
-    std::vector<double> rows;
+    struct Chunk {
+        Chunk(Eigen::Index capacity, Eigen::Index columns)
+            : time(capacity), position(capacity, columns), torque(capacity, columns) {}
+        Eigen::VectorXd time;
+        Eigen::MatrixXd position, torque;
+        Eigen::Index used{0};
+    };
+    std::vector<std::unique_ptr<Chunk>> chunks;
+    // Small files start with eight rows. Larger chunks are capped by both row
+    // count and coefficient count, bounding excess capacity without a file pass.
+    const Eigen::Index maximum_chunk_rows =
+        std::max<Eigen::Index>(1, std::min<Eigen::Index>(4096, 65536 / static_cast<Eigen::Index>(header.size())));
+    const auto columns = static_cast<Eigen::Index>(dof);
+    std::size_t row_count = 0;
     std::vector<double> values(header.size());
     std::size_t line_number = 1;
     double previous_time = -std::numeric_limits<double>::infinity();
     while (std::getline(input, line, separator)) {
         ++line_number;
         if (!ParseCsvRow(line, values, line_number, previous_time)) continue;
-        if (rows.size() > maximum_values - values.size()) {
+        if (row_count >= maximum_values / values.size()) {
             throw std::overflow_error("raw dataset CSV contains too many values");
         }
-        rows.insert(rows.end(), values.begin(), values.end());
+        if (chunks.empty() || chunks.back()->used == chunks.back()->time.size()) {
+            const Eigen::Index capacity =
+                std::min<Eigen::Index>(maximum_chunk_rows, chunks.empty() ? 8 : 2 * chunks.back()->time.size());
+            chunks.push_back(std::make_unique<Chunk>(capacity, columns));
+        }
+        auto& chunk = *chunks.back();
+        chunk.time[chunk.used] = values[0];
+        chunk.position.row(chunk.used) = Eigen::Map<const Eigen::RowVectorXd>(values.data() + 1, columns);
+        chunk.torque.row(chunk.used) = Eigen::Map<const Eigen::RowVectorXd>(values.data() + 1 + dof, columns);
+        ++chunk.used;
+        ++row_count;
     }
     if (input.bad() || !input.eof()) throw std::runtime_error("failed while reading raw dataset: " + path);
-    using RowMatrix = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
-    const Eigen::Map<const RowMatrix> parsed(rows.data(), static_cast<Eigen::Index>(rows.size() / header.size()),
-                                             static_cast<Eigen::Index>(header.size()));
-    dataset.time_seconds = parsed.col(0);
-    dataset.position = parsed.middleCols(1, static_cast<Eigen::Index>(dof));
-    dataset.torque = parsed.rightCols(static_cast<Eigen::Index>(dof));
+    // Materialize one field at a time and release consumed chunks immediately.
+    // This avoids retaining a complete flat parse buffer alongside all outputs.
+    const auto samples = static_cast<Eigen::Index>(row_count);
+    dataset.time_seconds.resize(samples);
+    Eigen::Index offset = 0;
+    for (auto& chunk : chunks) {
+        dataset.time_seconds.segment(offset, chunk->used) = chunk->time.head(chunk->used);
+        offset += chunk->used;
+        chunk->time.resize(0);
+    }
+    dataset.position.resize(samples, columns);
+    offset = 0;
+    for (auto& chunk : chunks) {
+        dataset.position.middleRows(offset, chunk->used) = chunk->position.topRows(chunk->used);
+        offset += chunk->used;
+        chunk->position.resize(0, 0);
+    }
+    dataset.torque.resize(samples, columns);
+    offset = 0;
+    for (auto& chunk : chunks) {
+        dataset.torque.middleRows(offset, chunk->used) = chunk->torque.topRows(chunk->used);
+        offset += chunk->used;
+        chunk->torque.resize(0, 0);
+    }
     std::string reason;
     if (!dataset.Validate(&reason)) throw std::runtime_error("raw dataset CSV is invalid: " + reason);
     return dataset;
