@@ -94,6 +94,25 @@ void TestMultiharmonicDerivativesAtZero() {
     }
 }
 
+void TestRobustWeightScales() {
+    robot_identification::RegressionProblem problem;
+    problem.sample_count = 4;
+    problem.dof = 1;
+    problem.regressor = Eigen::MatrixXd::Ones(4, 1);
+    problem.row_weights = Eigen::VectorXd::Constant(4, 1e300);
+    robot_identification::SolverOptions options;
+    options.huber_delta = 1e-300;
+    options.max_iterations = 2;
+    for (double magnitude : {1e20, 1e100}) {
+        problem.observation = Eigen::Vector4d(magnitude, -magnitude, magnitude, -magnitude);
+        const auto result = robot_identification::Solve(problem, options);
+        if (result.rank != 1 || !result.covariance.allFinite() || result.final_row_weights.minCoeff() <= 0 ||
+            (result.final_row_weights.array() * magnitude - 1.0).abs().maxCoeff() > 1e-12) {
+            throw std::runtime_error("representable robust weights were lost before multiplying by base weights");
+        }
+    }
+}
+
 void TestWeightedSolves() {
     robot_identification::RegressionProblem problem;
     problem.sample_count = 4;
@@ -331,6 +350,7 @@ void TestMassMatrixBatchRecovery() {
 }  // namespace
 
 int main() {
+    TestRobustWeightScales();
     TestHarmonicScaleRobustness();
     TestMultiharmonicDerivativesAtZero();
     TestMetricScales();

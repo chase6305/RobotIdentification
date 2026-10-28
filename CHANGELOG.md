@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve representable Huber row weights when the residual ratio is subnormal
+  or underflows before multiplication by a large base weight. Keep ordinary
+  ratios on the existing fast path and cover rank/covariance at extreme scales.
+
 - Compute harmonic envelopes with scaled hypot and form derivatives through
   successive coefficient/frequency products. Reject tiny trajectories whose
   true envelope exceeds limits even when sparse samples miss every peak, and

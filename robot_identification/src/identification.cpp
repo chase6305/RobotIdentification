@@ -55,6 +55,20 @@ struct ErrorMagnitudes {
     double maximum{0.0};
 };
 
+double RobustRowWeight(double base_weight, double delta, double residual_magnitude) {
+    if (residual_magnitude <= delta) return base_weight;
+    const double factor = delta / residual_magnitude;
+    if (factor >= std::numeric_limits<double>::min()) return base_weight * factor;
+    // A subnormal ratio can lose precision or become zero before a large
+    // base weight restores a representable result. Combine mantissas first.
+    int base_exponent, delta_exponent, residual_exponent;
+    const double base_fraction = std::frexp(base_weight, &base_exponent);
+    const double delta_fraction = std::frexp(delta, &delta_exponent);
+    const double residual_fraction = std::frexp(residual_magnitude, &residual_exponent);
+    return std::min(base_weight, std::ldexp(base_fraction * delta_fraction / residual_fraction,
+                                            base_exponent + delta_exponent - residual_exponent));
+}
+
 bool ParametersConverged(const Eigen::VectorXd& current, const Eigen::VectorXd& previous, double tolerance) {
     const double scale = std::max({1.0, current.cwiseAbs().maxCoeff(), previous.cwiseAbs().maxCoeff()});
     double previous_norm = 0.0;
@@ -899,8 +913,7 @@ IdentificationResult Solve(const RegressionProblem& problem, const SolverOptions
             if (!robust_residual.allFinite()) throw std::overflow_error("robust regression residuals are non-finite");
             for (Eigen::Index row = 0; row < robust_residual.size(); ++row) {
                 const double absolute = std::abs(robust_residual[row]);
-                const double robust = absolute <= options.huber_delta ? 1.0 : options.huber_delta / absolute;
-                weights[row] = problem.row_weights[row] * robust;
+                weights[row] = RobustRowWeight(problem.row_weights[row], options.huber_delta, absolute);
             }
         }
     }

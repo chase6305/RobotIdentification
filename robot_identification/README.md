@@ -38,6 +38,10 @@ Huber IRLS reuses weighted matrices, SVD decompositions, and residual storage wi
 
 Harmonic amplitudes use `hypot` to avoid square overflow or underflow. Derivatives multiply coefficients by successive frequency factors so representable results survive extreme scales. Position half-spans avoid overflowing the full width. Conservative envelopes are checked before sampling; sparse samples cannot replace continuous-trajectory limits.
 
+Huber 比例进入次正规数范围时，通过尾数和指数组合计算最终权重，避免先计算极小比例而丢失可表示的加权结果。正常比例保留直接乘法路径。
+
+When a Huber ratio is subnormal, mantissa/exponent arithmetic preserves representable final weights before a large base weight restores their scale. Ordinary ratios retain the direct multiplication path.
+
 ## Build and run / 构建与运行
 
 Requires Eigen 3.3 or newer and a C++17 standard library with floating-point
