@@ -9,13 +9,13 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages",
          ["resource/" + package_name]),
-        ("share/" + package_name, ["package.xml", "README.md", "../LICENSE"]),
+        ("share/" + package_name, ["package.xml", "README.md", "LICENSE"]),
     ],
     python_requires=">=3.10",
     install_requires=["setuptools"],
     tests_require=["pytest"],
     zip_safe=True,
-    maintainer="RobotServer maintainers",
+    maintainer="RobotIdentification contributors",
     maintainer_email="maintainers@example.com",
     description=
     "ROS 2 recording and session tools for robot parameter identification",

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Include a package-local recorder license so a standalone source distribution
+  can build a wheel without files from its parent repository. Update extracted
+  recorder maintainer metadata to RobotIdentification contributors.
+
 - Add opt-in analytic solver campaigns and an independent installed-recorder load
   harness with explicit delivery counts, row/digest checks and retained logs.
 
