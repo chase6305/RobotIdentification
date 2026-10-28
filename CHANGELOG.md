@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add opt-in analytic solver campaigns and an independent installed-recorder load
+  harness with explicit delivery counts, row/digest checks and retained logs.
+
 - Pin typing_extensions alongside jsonschema in developer and ROS CI setup.
   Document isolated Python environments and validate the pinned versions instead
   of relying on an unrelated user-site installation.
