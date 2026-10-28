@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Core 0.1.1 and Pinocchio backend 0.2.1 share an internal regression assembly
+  helper. Consume the backend's current regressor directly into the owning
+  problem before reusing scratch, removing one temporary matrix per batch sample.
+  Validate parameter names without an extra copy, preserve column/sample order,
+  and check allocation dimensions before resizing. Public object layouts and
+  interfaces are unchanged; the backend build requires core >=0.1.1.
+
 - Include a package-local recorder license so a standalone source distribution
   can build a wheel without files from its parent repository. Update extracted
   recorder maintainer metadata to RobotIdentification contributors.

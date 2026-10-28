@@ -1,5 +1,7 @@
 #include "robot_identification_pinocchio/pinocchio_regressor.h"
 
+#include <robot_identification/detail/regression_assembly.h>
+
 #include <array>
 #include <pinocchio/algorithm/regressor.hpp>
 #include <stdexcept>
@@ -35,11 +37,11 @@ void ValidateSample(const pinocchio::Model& model, const robot_identification::S
     }
 }
 
-Eigen::MatrixXd ComputeBlock(const pinocchio::Model& model,
-                             pinocchio::Data& data,
-                             const robot_identification::Sample& sample,
-                             std::size_t parameter_count) {
-    Eigen::MatrixXd regressor =
+const Eigen::MatrixXd& ComputeBlock(const pinocchio::Model& model,
+                                    pinocchio::Data& data,
+                                    const robot_identification::Sample& sample,
+                                    std::size_t parameter_count) {
+    const Eigen::MatrixXd& regressor =
         pinocchio::computeJointTorqueRegressor(model, data, sample.position, sample.velocity, sample.acceleration);
     if (regressor.rows() != model.nv || regressor.cols() != static_cast<Eigen::Index>(parameter_count) ||
         !regressor.allFinite()) {
@@ -48,20 +50,6 @@ Eigen::MatrixXd ComputeBlock(const pinocchio::Model& model,
     return regressor;
 }
 
-class DatasetBackend final : public robot_identification::RegressorBackend {
-public:
-    explicit DatasetBackend(const PinocchioRegressor& owner) : owner_(owner), data_(owner.model()) {}
-    std::size_t parameter_count() const noexcept override { return owner_.parameter_count(); }
-    std::vector<std::string> parameter_names() const override { return owner_.parameter_names(); }
-    Eigen::MatrixXd Compute(const robot_identification::Sample& sample) const override {
-        ValidateSample(owner_.model(), sample);
-        return ComputeBlock(owner_.model(), data_, sample, parameter_count());
-    }
-
-private:
-    const PinocchioRegressor& owner_;
-    mutable pinocchio::Data data_;
-};
 }  // namespace
 
 Eigen::MatrixXd PinocchioRegressor::Compute(const robot_identification::Sample& sample) const {
@@ -89,8 +77,12 @@ robot_identification::RegressionProblem PinocchioRegressor::BuildProblem(
     }
     // The mutable workspace is owned by this call and cannot escape or alias
     // another concurrent assembly. Core validation and row ordering stay shared.
-    DatasetBackend local(*this);
-    return robot_identification::BuildRegressionProblem(dataset, local);
+    pinocchio::Data data(*model_);
+    return robot_identification::detail::AssembleRegressionProblem(
+        dataset, *this, [&](const robot_identification::Sample& sample) -> const Eigen::MatrixXd& {
+            ValidateSample(*model_, sample);
+            return ComputeBlock(*model_, data, sample, parameter_count());
+        });
 }
 
 }  // namespace robot_identification_pinocchio

@@ -1,12 +1,12 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>robot_identification_pinocchio</name>
-  <version>0.2.0</version>
+  <version>0.2.1</version>
   <description>Optional Pinocchio rigid-body regressor backend for robot identification</description>
   <maintainer email="maintainers@example.com">RobotServer maintainers</maintainer>
   <license>MIT</license>
   <buildtool_depend>cmake</buildtool_depend>
   <depend>pinocchio</depend>
-  <depend>robot_identification</depend>
+  <depend version_gte="0.1.1">robot_identification</depend>
   <export><build_type>cmake</build_type></export>
 </package>

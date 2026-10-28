@@ -2,5 +2,5 @@
 
 include(CMakeFindDependencyMacro)
 find_dependency(pinocchio)
-find_dependency(robot_identification)
+find_dependency(robot_identification 0.1.1)
 include("${CMAKE_CURRENT_LIST_DIR}/robot_identification_pinocchioTargets.cmake")

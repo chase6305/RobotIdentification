@@ -15,6 +15,8 @@ Recorders and model adapters depend on the identification core. No RobotServer, 
 
 For complete Pinocchio datasets, `backend.BuildProblem(dataset)` reuses call-local scratch. Individual samples and generic backend composition retain `Compute`; see the [Pinocchio backend](robot_identification_pinocchio/README.md).
 
+Core 0.1.1 / Pinocchio backend 0.2.1 share assembly validation and consume each batch regressor directly, avoiding per-sample temporary copies. Public interfaces and object layouts are unchanged; building the backend requires core >=0.1.1.
+
 ## Standalone build
 
 The Ubuntu venv recipe requires `python3-venv`.

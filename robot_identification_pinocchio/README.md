@@ -29,8 +29,12 @@ robot_identification_pinocchio::PinocchioRegressor backend(model);
 auto problem = backend.BuildProblem(dataset);
 ```
 
-`BuildProblem` reuses one call-local `pinocchio::Data` across samples, while the
-core assembler retains dataset validation, row ordering and weights. Independent
+`BuildProblem` reuses one call-local `pinocchio::Data` across samples. The
+0.2.1 implementation copies its current regressor directly into the final owning
+problem. Core 0.1.1 supplies the shared internal assembly helper; that detail
+header is not a stable extension interface.
+
+The core assembler retains dataset validation, row ordering and weights. Independent
 calls may run concurrently on the same backend, provided the shared model is not
 modified. `Compute(sample)` remains available for individual samples and generic
 backend composition; it uses independent scratch for each invocation. The batch
@@ -42,6 +46,10 @@ Pinocchio 工作区并在样本间复用；数据校验、行顺序和权重仍�
 在共享模型不被修改的前提下，同一后端允许并发批量调用。单样本 `Compute`
 继续使用独立工作区，适合通用后端组合。新接口不改变对象布局或虚函数表；
 调用新接口的消费者需要链接 0.2.0。
+
+0.2.1 将当前回归块直接写入最终拥有存储的问题矩阵，省去逐样本临时矩阵；构建
+需要核心 >=0.1.1，以共享同一组装校验。安装的 `detail` 头文件属于内部实现，
+不作为稳定的第三方扩展接口。
 
 The named batch API requires one q/v coordinate per model joint and dataset names
 in the model's q/v order. Wrong names, permutations, and ambiguous multi-DoF joint

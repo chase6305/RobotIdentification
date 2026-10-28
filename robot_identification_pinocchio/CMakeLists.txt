@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
-project(robot_identification_pinocchio VERSION 0.2.0 LANGUAGES CXX)
+project(robot_identification_pinocchio VERSION 0.2.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(pinocchio REQUIRED)
-find_package(robot_identification REQUIRED)
+find_package(robot_identification 0.1.1 REQUIRED)
 
 add_library(robot_identification_pinocchio src/pinocchio_regressor.cpp)
 add_library(robot_identification::pinocchio ALIAS robot_identification_pinocchio)

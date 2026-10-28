@@ -15,6 +15,8 @@
 
 整批 Pinocchio 数据可用 `backend.BuildProblem(dataset)` 复用调用内工作区；单样本和通用后端组合继续使用 `Compute`。详见 [Pinocchio 后端](robot_identification_pinocchio/README.md)。
 
+核心 0.1.1 / Pinocchio 后端 0.2.1 共用组装校验，批处理直接消费当前回归矩阵，避免逐样本临时副本；公开接口和对象布局不变。后端构建需要核心 >=0.1.1。
+
 ## 独立构建
 
 Ubuntu 上的 venv 示例需要 `python3-venv`。

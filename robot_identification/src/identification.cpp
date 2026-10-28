@@ -17,6 +17,8 @@
 #include <string_view>
 #include <utility>
 
+#include "robot_identification/detail/regression_assembly.h"
+
 namespace robot_identification {
 namespace {
 
@@ -853,35 +855,8 @@ bool RegressionProblem::Validate(std::string* reason) const {
 }
 
 RegressionProblem BuildRegressionProblem(const Dataset& dataset, const RegressorBackend& backend) {
-    std::string reason;
-    if (!dataset.Validate(&reason)) throw std::invalid_argument("invalid dataset: " + reason);
-    const std::size_t parameter_count = backend.parameter_count();
-    auto parameter_names = backend.parameter_names();
-    auto sorted_parameter_names = parameter_names;
-    std::sort(sorted_parameter_names.begin(), sorted_parameter_names.end());
-    if (parameter_count == 0 || parameter_names.size() != parameter_count || sorted_parameter_names.front().empty() ||
-        std::adjacent_find(sorted_parameter_names.begin(), sorted_parameter_names.end()) !=
-            sorted_parameter_names.end()) {
-        throw std::invalid_argument("regressor backend has an invalid parameter contract");
-    }
-    RegressionProblem problem;
-    problem.sample_count = dataset.samples.size();
-    problem.dof = dataset.dof();
-    problem.regressor.resize(static_cast<Eigen::Index>(problem.sample_count * problem.dof),
-                             static_cast<Eigen::Index>(parameter_count));
-    problem.observation.resize(problem.regressor.rows());
-    problem.row_weights = Eigen::VectorXd::Ones(problem.regressor.rows());
-    for (std::size_t index = 0; index < dataset.samples.size(); ++index) {
-        const Eigen::MatrixXd block = backend.Compute(dataset.samples[index]);
-        if (block.rows() != static_cast<Eigen::Index>(problem.dof) ||
-            block.cols() != static_cast<Eigen::Index>(parameter_count) || !block.allFinite()) {
-            throw std::runtime_error("regressor backend returned an invalid block");
-        }
-        const Eigen::Index row = static_cast<Eigen::Index>(index * problem.dof);
-        problem.regressor.middleRows(row, static_cast<Eigen::Index>(problem.dof)) = block;
-        problem.observation.segment(row, static_cast<Eigen::Index>(problem.dof)) = dataset.samples[index].torque;
-    }
-    return problem;
+    return detail::AssembleRegressionProblem(dataset, backend,
+                                             [&](const Sample& sample) { return backend.Compute(sample); });
 }
 
 JointActuatorRegressor::JointActuatorRegressor(std::shared_ptr<const RegressorBackend> base,

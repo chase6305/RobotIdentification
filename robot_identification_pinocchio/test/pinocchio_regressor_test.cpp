@@ -12,7 +12,56 @@
 #include <stdexcept>
 #include <utility>
 
+namespace {
+void TestFourteenAxisBatch() {
+    auto model = std::make_shared<pinocchio::Model>();
+    pinocchio::JointIndex parent = 0;
+    robot_identification::Dataset dataset;
+    Eigen::VectorXd parameters(140);
+    for (int joint = 0; joint < 14; ++joint) {
+        const auto name = "joint_" + std::to_string(joint);
+        const pinocchio::SE3 placement(Eigen::Matrix3d::Identity(), Eigen::Vector3d(.1, .02, .03));
+        if (joint % 2)
+            parent = model->addJoint(parent, pinocchio::JointModelRZ(), placement, name);
+        else
+            parent = model->addJoint(parent, pinocchio::JointModelRY(), placement, name);
+        model->appendBodyToJoint(
+            parent, pinocchio::Inertia(1. + .1 * joint, Eigen::Vector3d(.1, .02, .03), Eigen::Matrix3d::Identity()),
+            pinocchio::SE3::Identity());
+        parameters.segment<10>(10 * joint) = model->inertias[parent].toDynamicParameters();
+        dataset.joint_names.push_back(name);
+    }
+    for (int index = 0; index < 40; ++index) {
+        robot_identification::Sample sample;
+        sample.time_seconds = index * .01;
+        sample.position.resize(14);
+        sample.velocity.resize(14);
+        sample.acceleration.resize(14);
+        for (int joint = 0; joint < 14; ++joint) {
+            sample.position[joint] = .2 * std::sin(index + joint * .3);
+            sample.velocity[joint] = index % 3 == 0 ? 0. : .1 * std::cos(index - joint * .2);
+            sample.acceleration[joint] = index % 5 == 0 ? 0. : -.2 * std::sin(index + joint * .7);
+        }
+        pinocchio::Data data(*model);
+        sample.torque = pinocchio::rnea(*model, data, sample.position, sample.velocity, sample.acceleration);
+        dataset.samples.push_back(std::move(sample));
+    }
+    robot_identification_pinocchio::PinocchioRegressor backend(model);
+    const auto generic = robot_identification::BuildRegressionProblem(dataset, backend);
+    const auto actual = backend.BuildProblem(dataset);
+    if (!actual.regressor.isApprox(generic.regressor, 0) || !actual.observation.isApprox(generic.observation, 0) ||
+        !(actual.regressor * parameters).isApprox(actual.observation, 1e-11)) {
+        throw std::runtime_error("fourteen-axis batch changed rows or RNEA torque");
+    }
+    (void)backend.Compute(dataset.samples.back());
+    if (!actual.regressor.isApprox(generic.regressor, 0)) {
+        throw std::runtime_error("later calls modified an owning batch result");
+    }
+}
+}  // namespace
+
 int main() {
+    TestFourteenAxisBatch();
     const auto path = std::filesystem::temp_directory_path() / "robot_identification_pinocchio_test.urdf";
     {
         std::ofstream output(path, std::ios::trunc);
