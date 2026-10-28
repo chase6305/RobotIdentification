@@ -86,6 +86,9 @@ solver campaigns:
 ```bash
 build/benchmarks/solver_stress 3600
 build/benchmarks/solver_scale_stress 3600
+build/benchmarks/csv_stress 3600
+# Also requires ROBOT_IDENTIFICATION_BENCH_PINOCCHIO=ON:
+build/benchmarks/pinocchio_stress 3600
 ```
 
 The optional duration is 1–86,400 seconds (default 60). Orthogonal synthetic
@@ -97,6 +100,17 @@ reference remains meaningful under floating-point perturbations. These opt-in
 correctness programs report case counts and stop on a mismatch. They are separate
 from timing benchmarks and do not add CTest timing gates.
 
+`csv_stress` varies row/joint counts across chunk boundaries and checks bitwise
+raw-CSV round trips, signed zero, subnormal/maximum finite values and LF/CRLF/CR
+line endings. It appends a late invalid row, checks rejection and retained owning
+results, and removes only its own temporary directory. `pinocchio_stress` uses
+four workers with shared immutable backends, model-owner churn and scalar or
+translation joints. Single-sample matrices and actuator-augmented problems are
+checked against native RNEA with known parameters; scalar named batches must
+match generic assembly exactly, while unsupported named multi-coordinate batches
+must reject. Its error is `norm(actual-reference) / max(1, norm(reference))`.
+Each worker has a fixed seed; runtime and scheduling determine the case count.
+
 The reported parameter error is `norm(actual-reference) / max(1, norm(reference))`;
 covariance error is the Frobenius norm of its difference divided by
 `max(1e-300, norm(reference_covariance))`, evaluated with stable norms. Parameter
@@ -106,6 +120,10 @@ being a pure relative error.
 可选随机验证使用固定种子和解析正交系统，检查不同维度、秩、条件数、ridge 和
 权重范围。宽尺度协方差参考使用扩展范围的 long double。时间参数默认 60 秒，
 可显式运行一小时；程序遇到不一致即失败，不将合成性能设为 CI 时序门槛。
+
+新增 `csv_stress` 检查跨分块的位级往返、有限极值、三种换行和末尾错误；
+`pinocchio_stress` 以四个线程检查后端共享、所有权切换、具名批量与通用组装、
+执行器组合及原生逆动力学参考。它们只验证合成软件行为，不能替代硬件测试。
 
 After sourcing the installed ROS packages, run an independent 14-axis recorder
 load test on Linux:
