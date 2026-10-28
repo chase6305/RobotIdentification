@@ -17,6 +17,8 @@ For complete Pinocchio datasets, `backend.BuildProblem(dataset)` reuses call-loc
 
 ## Standalone build
 
+The Ubuntu venv recipe requires `python3-venv`.
+
 Requires CMake 3.15+, C++17, and Eigen 3.3+. Full validation also requires Python 3.10+ and `jsonschema==4.23.0`.
 
 ```bash
@@ -26,6 +28,8 @@ cmake --build build/core --parallel 2
 ctest --test-dir build/core --output-on-failure
 cmake --install build/core --prefix "$PWD/build/install"
 ./build/core/generic_regressor_example
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
 python3 -m pip install -r requirements-dev.txt
 ./scripts/test.sh
 ./scripts/run_identification_example.sh
@@ -34,6 +38,8 @@ python3 -m pip install -r requirements-dev.txt
 Installed C++ consumers use `find_package(robot_identification REQUIRED)` and `robot_identification::robot_identification`.
 
 With a native Pinocchio development environment, run `./scripts/test.sh build/with-pinocchio --with-pinocchio` to validate the optional backend and its installed consumers. Add dependency prefixes to `CMAKE_PREFIX_PATH` and shared-library directories to the loader path.
+
+Reproduce synthetic solver and Pinocchio assembly measurements with the [standalone benchmarks](benchmarks/README.md).
 
 ## Offline tools
 

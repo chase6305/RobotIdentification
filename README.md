@@ -17,6 +17,8 @@
 
 ## 独立构建
 
+Ubuntu 上的 venv 示例需要 `python3-venv`。
+
 需要 CMake 3.15+、C++17、Eigen 3.3+；完整测试还需要 Python 3.10+ 和 `jsonschema==4.23.0`。
 
 ```bash
@@ -31,12 +33,16 @@ cmake --install build/core --prefix "$PWD/build/install"
 安装后的 C++ 消费者使用 `find_package(robot_identification REQUIRED)` 和 `robot_identification::robot_identification`。
 
 ```bash
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
 python3 -m pip install -r requirements-dev.txt
 ./scripts/test.sh
 ./scripts/run_identification_example.sh
 ```
 
 如已配置 Pinocchio 的原生开发环境，可运行 `./scripts/test.sh build/with-pinocchio --with-pinocchio`，同时验证后端和安装包消费者。将其安装前缀加入 `CMAKE_PREFIX_PATH`，共享库目录加入动态加载器路径。
+
+合成求解与 Pinocchio 批量组装性能可用[独立基准程序](benchmarks/README.md)复现。
 
 ## 离线工具
 

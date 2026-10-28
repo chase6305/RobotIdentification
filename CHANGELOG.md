@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Pin typing_extensions alongside jsonschema in developer and ROS CI setup.
+  Document isolated Python environments and validate the pinned versions instead
+  of relying on an unrelated user-site installation.
+
+- Add standalone Release benchmarks for robust/ridge solves, harmonic evaluation,
+  and optional Pinocchio dataset assembly. Record scoped C/C++ allocation counts
+  and five-run medians, with explicit synthetic and shared-library limitations.
+
 - Validate named Pinocchio batch coordinates before constructing workspace data.
   Require scalar joints and names in model q/v order; reject wrong or permuted
   names. Retain the positional single-sample interface for fixed-base multi-DoF
