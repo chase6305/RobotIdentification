@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Compute covariance from the final consumed solve's SVD and its retained
+  directions. Avoid squaring the condition number in a separately decomposed
+  information matrix, which could report zero variance for weak observable
+  parameters. Ridge uses the augmented SVD; measured-data rank is unchanged.
+  Non-finite residual variance or covariance still fails explicitly.
+
 - Pinocchio backend 0.2.0 adds `BuildProblem(dataset)`, reusing a call-local
   workspace across samples while retaining core dataset validation and ordering.
   Concurrent calls keep independent scratch. The API is additive with no object

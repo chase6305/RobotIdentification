@@ -49,6 +49,10 @@ if(BUILD_TESTING)
   target_link_libraries(robot_identification_test PRIVATE robot_identification::robot_identification)
   add_test(NAME robot_identification_test COMMAND robot_identification_test)
 
+  add_executable(robot_identification_covariance_test test/covariance_test.cpp)
+  target_link_libraries(robot_identification_covariance_test PRIVATE robot_identification::robot_identification)
+  add_test(NAME robot_identification_covariance_test COMMAND robot_identification_covariance_test)
+
   add_executable(robot_identification_preprocessing_test test/preprocessing_test.cpp)
   target_link_libraries(robot_identification_preprocessing_test PRIVATE robot_identification::robot_identification)
   add_test(NAME robot_identification_preprocessing_test COMMAND robot_identification_preprocessing_test)

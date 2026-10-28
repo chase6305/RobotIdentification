@@ -95,3 +95,13 @@ Installed Draft 2020-12 Schemas define recorder metadata and candidate-result ar
 ## Safety boundary / 安全边界
 
 Identification is offline. A successful numerical solve does not authorize writing parameters into a running controller. Accept a result only after excitation-quality review, physical checks, holdout validation, low-speed hardware validation, and an explicit rollback artifact. See [Parameter Identification](../docs/parameter-identification.md).
+
+协方差复用最后一次实际求解的 SVD，按保留方向计算
+`variance * V_r * diag(1 / s_r²) * V_rᵀ`，避免信息矩阵平方条件数后误丢弱方向。
+ridge 使用增广系统的分解；对外报告的秩仍只来自加权测量数据。秩亏时沿用
+最小范数伪逆约定，零空间中的零协方差不能解释为参数已经确定。
+
+Covariance reuses the last consumed solve's SVD and retained singular directions,
+using the augmented decomposition for ridge. Reported observability still uses
+weighted measured data. A rank-deficient pseudoinverse has zero covariance in
+its nullspace; this is a minimum-norm convention, not evidence of certainty.

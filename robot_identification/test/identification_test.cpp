@@ -240,9 +240,9 @@ void TestCovarianceOverflowRejection() {
     problem.sample_count = 4;
     problem.dof = 1;
     problem.row_weights = Eigen::VectorXd::Ones(4);
-    for (int stage = 0; stage < 3; ++stage) {
-        problem.regressor = Eigen::MatrixXd::Constant(4, 1, stage == 0 ? 1e200 : stage == 1 ? 1.0 : 1e-150);
-        const double residual = stage == 0 ? 0.0 : stage == 1 ? 1e200 : 1e10;
+    for (int stage = 0; stage < 2; ++stage) {
+        problem.regressor = Eigen::MatrixXd::Constant(4, 1, stage == 0 ? 1.0 : 1e-150);
+        const double residual = stage == 0 ? 1e200 : 1e10;
         problem.observation = Eigen::Vector4d(residual, -residual, residual, -residual);
         bool rejected = false;
         try {

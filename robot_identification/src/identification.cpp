@@ -338,6 +338,22 @@ public:
         }
     }
 
+    Eigen::MatrixXd Covariance(double variance) const {
+        // Use the same retained singular directions as the parameter solve.
+        // Forming A'WA squares its condition number and a second decomposition
+        // can incorrectly erase observable, weakly excited directions.
+        const auto& decomposition = ridge_rows_ == 0 ? *diagnostic_svd_ : *regularized_svd_;
+        const Eigen::Index rank = decomposition.rank();
+        Eigen::MatrixXd scaled_basis = decomposition.matrixV().leftCols(rank);
+        const double residual_scale = std::sqrt(variance);
+        for (Eigen::Index column = 0; column < rank; ++column) {
+            scaled_basis.col(column) *= residual_scale / decomposition.singularValues()[column];
+        }
+        Eigen::MatrixXd covariance = scaled_basis * scaled_basis.transpose();
+        if (!covariance.allFinite()) throw std::overflow_error("parameter covariance is non-finite");
+        return covariance;
+    }
+
 private:
     using Svd = Eigen::JacobiSVD<Eigen::MatrixXd>;
     Eigen::Index data_rows_, parameter_count_, ridge_rows_;
@@ -935,18 +951,12 @@ IdentificationResult Solve(const RegressionProblem& problem, const SolverOptions
     result.max_absolute_error = errors.maximum;
     result.iterations = iterations;
     result.converged = converged;
-    const Eigen::MatrixXd information =
-        problem.regressor.transpose() * solve_weights.asDiagonal() * problem.regressor +
-        options.ridge * Eigen::MatrixXd::Identity(problem.regressor.cols(), problem.regressor.cols());
-    if (!information.allFinite()) throw std::overflow_error("covariance information matrix is non-finite");
     const double weighted_squared_error = result.residual.dot(solve_weights.asDiagonal() * result.residual);
     const double variance =
         weighted_squared_error / static_cast<double>(std::max<Eigen::Index>(
                                      1, problem.regressor.rows() - static_cast<Eigen::Index>(result.rank)));
     if (!std::isfinite(variance)) throw std::overflow_error("covariance residual variance is non-finite");
-    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> decomposition(information);
-    result.covariance = variance * decomposition.pseudoInverse();
-    if (!result.covariance.allFinite()) throw std::overflow_error("parameter covariance is non-finite");
+    result.covariance = workspace.Covariance(variance);
     return result;
 }
 
