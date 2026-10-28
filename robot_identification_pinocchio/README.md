@@ -37,14 +37,18 @@ header is not a stable extension interface.
 The core assembler retains dataset validation, row ordering and weights. Independent
 calls may run concurrently on the same backend, provided the shared model is not
 modified. `Compute(sample)` remains available for individual samples and generic
-backend composition; it uses independent scratch for each invocation. The batch
+backend composition. It retains one workspace for the most recently used model
+per thread, keyed by model address and shared ownership; mutable scratch is not
+shared across threads. Returned matrices own storage. Published model structure
+must stay unchanged. The batch
 API is additive, with no object layout or vtable change. Consumers calling it
 must require and link the 0.2.0 package.
 
 整批数据建议使用 0.2.0 新增的 `backend.BuildProblem(dataset)`。每次调用独占一个
 Pinocchio 工作区并在样本间复用；数据校验、行顺序和权重仍由核心组装器处理。
 在共享模型不被修改的前提下，同一后端允许并发批量调用。单样本 `Compute`
-继续使用独立工作区，适合通用后端组合。新接口不改变对象布局或虚函数表；
+按线程复用最近模型的独立工作区，以地址和共享所有权识别模型；返回矩阵拥有
+存储，已发布模型的结构须保持不变。适用于通用后端组合，不改变对象布局或虚函数表；
 调用新接口的消费者需要链接 0.2.0。
 
 0.2.1 将当前回归块直接写入最终拥有存储的问题矩阵，省去逐样本临时矩阵；构建

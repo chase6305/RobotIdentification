@@ -4,7 +4,9 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <limits>
 #include <memory>
+#include <pinocchio/algorithm/regressor.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
 #include <pinocchio/multibody/joint/joint-revolute.hpp>
 #include <pinocchio/multibody/joint/joint-translation.hpp>
@@ -13,6 +15,54 @@
 #include <utility>
 
 namespace {
+void TestSingleSampleCacheOwnershipAndThreads() {
+    pinocchio::Model reused;
+    for (int count : {1, 3, 2, 1}) {
+        reused = pinocchio::Model();
+        pinocchio::JointIndex parent = 0;
+        for (int joint = 0; joint < count; ++joint) {
+            parent = reused.addJoint(parent, pinocchio::JointModelRY(), pinocchio::SE3::Identity(),
+                                     "joint_" + std::to_string(joint));
+            reused.appendBodyToJoint(parent, pinocchio::Inertia::Identity(), pinocchio::SE3::Identity());
+        }
+        auto source = std::shared_ptr<const pinocchio::Model>(&reused, [](const auto*) {});
+        robot_identification_pinocchio::PinocchioRegressor backend(source);
+        robot_identification::Sample sample;
+        sample.position = Eigen::VectorXd::Constant(count, .2);
+        sample.velocity = Eigen::VectorXd::Constant(count, .1);
+        sample.acceleration = Eigen::VectorXd::Constant(count, -.3);
+        pinocchio::Data independent(reused);
+        const Eigen::MatrixXd expected = pinocchio::computeJointTorqueRegressor(reused, independent, sample.position,
+                                                                                sample.velocity, sample.acceleration);
+        const auto saved = backend.Compute(sample);
+        const auto verify = [&] {
+            for (int iteration = 0; iteration < 20; ++iteration) {
+                if (!backend.Compute(sample).isApprox(expected, 0)) return false;
+            }
+            return true;
+        };
+        auto task = std::async(std::launch::async, verify);
+        if (!verify() || !task.get())
+            throw std::runtime_error("single-sample workspace crossed thread/model ownership");
+        sample.acceleration.setZero();
+        (void)backend.Compute(sample);
+        if (!saved.isApprox(expected, 0)) throw std::runtime_error("later sample call modified an owning result");
+        const auto gravity = reused.gravity;
+        reused.gravity.linear()[0] = std::numeric_limits<double>::quiet_NaN();
+        bool rejected = false;
+        try {
+            (void)backend.Compute(sample);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        reused.gravity = gravity;
+        sample.acceleration.setConstant(-.3);
+        if (!rejected || !backend.Compute(sample).isApprox(expected, 0)) {
+            throw std::runtime_error("non-finite regressor did not fail or poisoned later cached calls");
+        }
+    }
+}
+
 void TestFourteenAxisBatch() {
     auto model = std::make_shared<pinocchio::Model>();
     pinocchio::JointIndex parent = 0;
@@ -61,6 +111,7 @@ void TestFourteenAxisBatch() {
 }  // namespace
 
 int main() {
+    TestSingleSampleCacheOwnershipAndThreads();
     TestFourteenAxisBatch();
     const auto path = std::filesystem::temp_directory_path() / "robot_identification_pinocchio_test.urdf";
     {

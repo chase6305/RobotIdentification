@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Reuse bounded thread-local Pinocchio Data in the individual-sample regressor,
+  preserving independent concurrent calls and owning returned matrices. Track
+  shared ownership as well as model address so a reused address rebuilds scratch.
+  Batch calls keep their independent local workspace and validate samples/blocks
+  once through the shared assembler.
+
 - Core 0.1.1 and Pinocchio backend 0.2.1 share an internal regression assembly
   helper. Consume the backend's current regressor directly into the owning
   problem before reusing scratch, removing one temporary matrix per batch sample.

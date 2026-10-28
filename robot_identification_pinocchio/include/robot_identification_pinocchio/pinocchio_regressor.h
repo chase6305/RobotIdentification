@@ -17,6 +17,8 @@ public:
 
     [[nodiscard]] std::size_t parameter_count() const noexcept override;
     [[nodiscard]] std::vector<std::string> parameter_names() const override;
+    // Uses bounded per-thread scratch for the most recently used model.
+    // Published model structure stays immutable; the returned matrix owns data.
     [[nodiscard]] Eigen::MatrixXd Compute(const robot_identification::Sample& sample) const override;
 
     // Assemble one dataset with a call-local Pinocchio workspace reused for

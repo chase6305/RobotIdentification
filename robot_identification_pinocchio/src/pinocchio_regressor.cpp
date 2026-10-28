@@ -3,6 +3,7 @@
 #include <robot_identification/detail/regression_assembly.h>
 
 #include <array>
+#include <optional>
 #include <pinocchio/algorithm/regressor.hpp>
 #include <stdexcept>
 #include <utility>
@@ -29,6 +30,20 @@ std::size_t PinocchioRegressor::parameter_count() const noexcept { return parame
 std::vector<std::string> PinocchioRegressor::parameter_names() const { return parameter_names_; }
 
 namespace {
+struct RegressorDataCache {
+    pinocchio::Data& Get(const std::shared_ptr<const pinocchio::Model>& model) {
+        if (!data || address != model.get() || owner.owner_before(model) || model.owner_before(owner)) {
+            data.emplace(*model);
+            address = model.get();
+            owner = model;
+        }
+        return *data;
+    }
+    const pinocchio::Model* address{nullptr};
+    std::weak_ptr<const pinocchio::Model> owner;
+    std::optional<pinocchio::Data> data;
+};
+
 void ValidateSample(const pinocchio::Model& model, const robot_identification::Sample& sample) {
     if (sample.position.size() != model.nq || sample.velocity.size() != model.nv ||
         sample.acceleration.size() != model.nv || !sample.position.allFinite() || !sample.velocity.allFinite() ||
@@ -54,9 +69,10 @@ const Eigen::MatrixXd& ComputeBlock(const pinocchio::Model& model,
 
 Eigen::MatrixXd PinocchioRegressor::Compute(const robot_identification::Sample& sample) const {
     ValidateSample(*model_, sample);
-    // Keep the individual-sample interface safe for concurrent callers.
-    pinocchio::Data data(*model_);
-    return ComputeBlock(*model_, data, sample, parameter_count());
+    // One bounded cache per thread supports generic backend composition without
+    // sharing mutable Data between threads or retaining model ownership.
+    thread_local RegressorDataCache cache;
+    return ComputeBlock(*model_, cache.Get(model_), sample, parameter_count());
 }
 
 robot_identification::RegressionProblem PinocchioRegressor::BuildProblem(
@@ -80,8 +96,10 @@ robot_identification::RegressionProblem PinocchioRegressor::BuildProblem(
     pinocchio::Data data(*model_);
     return robot_identification::detail::AssembleRegressionProblem(
         dataset, *this, [&](const robot_identification::Sample& sample) -> const Eigen::MatrixXd& {
-            ValidateSample(*model_, sample);
-            return ComputeBlock(*model_, data, sample, parameter_count());
+            // The assembler validates the entire dataset before this callback,
+            // then checks block dimensions/finiteness before copying its rows.
+            return pinocchio::computeJointTorqueRegressor(*model_, data, sample.position, sample.velocity,
+                                                          sample.acceleration);
         });
 }
 
