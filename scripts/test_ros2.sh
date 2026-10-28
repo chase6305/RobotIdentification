@@ -6,6 +6,10 @@ if (($# > 1)); then
   echo "Usage: $0 [BUILD_ROOT]" >&2
   exit 2
 fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: $0 [BUILD_ROOT]"
+  exit 0
+fi
 BUILD_ROOT="${1:-$ROOT_DIR/build/ros2}"
 WORKERS="${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
 PYTHON_BIN="${PYTHON:-python3}"
@@ -24,8 +28,8 @@ if ((${#PACKAGE_PATHS[@]} == 0)); then
   echo "No root-level ROS/colcon packages found under $ROOT_DIR" >&2
   exit 1
 fi
-mkdir -p "$BUILD_ROOT"
-BUILD_ROOT="$(realpath "$BUILD_ROOT")"
+mkdir -p -- "$BUILD_ROOT"
+BUILD_ROOT="$(realpath -- "$BUILD_ROOT")"
 cd "$ROOT_DIR"
 export CMAKE_BUILD_PARALLEL_LEVEL="$WORKERS"
 export MAKEFLAGS="${MAKEFLAGS:+$MAKEFLAGS }-j$WORKERS"
