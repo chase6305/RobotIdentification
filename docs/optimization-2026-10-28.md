@@ -92,11 +92,15 @@ batch API still owns its per-sample blocks and is not allocation-free.
 | 干净源码 | 从纯 Git 提交导出源码，核心/Pinocchio 独立构建、安装消费者与 Python 验证通过；`b09d766` |
 | Python 分发 | 两 Python 包单独复制后制作 sdist，再解包构建 wheel；验证许可证、入口点和仓库外安装工具 CLI；setuptools 59.6.0 / wheel 0.37.1 |
 | 原始/最终解对照 | 2000 个固定种子系统，参数、预测、残差、权重、秩、迭代、误差与条件数逐位一致；协方差为有意修正 |
-| 标准解析系统一小时 | ASan，2,275,696 用例；最大参数相对误差 `4.33e-8`、协方差相对误差 `3.82e-8`；`6ffec92` |
+| 标准解析系统一小时 | ASan，2,275,696 用例；最大参数归一化误差 `4.33e-8`、协方差相对误差 `3.82e-8`；`6ffec92` |
 | 宽尺度解析系统一小时 | ASan，2,304,589 用例；设计尺度 `1e±130`、公共权重 `1e±300`；最大参数误差 `5.13e-8`、协方差误差 `4.06e-8`；`bb02c40` |
-| 最终核心：标准解析系统一小时 | ASan/UBSan/LSan，1,956,325 用例；最大参数相对误差 `4.33e-8`、协方差相对误差 `3.82e-8`；`b09d766` 程序与最终核心实现，退出 0 |
+| 最终核心：标准解析系统一小时 | ASan/UBSan/LSan，1,956,325 用例；最大参数归一化误差 `4.33e-8`、协方差相对误差 `3.82e-8`；`b09d766` 程序与最终核心实现，退出 0 |
 | 最终核心：宽尺度解析系统一小时 | ASan/UBSan/LSan，2,027,444 用例；最大参数误差 `5.13e-8`、协方差误差 `4.06e-8`；同一提交程序与最终核心实现，退出 0 |
 | 常规控制状态采集一小时 | 35587 有效行、0 拒绝，行数和摘要一致；早期采集器快照 |
+
+解析压力测试中，参数误差为 `norm(actual-reference) / max(1, norm(reference))`，
+协方差误差为差矩阵 Frobenius 范数除以 `max(1e-300, norm(reference_covariance))`，
+使用稳定范数计算。小参数参考向量使用绝对尺度，不能将该参数指标解释为纯相对误差。
 
 高频采集使用同机合成发布器，十四关节、目标 1000 Hz，周期性反转关节顺序并注入
 NaN、缺 effort、重复名称。每轮一小时发送 3,600,000 条，其中 3567 条无效：
@@ -124,8 +128,11 @@ the standalone core also passed with LSan enabled.
 
 Fresh one-hour runs of the committed programs against the final core completed
 1,956,325 standard and 2,027,444 wide-scale analytic cases. Both exited 0 with
-ASan/UBSan and leak detection enabled; maximum parameter/covariance relative
-errors were respectively `4.33e-8`/`3.82e-8` and `5.13e-8`/`4.06e-8`.
+ASan/UBSan and leak detection enabled; maximum scaled parameter and normalized
+covariance errors were respectively `4.33e-8`/`3.82e-8` and `5.13e-8`/`4.06e-8`.
+Parameter normalization divides by `max(1, norm(reference))`; covariance uses
+`max(1e-300, norm(reference_covariance))`. Small parameter vectors therefore use
+an absolute scale rather than a pure relative error.
 
 ## 复现与兼容性 / Reproduction and compatibility
 

@@ -77,6 +77,12 @@ reference remains meaningful under floating-point perturbations. These opt-in
 correctness programs report case counts and stop on a mismatch. They are separate
 from timing benchmarks and do not add CTest timing gates.
 
+The reported parameter error is `norm(actual-reference) / max(1, norm(reference))`;
+covariance error is the Frobenius norm of its difference divided by
+`max(1e-300, norm(reference_covariance))`, evaluated with stable norms. Parameter
+error therefore uses an absolute scale for small reference vectors rather than
+being a pure relative error.
+
 可选随机验证使用固定种子和解析正交系统，检查不同维度、秩、条件数、ridge 和
 权重范围。宽尺度协方差参考使用扩展范围的 long double。时间参数默认 60 秒，
 可显式运行一小时；程序遇到不一致即失败，不将合成性能设为 CI 时序门槛。
