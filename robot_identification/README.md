@@ -30,6 +30,16 @@ Without ridge, each weighted solve reuses one SVD for parameter estimation and o
 
 Large symmetric windows use compensated rolling sums with periodic recomputation to limit accumulated rounding error, giving linear work in sample count. Short windows retain Eigen reductions; both paths average the available samples at boundaries. Three-point derivatives use adjacent secant slopes, subtracting positions before dividing by time intervals so large constant offsets do not create spurious velocity or acceleration.
 
+如果导数的 double 中间值溢出，单独对该系数以 long double 重算，支持最终仍可表示
+的极大位置差和割线相消；普通数据继续使用上述路径。最终结果超出 double 范围仍
+报错。恢复范围取决于平台的 long double 精度/指数范围，已在 GCC 11 的扩展范围上验证。
+
+If double intermediates overflow, only that derivative coefficient is retried
+with long double before checking final double representability. Ordinary data
+keeps the secant path. Recovery depends on the platform's long-double range and
+precision; the extended-range path is validated with GCC 11. Unrepresentable
+final derivatives still fail.
+
 Huber IRLS 在一次 `Solve` 内复用加权矩阵、SVD 和残差工作区。谐波采样直接累加各关节的解析项，不再为每阶谐波构造动态向量；公开数据与结果接口保持兼容。
 
 Huber IRLS reuses weighted matrices, SVD decompositions, and residual storage within one `Solve` call. Harmonic sampling accumulates analytical joint terms without dynamic vectors for each harmonic. Public dataset and result interfaces remain compatible.

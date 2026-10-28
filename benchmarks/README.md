@@ -87,6 +87,7 @@ solver campaigns:
 build/benchmarks/solver_stress 3600
 build/benchmarks/solver_scale_stress 3600
 build/benchmarks/csv_stress 3600
+build/benchmarks/preprocessing_stress 3600
 # Also requires ROBOT_IDENTIFICATION_BENCH_PINOCCHIO=ON:
 build/benchmarks/pinocchio_stress 3600
 ```
@@ -111,6 +112,14 @@ match generic assembly exactly, while unsupported named multi-coordinate batches
 must reject. Its error is `norm(actual-reference) / max(1, norm(reference))`.
 Each worker has a fixed seed; runtime and scheduling determine the case count.
 
+`preprocessing_stress` checks three-point differentiation against independent
+long-double Lagrange weights, varying nonuniform time steps and position scales.
+It requires an extended-range long double oracle, covers finite results with
+overflowing double secants, and requires rejection of unrepresentable results.
+Accepted velocity/acceleration comparisons use a per-column tolerance of
+`1e-10 * max_abs(reference) + 32 * denorm_min(double)`. The subnormal allowance
+accounts for double quantization. The seed is fixed and the duration bounds work.
+
 The reported parameter error is `norm(actual-reference) / max(1, norm(reference))`;
 covariance error is the Frobenius norm of its difference divided by
 `max(1e-300, norm(reference_covariance))`, evaluated with stable norms. Parameter
@@ -124,6 +133,8 @@ being a pure relative error.
 新增 `csv_stress` 检查跨分块的位级往返、有限极值、三种换行和末尾错误；
 `pinocchio_stress` 以四个线程检查后端共享、所有权切换、具名批量与通用组装、
 执行器组合及原生逆动力学参考。它们只验证合成软件行为，不能替代硬件测试。
+`preprocessing_stress` 用独立的扩展范围拉格朗日权重检查时间/位置尺度、可表示导数
+和不可表示结果拒绝；比较采用逐列相对容差与次正规数绝对量化余量。
 
 After sourcing the installed ROS packages, run an independent 14-axis recorder
 load test on Linux:

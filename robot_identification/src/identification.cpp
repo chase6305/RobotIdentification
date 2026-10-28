@@ -189,6 +189,25 @@ Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time, const Eigen::MatrixXd
             const double right_slope = (values(third, column) - values(second, column)) / right_step;
             const double base = row == third ? right_slope : left_slope;
             derivative(row, column) = base + ratio * (right_slope - left_slope);
+            if (!std::isfinite(derivative(row, column))) {
+                // Finite final derivatives can have overflowing differences or
+                // individual secants. Retry only exceptional coefficients in
+                // extended range, retaining ordinary offset cancellation above.
+                const long double wide_left =
+                    (static_cast<long double>(values(second, column)) - values(first, column)) / left_step;
+                const long double wide_right =
+                    (static_cast<long double>(values(third, column)) - values(second, column)) / right_step;
+                const long double wide_span = static_cast<long double>(left_step) + right_step;
+                const long double wide_ratio = row == first   ? -static_cast<long double>(left_step) / wide_span
+                                               : row == third ? static_cast<long double>(right_step) / wide_span
+                                                              : static_cast<long double>(left_step) / wide_span;
+                const long double wide_base = row == third ? wide_right : wide_left;
+                const long double value = wide_base + wide_ratio * (wide_right - wide_left);
+                if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<double>::max()) {
+                    throw std::overflow_error("differentiation produced non-finite values");
+                }
+                derivative(row, column) = static_cast<double>(value);
+            }
         }
     }
     if (!derivative.allFinite()) throw std::overflow_error("differentiation produced non-finite values");

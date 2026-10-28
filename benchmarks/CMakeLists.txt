@@ -27,7 +27,7 @@ endif()
 
 option(ROBOT_IDENTIFICATION_BENCH_STRESS_TARGETS "Build opt-in numerical and storage campaigns" OFF)
 if(ROBOT_IDENTIFICATION_BENCH_STRESS_TARGETS)
-  foreach(name IN ITEMS solver_stress solver_scale_stress csv_stress)
+  foreach(name IN ITEMS solver_stress solver_scale_stress csv_stress preprocessing_stress)
     add_executable(${name} ${name}.cpp)
     target_compile_features(${name} PRIVATE cxx_std_17)
     target_link_libraries(${name} PRIVATE robot_identification::robot_identification)

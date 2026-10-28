@@ -2,6 +2,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 #include "robot_identification/identification.h"
 
@@ -186,6 +187,68 @@ void TestPreprocessingEntryValidation() {
     }
 }
 
+void TestRepresentableDerivativesAcrossOverflowingDifferences() {
+    for (bool alternating : {false, true}) {
+        robot_identification::RawDataset raw;
+        raw.joint_names = {"extreme"};
+        const Eigen::Index count = alternating ? 7 : 3;
+        const double step = alternating ? 1.5 : 2.;
+        raw.time_seconds = Eigen::VectorXd::LinSpaced(count, 0., (count - 1) * step);
+        raw.position.resize(count, 1);
+        raw.torque = Eigen::MatrixXd::Zero(count, 1);
+        if (alternating) {
+            const double maximum = std::numeric_limits<double>::max();
+            raw.position << 0., 0., maximum, -maximum, maximum, 0., 0.;
+        } else {
+            raw.position << -1e308, 1e308, 1.7e308;
+        }
+        const auto reference = [step](const Eigen::MatrixXd& values) {
+            Eigen::MatrixXd derivative(values.rows(), 1);
+            for (Eigen::Index row = 0; row < values.rows(); ++row) {
+                // Independent equal-spacing Lagrange derivative weights.
+                long double numerator;
+                if (row == 0)
+                    numerator = -3.L * values(0, 0) + 4.L * values(1, 0) - values(2, 0);
+                else if (row + 1 == values.rows())
+                    numerator = 3.L * values(row, 0) - 4.L * values(row - 1, 0) + values(row - 2, 0);
+                else
+                    numerator = static_cast<long double>(values(row + 1, 0)) - values(row - 1, 0);
+                derivative(row, 0) = static_cast<double>(numerator / (2.L * step));
+            }
+            return derivative;
+        };
+        const auto expected_velocity = reference(raw.position);
+        const auto expected_acceleration = reference(expected_velocity);
+        if (!expected_velocity.allFinite() || !expected_acceleration.allFinite())
+            throw std::runtime_error("invalid representable differentiation reference");
+        const auto actual = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+        for (Eigen::Index row = 0; row < count; ++row) {
+            const auto& sample = actual.samples[static_cast<std::size_t>(row)];
+            for (const auto& pair : {std::pair{sample.velocity[0], expected_velocity(row, 0)},
+                                     std::pair{sample.acceleration[0], expected_acceleration(row, 0)}}) {
+                const long double error = std::abs(static_cast<long double>(pair.first) - pair.second);
+                if (error > 32.L * std::numeric_limits<double>::epsilon() *
+                                std::max(1.L, std::abs(static_cast<long double>(pair.second)))) {
+                    throw std::runtime_error("representable derivative changed across an overflowing intermediate");
+                }
+            }
+        }
+    }
+    robot_identification::RawDataset unusable;
+    unusable.joint_names = {"extreme"};
+    unusable.time_seconds = Eigen::Vector3d(0., 1., 2.);
+    const double maximum = std::numeric_limits<double>::max();
+    unusable.position = Eigen::Vector3d(0., maximum, -maximum);
+    unusable.torque = Eigen::Vector3d::Zero();
+    bool rejected = false;
+    try {
+        (void)robot_identification::PreprocessPositionAndTorque(unusable, {1, 0, 0});
+    } catch (const std::overflow_error&) {
+        rejected = true;
+    }
+    if (!rejected) throw std::runtime_error("unrepresentable derivative was accepted after extended-range retry");
+}
+
 }  // namespace
 
 int main() {
@@ -195,4 +258,5 @@ int main() {
     TestFiniteExtremeMeans();
     TestInvalidNamesBeforeNumericalWork();
     TestPreprocessingEntryValidation();
+    TestRepresentableDerivativesAcrossOverflowingDifferences();
 }
