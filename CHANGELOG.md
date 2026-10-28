@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Validate named Pinocchio batch coordinates before constructing workspace data.
+  Require scalar joints and names in model q/v order; reject wrong or permuted
+  names. Retain the positional single-sample interface for fixed-base multi-DoF
+  joint models.
+
+- Recorder 0.2.0 adds a positive `qos_depth` setting, retaining default depth 10.
+  Validate it before creating files, exercise a configured depth in installed
+  recording smoke tests, and declare Python >=3.10 in package metadata.
+
 - Detect CSV record boundaries from the header in both Python and C++ readers.
   Retain Python's existing CR-only support and extend C++ readers to match it.
   Preserve leading carriage-return whitespace inside LF/CRLF numeric fields and

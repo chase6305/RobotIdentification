@@ -73,6 +73,20 @@ Eigen::MatrixXd PinocchioRegressor::Compute(const robot_identification::Sample& 
 
 robot_identification::RegressionProblem PinocchioRegressor::BuildProblem(
     const robot_identification::Dataset& dataset) const {
+    if (dataset.joint_names.size() != static_cast<std::size_t>(model_->nq)) {
+        throw std::invalid_argument("dataset joint names do not match the Pinocchio model dimensions");
+    }
+    for (pinocchio::JointIndex joint = 1; joint < static_cast<pinocchio::JointIndex>(model_->njoints); ++joint) {
+        const auto& coordinate = model_->joints[joint];
+        if (coordinate.nq() != 1 || coordinate.nv() != 1) {
+            throw std::invalid_argument("named Pinocchio batch assembly requires one coordinate per model joint");
+        }
+        const auto index = coordinate.idx_q();
+        if (index != coordinate.idx_v() || index < 0 || static_cast<std::size_t>(index) >= dataset.joint_names.size() ||
+            dataset.joint_names[static_cast<std::size_t>(index)] != model_->names[joint]) {
+            throw std::invalid_argument("dataset joint names must follow the Pinocchio model q/v order");
+        }
+    }
     // The mutable workspace is owned by this call and cannot escape or alias
     // another concurrent assembly. Core validation and row ordering stay shared.
     DatasetBackend local(*this);

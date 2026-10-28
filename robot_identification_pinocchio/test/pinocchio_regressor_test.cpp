@@ -6,6 +6,8 @@
 #include <future>
 #include <memory>
 #include <pinocchio/algorithm/rnea.hpp>
+#include <pinocchio/multibody/joint/joint-revolute.hpp>
+#include <pinocchio/multibody/joint/joint-translation.hpp>
 #include <pinocchio/parsers/urdf.hpp>
 #include <stdexcept>
 #include <utility>
@@ -79,6 +81,63 @@ int main() {
     auto concurrent = std::async(std::launch::async, [&] { return backend.BuildProblem(dataset); });
     verify(backend.BuildProblem(dataset));
     verify(concurrent.get());
+    const auto require_invalid = [](const auto& target, const robot_identification::Dataset& values) {
+        try {
+            (void)target.BuildProblem(values);
+        } catch (const std::invalid_argument&) {
+            return;
+        }
+        throw std::runtime_error("named batch accepted incompatible model coordinates");
+    };
+    auto wrong_name = dataset;
+    wrong_name.joint_names[0] = "unknown";
+    require_invalid(backend, wrong_name);
+
+    auto pair_model = std::make_shared<pinocchio::Model>();
+    const auto first = pair_model->addJoint(0, pinocchio::JointModelRY(), pinocchio::SE3::Identity(), "hip");
+    pair_model->appendBodyToJoint(first, pinocchio::Inertia::Identity(), pinocchio::SE3::Identity());
+    const auto second = pair_model->addJoint(first, pinocchio::JointModelRZ(), pinocchio::SE3::Identity(), "knee");
+    pair_model->appendBodyToJoint(second, pinocchio::Inertia::Identity(), pinocchio::SE3::Identity());
+    robot_identification_pinocchio::PinocchioRegressor pair_backend(pair_model);
+    robot_identification::Dataset pair_dataset;
+    pair_dataset.joint_names = {"hip", "knee"};
+    auto pair_sample = sample;
+    pair_sample.position = Eigen::Vector2d(0.2, -0.1);
+    pair_sample.velocity = Eigen::Vector2d(0.3, 0.2);
+    pair_sample.acceleration = Eigen::Vector2d(-0.1, 0.5);
+    pair_sample.torque = Eigen::Vector2d::Zero();
+    for (int index = 0; index < 3; ++index) {
+        pair_sample.time_seconds = index * 0.01;
+        pair_dataset.samples.push_back(pair_sample);
+    }
+    const auto pair_problem = pair_backend.BuildProblem(pair_dataset);
+    if (!pair_problem.regressor.isApprox(
+            robot_identification::BuildRegressionProblem(pair_dataset, pair_backend).regressor, 0)) {
+        throw std::runtime_error("correctly ordered named batch changed scalar joint rows");
+    }
+    std::swap(pair_dataset.joint_names[0], pair_dataset.joint_names[1]);
+    require_invalid(pair_backend, pair_dataset);
+
+    auto multi_model = std::make_shared<pinocchio::Model>();
+    const auto multi =
+        multi_model->addJoint(0, pinocchio::JointModelTranslation(), pinocchio::SE3::Identity(), "cartesian");
+    multi_model->appendBodyToJoint(multi, pinocchio::Inertia::Identity(), pinocchio::SE3::Identity());
+    robot_identification_pinocchio::PinocchioRegressor multi_backend(multi_model);
+    robot_identification::Dataset multi_dataset;
+    multi_dataset.joint_names = {"cartesian/x", "cartesian/y", "cartesian/z"};
+    auto multi_sample = sample;
+    multi_sample.position = Eigen::Vector3d::Zero();
+    multi_sample.velocity = Eigen::Vector3d::Zero();
+    multi_sample.acceleration = Eigen::Vector3d::Ones();
+    multi_sample.torque = Eigen::Vector3d::Zero();
+    for (int index = 0; index < 3; ++index) {
+        multi_sample.time_seconds = index * 0.01;
+        multi_dataset.samples.push_back(multi_sample);
+    }
+    if (multi_backend.Compute(multi_sample).rows() != 3) {
+        throw std::runtime_error("positional multi-DoF interface changed");
+    }
+    require_invalid(multi_backend, multi_dataset);
     dataset.samples.back().velocity.conservativeResize(0);
     bool invalid_rejected = false;
     try {
