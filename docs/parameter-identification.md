@@ -108,6 +108,8 @@ RMSE 和平均绝对误差先按最大绝对值缩放再统计，避免平方或
 6. 扩展现有 ROS 2 recorder，增加显式 session action、激励轨迹联锁和可选 GUI；
 7. 候选 artifact 的签名、审批和导入工具。
 
+谐波振幅通过 `hypot` 求值，导数逐次乘频率，避免中间平方、立方的上溢/下溢隐藏真实包络或丢失可表示导数。位置区间的半宽也在全宽溢出时保留有限值；极小振幅仍必须满足保守位置限位。
+
 ### 安全边界
 
 辨识只生成候选结果，不能在线热更新力控模型。导入前必须保存旧参数、数据摘要、代码版本、机器人 profile、工具状态、拟合指标和验证结论。任何 URDF、传动、固件、工具、采样频率或力矩来源变化都要求重新评审。真机验证从位置模式和低速度开始，再逐步验证重力补偿、力矩模式、导纳与阻抗。
@@ -115,6 +117,8 @@ RMSE 和平均绝对误差先按最大绝对值缩放再统计，避免平方或
 安装空间中的 session、result、review 和 rollback Schema 分别约束采集元数据、候选结果、人工决定和回滚清单。候选结果 `status` 固定为 `candidate`；批准只能存在于独立 review artifact，且必须绑定满秩、质量矩阵检查通过的候选文件和回滚清单 SHA-256。工具不会写入运行配置。
 
 ## English
+
+Harmonic envelopes use scaled hypot, successive coefficient/frequency products, and overflow-resistant position half-spans. Tiny amplitudes must still satisfy conservative position bounds when sparse sampling misses their peaks.
 
 The migration separates robot-specific regressor construction from reusable preprocessing, solving, and validation. `robot_identification` is a plain CMake package and therefore works both standalone and in a colcon workspace. It assumes neither left/right arms, seven joints, nor a fixed base-parameter dimension.
 

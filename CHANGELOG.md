@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Compute harmonic envelopes with scaled hypot and form derivatives through
+  successive coefficient/frequency products. Reject tiny trajectories whose
+  true envelope exceeds limits even when sparse samples miss every peak, and
+  keep representable wide position half-spans finite.
+
 - Run installed core/Pinocchio consumers as part of CTest. Forward the selected
   compiler, build type, and instrumentation flags to consumer configurations so
   static sanitizer builds link and execute against their required runtimes.

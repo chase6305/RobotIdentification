@@ -401,9 +401,13 @@ ExcitationSample HarmonicTrajectory::Evaluate(double time_seconds) const {
             const double derivative_term =
                 sin_coefficients_(joint, harmonic) * cosine - cos_coefficients_(joint, harmonic) * sine;
             sample.position[joint] += position_term;
-            sample.velocity[joint] += frequency * derivative_term;
-            sample.acceleration[joint] -= frequency * frequency * position_term;
-            sample.jerk[joint] -= frequency * frequency * frequency * derivative_term;
+            // Multiply the finite coefficient before successive frequency
+            // factors: powers of frequency may overflow or underflow even
+            // when every requested derivative remains representable.
+            const double velocity_term = frequency * derivative_term;
+            sample.velocity[joint] += velocity_term;
+            sample.acceleration[joint] -= frequency * (frequency * position_term);
+            sample.jerk[joint] -= frequency * (frequency * velocity_term);
         }
     }
     if (!sample.position.allFinite() || !sample.velocity.allFinite() || !sample.acceleration.allFinite() ||
@@ -419,14 +423,16 @@ HarmonicBounds HarmonicTrajectory::ConservativeBounds() const {
     Eigen::VectorXd position_envelope = Eigen::VectorXd::Zero(offset_.size());
     for (Eigen::Index harmonic = 0; harmonic < sin_coefficients_.cols(); ++harmonic) {
         const double frequency = static_cast<double>(harmonic + 1) * angular_frequency_;
-        const Eigen::VectorXd amplitude =
-            (sin_coefficients_.col(harmonic).array().square() + cos_coefficients_.col(harmonic).array().square())
-                .sqrt()
-                .matrix();
-        position_envelope += amplitude;
-        bounds.maximum_absolute_velocity += frequency * amplitude;
-        bounds.maximum_absolute_acceleration += frequency * frequency * amplitude;
-        bounds.maximum_absolute_jerk += frequency * frequency * frequency * amplitude;
+        for (Eigen::Index joint = 0; joint < offset_.size(); ++joint) {
+            const double amplitude = std::hypot(sin_coefficients_(joint, harmonic), cos_coefficients_(joint, harmonic));
+            const double velocity = amplitude * frequency;
+            const double acceleration = velocity * frequency;
+            const double jerk = acceleration * frequency;
+            position_envelope[joint] += amplitude;
+            bounds.maximum_absolute_velocity[joint] += velocity;
+            bounds.maximum_absolute_acceleration[joint] += acceleration;
+            bounds.maximum_absolute_jerk[joint] += jerk;
+        }
     }
     bounds.minimum_position -= position_envelope;
     bounds.maximum_position += position_envelope;
@@ -465,7 +471,13 @@ ExcitationValidationResult ValidateExcitationTrajectory(const HarmonicTrajectory
     result.conservative_acceleration_bound = Eigen::VectorXd::Zero(dof);
     result.conservative_jerk_bound = Eigen::VectorXd::Zero(dof);
     const HarmonicBounds conservative = trajectory.ConservativeBounds();
-    result.conservative_position_envelope = (conservative.maximum_position - conservative.minimum_position) * 0.5;
+    for (Eigen::Index joint = 0; joint < dof; ++joint) {
+        const double width = conservative.maximum_position[joint] - conservative.minimum_position[joint];
+        result.conservative_position_envelope[joint] =
+            std::isfinite(width)
+                ? width * 0.5
+                : conservative.maximum_position[joint] * 0.5 - conservative.minimum_position[joint] * 0.5;
+    }
     result.conservative_velocity_bound = conservative.maximum_absolute_velocity;
     result.conservative_acceleration_bound = conservative.maximum_absolute_acceleration;
     result.conservative_jerk_bound = conservative.maximum_absolute_jerk;

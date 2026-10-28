@@ -5,6 +5,7 @@
 #include <fstream>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 class Backend final : public robot_identification::RegressorBackend {
@@ -31,6 +32,51 @@ robot_identification::Dataset MakeDataset(bool outlier) {
                                    Eigen::VectorXd::Zero(1), Eigen::VectorXd::Constant(1, torque)});
     }
     return dataset;
+}
+
+void TestHarmonicScaleRobustness() {
+    using namespace robot_identification;
+    const auto trajectory = [](double amplitude, double angular_frequency) {
+        return HarmonicTrajectory(Eigen::VectorXd::Zero(1), Eigen::MatrixXd::Constant(1, 1, amplitude),
+                                  Eigen::MatrixXd::Zero(1, 1), angular_frequency / (2.0 * std::acos(-1.0)));
+    };
+    // Sparse samples can miss every peak; the conservative envelope must not
+    // underflow to zero and admit a position-unsafe trajectory.
+    const auto tiny = trajectory(1e-200, 2.0 * std::acos(-1.0));
+    ExcitationLimits limits{Eigen::VectorXd::Constant(1, -1e-210), Eigen::VectorXd::Constant(1, 1e-210),
+                            Eigen::VectorXd::Ones(1), Eigen::VectorXd::Ones(1), Eigen::VectorXd::Ones(1)};
+    if (ValidateExcitationTrajectory(tiny, limits, 1.0, 1.0).passed) {
+        throw std::runtime_error("underflowed harmonic envelope admitted an unsafe trajectory");
+    }
+    for (const auto scales : {std::pair<double, double>{1e300, 1e-150}, {1e-300, 1e110}}) {
+        HarmonicTrajectory value(Eigen::VectorXd::Zero(1), Eigen::MatrixXd::Constant(1, 1, scales.first),
+                                 Eigen::MatrixXd::Constant(1, 1, scales.first),
+                                 scales.second / (2.0 * std::acos(-1.0)));
+        const auto sample = value.Evaluate(0);
+        const double velocity = scales.first * scales.second;
+        const double acceleration = velocity * scales.second;
+        const double jerk = acceleration * scales.second;
+        if (std::abs(sample.velocity[0] / velocity - 1.0) > 1e-12 ||
+            std::abs(sample.acceleration[0] / -acceleration - 1.0) > 1e-12 ||
+            std::abs(sample.jerk[0] / -jerk - 1.0) > 1e-12) {
+            throw std::runtime_error("representable harmonic derivatives changed with numeric scale");
+        }
+        const auto bounds = value.ConservativeBounds();
+        if (!bounds.maximum_position.allFinite() ||
+            std::abs(bounds.maximum_position[0] / scales.first - std::sqrt(2.0)) > 1e-12 ||
+            std::abs(bounds.maximum_absolute_jerk[0] / jerk - std::sqrt(2.0)) > 1e-12) {
+            throw std::runtime_error("representable harmonic bounds changed with numeric scale");
+        }
+    }
+    const auto wide = trajectory(1e308, 1e-110);
+    limits = {Eigen::VectorXd::Constant(1, -1.5e308), Eigen::VectorXd::Constant(1, 1.5e308),
+              Eigen::VectorXd::Constant(1, 1.5e198), Eigen::VectorXd::Constant(1, 1.5e88),
+              Eigen::VectorXd::Constant(1, 1.5e-22)};
+    const auto result = ValidateExcitationTrajectory(wide, limits, 1.0, 1.0);
+    if (!result.passed || !result.conservative_position_envelope.allFinite() ||
+        std::abs(result.conservative_position_envelope[0] / 1e308 - 1.0) > 1e-12) {
+        throw std::runtime_error("representable half-width overflowed excitation diagnostics");
+    }
 }
 
 void TestMultiharmonicDerivativesAtZero() {
@@ -285,6 +331,7 @@ void TestMassMatrixBatchRecovery() {
 }  // namespace
 
 int main() {
+    TestHarmonicScaleRobustness();
     TestMultiharmonicDerivativesAtZero();
     TestMetricScales();
     TestCovarianceOverflowRejection();

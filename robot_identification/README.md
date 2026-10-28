@@ -34,6 +34,10 @@ Huber IRLS 在一次 `Solve` 内复用加权矩阵、SVD 和残差工作区。�
 
 Huber IRLS reuses weighted matrices, SVD decompositions, and residual storage within one `Solve` call. Harmonic sampling accumulates analytical joint terms without dynamic vectors for each harmonic. Public dataset and result interfaces remain compatible.
 
+谐波包络使用 `hypot` 计算振幅，避免平方时上溢或下溢。导数逐次乘频率，避免先计算频率幂导致可表示结果丢失；宽位置区间的半宽也使用防溢出计算。保守包络仍在采样前检查，稀疏采样不能替代连续轨迹限位。
+
+Harmonic amplitudes use `hypot` to avoid square overflow or underflow. Derivatives multiply coefficients by successive frequency factors so representable results survive extreme scales. Position half-spans avoid overflowing the full width. Conservative envelopes are checked before sampling; sparse samples cannot replace continuous-trajectory limits.
+
 ## Build and run / 构建与运行
 
 Requires Eigen 3.3 or newer and a C++17 standard library with floating-point
