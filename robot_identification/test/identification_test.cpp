@@ -33,6 +33,21 @@ robot_identification::Dataset MakeDataset(bool outlier) {
     return dataset;
 }
 
+void TestMultiharmonicDerivativesAtZero() {
+    Eigen::Matrix<double, 2, 3> sine, cosine;
+    sine << 1, 2, 3, -2, 1, 4;
+    cosine << 4, -1, 2, 1, 3, -2;
+    robot_identification::HarmonicTrajectory trajectory(Eigen::Vector2d(0.5, -0.25), sine, cosine,
+                                                        1.0 / (2.0 * std::acos(-1.0)));
+    const auto sample = trajectory.Evaluate(0);
+    if (!sample.position.isApprox(Eigen::Vector2d(5.5, 1.75), 1e-14) ||
+        !sample.velocity.isApprox(Eigen::Vector2d(14, 12), 1e-14) ||
+        !sample.acceleration.isApprox(Eigen::Vector2d(-18, 5), 1e-14) ||
+        !sample.jerk.isApprox(Eigen::Vector2d(-98, -114), 1e-14)) {
+        throw std::runtime_error("multiharmonic analytical derivatives are incorrect");
+    }
+}
+
 void TestWeightedSolves() {
     robot_identification::RegressionProblem problem;
     problem.sample_count = 4;
@@ -270,6 +285,7 @@ void TestMassMatrixBatchRecovery() {
 }  // namespace
 
 int main() {
+    TestMultiharmonicDerivativesAtZero();
     TestMetricScales();
     TestCovarianceOverflowRejection();
     TestLargeParameterConvergence();

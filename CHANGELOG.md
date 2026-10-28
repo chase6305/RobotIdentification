@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reuse weighted data matrices, singular-value decompositions, and residual
+  scratch across Huber IRLS iterations. Keep measured-data rank, regularization,
+  final weights, and covariance contracts unchanged. Avoid dynamic per-harmonic
+  temporaries when evaluating excitation trajectories.
+
 - Extract the core, optional Pinocchio regressor, ROS 2 recorder, schemas, tests,
   and offline artifact tools from RobotServer `a6c70ec`, retaining relevant Git history.
 - Preserve the existing public C++ targets, dataset formats, and artifact schemas.

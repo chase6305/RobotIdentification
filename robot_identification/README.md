@@ -30,6 +30,10 @@ Without ridge, each weighted solve reuses one SVD for parameter estimation and o
 
 Large symmetric windows use compensated rolling sums with periodic recomputation to limit accumulated rounding error, giving linear work in sample count. Short windows retain Eigen reductions; both paths average the available samples at boundaries. Three-point derivatives use adjacent secant slopes, subtracting positions before dividing by time intervals so large constant offsets do not create spurious velocity or acceleration.
 
+Huber IRLS 在一次 `Solve` 内复用加权矩阵、SVD 和残差工作区。谐波采样直接累加各关节的解析项，不再为每阶谐波构造动态向量；公开数据与结果接口保持兼容。
+
+Huber IRLS reuses weighted matrices, SVD decompositions, and residual storage within one `Solve` call. Harmonic sampling accumulates analytical joint terms without dynamic vectors for each harmonic. Public dataset and result interfaces remain compatible.
+
 ## Build and run / 构建与运行
 
 Requires Eigen 3.3 or newer and a C++17 standard library with floating-point

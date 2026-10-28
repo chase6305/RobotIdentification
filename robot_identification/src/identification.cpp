@@ -267,51 +267,70 @@ struct LinearSolveResult {
     std::size_t rank{0};
 };
 
-LinearSolveResult SolveWeighted(const RegressionProblem& problem,
-                                const Eigen::VectorXd& weights,
-                                const SolverOptions& options) {
-    const Eigen::VectorXd sqrt_weights = weights.array().sqrt();
-    const Eigen::Index data_rows = problem.regressor.rows();
-    const Eigen::Index parameter_count = problem.regressor.cols();
-    const Eigen::Index ridge_rows = options.ridge > 0.0 ? parameter_count : 0;
-    if (data_rows > std::numeric_limits<Eigen::Index>::max() - ridge_rows) {
-        throw std::overflow_error("regularized regression row count overflowed");
-    }
-    Eigen::MatrixXd weighted_regressor(data_rows + ridge_rows, parameter_count);
-    Eigen::VectorXd weighted_observation(data_rows + ridge_rows);
-    weighted_regressor.topRows(data_rows) = problem.regressor.array().colwise() * sqrt_weights.array();
-    weighted_observation.head(data_rows) = problem.observation.array() * sqrt_weights.array();
-    if (!weighted_regressor.topRows(data_rows).allFinite() || !weighted_observation.head(data_rows).allFinite()) {
-        throw std::overflow_error("weighted regression values are non-finite");
+class WeightedSolveWorkspace {
+public:
+    WeightedSolveWorkspace(const RegressionProblem& problem, const SolverOptions& options)
+        : data_rows_(problem.regressor.rows()),
+          parameter_count_(problem.regressor.cols()),
+          ridge_rows_(options.ridge > 0.0 ? parameter_count_ : 0) {
+        if (data_rows_ > std::numeric_limits<Eigen::Index>::max() - ridge_rows_) {
+            throw std::overflow_error("regularized regression row count overflowed");
+        }
+        weighted_regressor_.resize(data_rows_ + ridge_rows_, parameter_count_);
+        weighted_observation_.resize(data_rows_ + ridge_rows_);
+        sqrt_weights_.resize(data_rows_);
+        const unsigned int diagnostics_options = ridge_rows_ == 0 ? Eigen::ComputeThinU | Eigen::ComputeThinV : 0;
+        diagnostic_svd_ = std::make_unique<Svd>(data_rows_, parameter_count_, diagnostics_options);
+        diagnostic_svd_->setThreshold(options.relative_rank_tolerance);
+        if (ridge_rows_ > 0) {
+            weighted_regressor_.bottomRows(ridge_rows_).setZero();
+            weighted_regressor_.bottomRows(ridge_rows_).diagonal().setConstant(std::sqrt(options.ridge));
+            weighted_observation_.tail(ridge_rows_).setZero();
+            regularized_svd_ = std::make_unique<Svd>(data_rows_ + ridge_rows_, parameter_count_,
+                                                     Eigen::ComputeThinU | Eigen::ComputeThinV);
+            regularized_svd_->setThreshold(options.relative_rank_tolerance);
+        }
     }
 
-    // Observability is a property of measured data. Diagnose it before adding
-    // ridge rows, otherwise regularization would make every problem appear
-    // full rank even when the experiment did not excite some parameters.
-    Eigen::JacobiSVD<Eigen::MatrixXd> diagnostic_svd;
-    if (ridge_rows == 0) {
-        diagnostic_svd.compute(weighted_regressor, Eigen::ComputeThinU | Eigen::ComputeThinV);
-    } else {
-        diagnostic_svd.compute(weighted_regressor.topRows(data_rows));
+    void Compute(const RegressionProblem& problem, const Eigen::VectorXd& weights, LinearSolveResult& result) {
+        sqrt_weights_ = weights.array().sqrt();
+        weighted_regressor_.topRows(data_rows_) = problem.regressor.array().colwise() * sqrt_weights_.array();
+        weighted_observation_.head(data_rows_) = problem.observation.array() * sqrt_weights_.array();
+        if (!weighted_regressor_.topRows(data_rows_).allFinite() ||
+            !weighted_observation_.head(data_rows_).allFinite()) {
+            throw std::overflow_error("weighted regression values are non-finite");
+        }
+        // Diagnose measured data before ridge rows: regularization must not
+        // disguise an unobservable parameter. Reuse each decomposition's
+        // scratch across IRLS iterations without changing its input shape.
+        if (ridge_rows_ == 0) {
+            diagnostic_svd_->compute(weighted_regressor_);
+        } else {
+            diagnostic_svd_->compute(weighted_regressor_.topRows(data_rows_));
+        }
+        if (diagnostic_svd_->info() != Eigen::Success || !diagnostic_svd_->singularValues().allFinite()) {
+            throw std::runtime_error("regression diagnostic decomposition failed");
+        }
+        result.singular_values = diagnostic_svd_->singularValues();
+        result.rank = static_cast<std::size_t>(diagnostic_svd_->rank());
+        if (ridge_rows_ == 0) {
+            result.parameters = diagnostic_svd_->solve(weighted_observation_);
+        } else {
+            regularized_svd_->compute(weighted_regressor_);
+            if (regularized_svd_->info() != Eigen::Success || !regularized_svd_->singularValues().allFinite()) {
+                throw std::runtime_error("regularized regression decomposition failed");
+            }
+            result.parameters = regularized_svd_->solve(weighted_observation_);
+        }
     }
-    diagnostic_svd.setThreshold(options.relative_rank_tolerance);
-    LinearSolveResult result;
-    result.singular_values = diagnostic_svd.singularValues();
-    result.rank = static_cast<std::size_t>(diagnostic_svd.rank());
-    if (ridge_rows == 0) {
-        // Ordinary and unregularized IRLS solves use the same factorization
-        // for the parameter estimate and the measured-data diagnostics.
-        result.parameters = diagnostic_svd.solve(weighted_observation);
-        return result;
-    }
-    weighted_regressor.bottomRows(ridge_rows).setZero();
-    weighted_regressor.bottomRows(ridge_rows).diagonal().setConstant(std::sqrt(options.ridge));
-    weighted_observation.tail(ridge_rows).setZero();
-    Eigen::JacobiSVD<Eigen::MatrixXd> svd(weighted_regressor, Eigen::ComputeThinU | Eigen::ComputeThinV);
-    svd.setThreshold(options.relative_rank_tolerance);
-    result.parameters = svd.solve(weighted_observation);
-    return result;
-}
+
+private:
+    using Svd = Eigen::JacobiSVD<Eigen::MatrixXd>;
+    Eigen::Index data_rows_, parameter_count_, ridge_rows_;
+    Eigen::MatrixXd weighted_regressor_;
+    Eigen::VectorXd weighted_observation_, sqrt_weights_;
+    std::unique_ptr<Svd> diagnostic_svd_, regularized_svd_;
+};
 
 }  // namespace
 
@@ -376,14 +395,16 @@ ExcitationSample HarmonicTrajectory::Evaluate(double time_seconds) const {
         const double phase = frequency * time_seconds;
         const double sine = std::sin(phase);
         const double cosine = std::cos(phase);
-        const Eigen::VectorXd position_term =
-            sin_coefficients_.col(harmonic) * sine + cos_coefficients_.col(harmonic) * cosine;
-        const Eigen::VectorXd derivative_term =
-            sin_coefficients_.col(harmonic) * cosine - cos_coefficients_.col(harmonic) * sine;
-        sample.position += position_term;
-        sample.velocity += frequency * derivative_term;
-        sample.acceleration -= frequency * frequency * position_term;
-        sample.jerk -= frequency * frequency * frequency * derivative_term;
+        for (Eigen::Index joint = 0; joint < offset_.size(); ++joint) {
+            const double position_term =
+                sin_coefficients_(joint, harmonic) * sine + cos_coefficients_(joint, harmonic) * cosine;
+            const double derivative_term =
+                sin_coefficients_(joint, harmonic) * cosine - cos_coefficients_(joint, harmonic) * sine;
+            sample.position[joint] += position_term;
+            sample.velocity[joint] += frequency * derivative_term;
+            sample.acceleration[joint] -= frequency * frequency * position_term;
+            sample.jerk[joint] -= frequency * frequency * frequency * derivative_term;
+        }
     }
     if (!sample.position.allFinite() || !sample.velocity.allFinite() || !sample.acceleration.allFinite() ||
         !sample.jerk.allFinite()) {
@@ -841,12 +862,15 @@ IdentificationResult Solve(const RegressionProblem& problem, const SolverOptions
     Eigen::VectorXd solve_weights = weights;
     Eigen::VectorXd previous;
     LinearSolveResult linear;
+    WeightedSolveWorkspace workspace(problem, options);
+    Eigen::VectorXd robust_residual;
+    if (options.huber_delta > 0.0 && options.max_iterations > 1) robust_residual.resize(problem.regressor.rows());
     std::size_t iterations = 0;
     bool converged = options.huber_delta == 0.0;
     const std::size_t limit = options.huber_delta > 0.0 ? options.max_iterations : 1;
     for (; iterations < limit; ++iterations) {
         solve_weights = weights;
-        linear = SolveWeighted(problem, weights, options);
+        workspace.Compute(problem, weights, linear);
         if (!linear.parameters.allFinite()) throw std::runtime_error("parameter solution is non-finite");
         if (previous.size() == linear.parameters.size()) {
             if (ParametersConverged(linear.parameters, previous, options.convergence_tolerance)) {
@@ -858,17 +882,18 @@ IdentificationResult Solve(const RegressionProblem& problem, const SolverOptions
         // Only prepare another weighted solve when an iteration remains.
         if (options.huber_delta > 0.0 && iterations + 1 < limit) {
             previous = linear.parameters;
-            const Eigen::VectorXd residual = problem.observation - problem.regressor * linear.parameters;
-            if (!residual.allFinite()) throw std::overflow_error("robust regression residuals are non-finite");
-            for (Eigen::Index row = 0; row < residual.size(); ++row) {
-                const double absolute = std::abs(residual[row]);
+            robust_residual.noalias() = problem.regressor * linear.parameters;
+            robust_residual = problem.observation - robust_residual;
+            if (!robust_residual.allFinite()) throw std::overflow_error("robust regression residuals are non-finite");
+            for (Eigen::Index row = 0; row < robust_residual.size(); ++row) {
+                const double absolute = std::abs(robust_residual[row]);
                 const double robust = absolute <= options.huber_delta ? 1.0 : options.huber_delta / absolute;
                 weights[row] = problem.row_weights[row] * robust;
             }
         }
     }
     IdentificationResult result;
-    result.parameters = linear.parameters;
+    result.parameters = std::move(linear.parameters);
     result.predicted = problem.regressor * result.parameters;
     result.residual = problem.observation - result.predicted;
     // These are the exact weights used for the returned parameter vector. If
