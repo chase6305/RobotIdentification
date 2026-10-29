@@ -2,13 +2,15 @@
 
 ## 范围 / Scope
 
-工作窗口为 2026-10-28 14:35:40–19:35:40 UTC，即北京时间 10 月 28 日
-22:35:40 至 10 月 29 日 03:35:40。本记录仍在随验证更新。仓库保持本地独立，
+本轮原定窗口为 2026-10-28 14:35:40–19:35:40 UTC，即北京时间 10 月 28 日
+22:35:40 至 10 月 29 日 03:35:40。代码与长测在 10 月 28 日完成，10 月 29 日
+02:02 UTC 恢复会话后汇总交付；计划窗口不等同连续活跃时长。仓库保持本地独立，
 没有创建远程仓库、推送或发布；[第一轮报告](optimization-2026-10-28.md) 保留。
 
 本轮基线 `0858f06`；生产变更为 `2ebb839`（共享组装实现）、`ef2dcaf`（单样本
 Data 缓存）、`2c64b3d`（原始 CSV 分块读取），持续验证程序为 `5bce2d0`。
 后续 `44ad750` 修复可表示导数的中间值溢出，并加入独立预处理压力验证。
+验证程序 `e5bbe11` 按两次差分传播舍入余量，并支持指定用例编号重放。
 环境为 Ubuntu 22.04.5、Ryzen 9 9950X、GCC 11、Eigen 3.4.0、Python 3.10、
 ROS 2 Humble；分别验证原生 Pinocchio 4.0.0 和 Conda Pinocchio 2.7.0。
 
@@ -75,6 +77,9 @@ allocator histories; filesystem cache and host activity also affect timings.
 The deterministic 200000-row fixture SHA-256 is
 `8d3521bcca84e47cf975737a48b521bea59183efc2f8de5c9c7a23d26db6059e`.
 Use the committed generator with a new path and retain the digest for comparisons.
+The retained 1787470095-byte recording has SHA-256
+`20165438c1812d5111b3559c7e6910f64ceba4a809c384f28c41bdee61808ed6`,
+rechecked against its original recorder metadata.
 
 ## 验证 / Validation
 
@@ -85,10 +90,21 @@ Use the committed generator with a new path and retain the digest for comparison
   该进程的泄漏检测，不将其描述为泄漏验证。
 - 最终四包 ROS 2 colcon 验证：88 项、零失败；安装录制器通过 20 条采样测试。
 - 新的并发回归/组合压力程序在 Pinocchio 4.0 与 2.7 的短时运行均通过；CSV 位级
-  往返/延迟错误短测通过。一小时运行结果待补。
+  往返/延迟错误短测通过。
+- 原生 Pinocchio 四线程 ASan/UBSan 一小时：14423447 组、72123305 样本、
+  408504274 执行器组合行通过，2523636 次不支持的具名多坐标批量按预期拒绝；
+  最大归一化误差 `4.86915e-15`。此进程关闭泄漏检测。
+- CSV ASan/UBSan/LeakSanitizer 一小时：54693 个文件用例、60041935 行位级
+  往返及 54693 次末尾错误拒绝全部通过，未报告泄漏。
 - 最终导数修复在原生/Conda 独立构建、ASan/UBSan、纯核心 LeakSanitizer 11 项
   及完整 ROS 2 88 项中均通过。独立预处理短测约 96085 组，其中 80952 组有限结果
-  通过参考比较，15133 组超范围结果按预期拒绝；后续一小时验证待补。
+  通过参考比较，15133 组超范围结果按预期拒绝。
+- 更正误差传播余量后，预处理 ASan/UBSan/LeakSanitizer 一小时通过 31670975
+  组：26687026 组有限结果对照通过、4983949 组超范围按预期拒绝，其中 989718
+  组覆盖双精度割线溢出但组合导数有限的固定场景。未报告插桩错误或泄漏。
+- `44ad750` 完整 Git bundle 含 HEAD/主分支信息，已在新的独立目录还原。清除
+  ROS/Pinocchio 前缀、库和 Python 路径后，用系统 GCC 11、系统 Eigen 3.4.0
+  与系统 C++ 运行库通过轻量核心 11 项；未依赖 RobotServer 源码或安装空间。
 
 `pinocchio_stress` 用四个固定种子线程，检查共享不可变后端、所有权切换、标量与
 平移关节、独立 RNEA、具名/通用矩阵、执行器组合及返回值拥有性。误差定义为
@@ -99,8 +115,14 @@ Use the committed generator with a new path and retain the digest for comparison
 加前一阶段误差传播及次正规量化项计算。初始相对容差在第 7342120 号用例失败；
 重放确认速度差 1 ULP，经近线性二次差分相消放大后，超出纯加速度相对容差。
 按差分权重传播的余量内则通过，没有为此修改生产算法。保留原失败日志、输入、
-Decimal 分析和更正后的重放结果；后续一小时结果待补。性能表分别测于组装/TLS 和
+Decimal 分析和更正后的重放结果。一小时新验证已通过。性能表分别测于组装/TLS 和
 CSV 实现快照，导数修复没有改动这些被测函数。
+
+The initial relative-only preprocessing oracle failed on case 7342120. Replay
+showed a one-ULP velocity difference amplified by cancellation in the second
+derivative. The corrected oracle propagates Lagrange-weighted rounding allowances;
+production code was unchanged. The captured data, Decimal analysis and passing
+replay are retained alongside the original failed log.
 
 Local raw evidence is under `build/optimization-20261028-r2/`: `pin-before.txt`,
 `pin-after-tls.txt`, `csv-*-memory.txt`, `final-colcon.log`, standalone and
@@ -108,3 +130,9 @@ sanitizer logs, plus the new stress logs. Case counts and source snapshots for
 sustained runs are recorded separately from unit-test totals. Dataset acquisition
 timing, torque provenance, physical parameter validity and robot commissioning
 remain deployment responsibilities; these are synthetic software checks.
+
+The local handoff directory also contains `RobotIdentification-round2-final.bundle`,
+`RobotIdentification-round2-evidence.tar.gz`, `round2-final-manifest.json` and
+`round2-final-SHA256SUMS`. The final bundle includes branch/HEAD information and
+the corrected validation harness. Large CSV fixtures and build trees stay outside
+the evidence archive; hashes and source snapshots identify the retained inputs.
