@@ -17,6 +17,8 @@ For complete Pinocchio datasets, `backend.BuildProblem(dataset)` reuses call-loc
 
 Core 0.2.11 provides QR base parameters, a full-to-base mapping and constrained Fourier excitation design that compose with the Pinocchio backend. The [end-to-end example](robot_identification/examples/identification_design_example.cpp) covers design, fitting and independent validation; [algorithm and reference notes](docs/parameter-identification.md#参考项目评估与本次实现) describe equations, numerical assumptions and limits. Public interfaces remain compatible; the Pinocchio backend remains 0.2.1.
 
+The [actuator-network assessment](docs/parameter-identification.md#执行器动态网络方向) evaluates `sunzhon/actuator_net`, including command/state histories, label units and independent trajectory validation required for adoption.
+
 ## Standalone build
 
 The Ubuntu venv recipe requires `python3-venv`.

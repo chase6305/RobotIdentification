@@ -154,6 +154,7 @@ Eigen 核心、可选 Pinocchio 后端和离线候选结果流程的工程选择
 | [RBDL](https://github.com/rbdl/rbdl) | RNEA、ABA、CRBA 等 C++ 动力学算法 | 可作为后续交叉验证/替代后端，目前与已有 Pinocchio 的功能重叠 |
 | [Robotics Toolbox for Python](https://github.com/petercorke/robotics-toolbox-python) | 模型、动力学和 Python 原型验证 | 适合离线模型对照；当前实现继续通过 C++ 通用后端组合 |
 | [iDynTree](https://github.com/gbionics/idyntree) | 浮动基、多坐标表示、URDF 工具与力矩/外力估计 | 浮动基或外力辨识扩展时优先重评；需要明确扩展当前状态/力矩契约 |
+| [actuator_net](https://github.com/sunzhon/actuator_net/tree/ec8d395d54b255e283df6bc26b2c29637a839d3d) | 位置误差与速度历史驱动的执行器网络、训练及 TorchScript 推理 | 作为执行器动态建模的重要方向；先明确命令、时序和标签单位，在可选工具层开展独立轨迹验证 |
 
 参考入口还包括 BIRDy 的[实际轨迹目标函数](https://github.com/TUM-ICS/BIRDy/blob/4d9802f1d692815792dfb5652a3d19f1fcdaec02/Benchmark/Robot_Data_Generation/Trajectory_Data_Generation/Trajectory_Optimizer/trajectoryCriterion.m)、
 SymPyBotics 的[依赖分析](https://github.com/cdsousa/SymPyBotics/blob/master/sympybotics/dynamics/dyn_parm_dep.py)、
@@ -161,6 +162,42 @@ lbr-stack 的[回归实现](https://github.com/lbr-stack/dynamic_parameter_ident
 本次代码独立实现，未移植这些项目的源代码。BIRDy 为 MIT，SymPyBotics 为 BSD 三条款；
 Drake 主体也是 [BSD 三条款](https://github.com/RobotLocomotion/drake/blob/master/LICENSE.TXT)。
 所查 lbr-stack 快照的文件树没有 LICENSE 文件，因此未将其代码引入本仓库。
+
+#### 执行器动态网络方向
+
+2026-11-03 补充评估 `sunzhon/actuator_net`，固定快照为
+`ec8d395d54b255e283df6bc26b2c29637a839d3d`。其
+[预处理](https://github.com/sunzhon/actuator_net/blob/ec8d395d54b255e283df6bc26b2c29637a839d3d/process_dataset.py)
+将命令位置减去实测位置，构成当前及前两帧的位置误差和速度，共六维输入；
+[训练](https://github.com/sunzhon/actuator_net/blob/ec8d395d54b255e283df6bc26b2c29637a839d3d/train.py)
+使用 MLP 并导出 TorchScript，
+[推理](https://github.com/sunzhon/actuator_net/blob/ec8d395d54b255e283df6bc26b2c29637a839d3d/test.py)
+逐步更新历史。该方向可学习控制器、传动与电机的综合动态，适合仿真中的执行器映射。
+现有 `ActuatorRegressor` 的转子惯量、黏性/库仑摩擦和 bias 列仍用于线性参数辨识；
+两类模型应分别验证，不能把网络权重解释为刚体惯量或基参数。
+
+接入顺序以数据和验证为先，暂不增加训练框架或 GUI 到 Eigen 核心：
+
+1. 采集同步的命令位置、实测位置、实测速度和输出标签，保留关节名称、会话、
+   时间戳、采样周期、控制模式与增益。当前 raw CSV 只有 `time/q/tau`，
+   缺少命令和速度来源，不能从实测位置反推控制目标。
+2. 固定特征顺序为 `[e[k],e[k-1],e[k-2],dq[k],dq[k-1],dq[k-2]]`，其中
+   `e=q_command-q`；明确周期、命令/反馈延迟和历史初始化策略。
+   每个关节、会话、控制模式切换或采样中断都重新建立历史。
+   现有对称平滑和中心差分用于离线辨识，含未来样本，不能直接用于实时特征。
+3. 明确标签是电流还是输出轴力矩，并记录单位、正方向、减速比和标定来源。
+   参考默认处理直接取 `motorStateCur`，没有执行电流到 Nm 的换算；应核对采集端，
+   不能仅凭字段名或 README 判断单位，也不能采用注释中的特定电机换算常数。
+4. 先按完整会话/轨迹划分训练、验证和测试集，再在各分区内逐关节生成窗口；
+   scaler 只在训练集拟合。参考处理先拼接电机再移位，训练脚本按窗口随机划分，
+   因而接入时需避免跨电机历史和相邻窗口泄漏。参考默认关闭 scaling；开启时必须
+   让训练与部署使用同一变换。
+5. 在未参与训练的连续轨迹上，与相同输入可获得的静态 PD/线性执行器模型比较，
+   报告逐关节 MAE/RMSE、峰值误差、时延及饱和区间误差，保留真实采样间隔。
+   模型、scaler、特征顺序、周期、单位和控制配置应共同绑定摘要。
+
+这是一条待实现并用实测数据验证的可选路径；本次只采用建模思路，未移植参考代码、
+权重或数据，也未改变现有 CSV、结果 Schema 和运行参数导入流程。
 
 #### QR 基参数
 
@@ -298,7 +335,7 @@ N 是时间样本数；噪声尺度使用各关节广义力/力矩的单位，�
 2. 单关节黏性/库仑摩擦；
 3. 使用 Pinocchio 回归器并进行基参数/可观测性分析；
 4. 使用已有基参数与受限谐波优化接口设计实验，并完成独立验证轨迹；
-5. 可选物理一致性约束求解器；
+5. 根据目标选择物理一致性约束，或按上述数据契约验证执行器动态网络；
 6. 扩展现有 ROS 2 recorder，增加显式 session action、激励轨迹联锁和可选 GUI；
 7. 候选 artifact 的签名、审批和导入工具。
 
@@ -317,6 +354,15 @@ column-pivoted QR base parameters and constrained Fourier experiment design.
 The detailed comparison and primary-source links appear in the Chinese section
 above. The core still depends only on Eigen; its existing layouts, signatures
 and JSON/CSV contracts remain compatible.
+
+The actuator-network reference above adds a separate direction: learn a causal
+mapping from command-position error and velocity history to actuator output.
+Adoption first requires synchronized commands/states, explicit label units,
+per-joint/session history resets and trajectory-level holdouts before windowing.
+Fit scaling on training data only and bind the deployed model to its feature
+order, period and control configuration. Existing symmetric filtering and central
+differences are offline operations. No neural trainer, reference weights or new
+core dependency is introduced by this assessment.
 
 For column maxima s, factor `Z = Y*diag(1/s)` with pivoted QR, solve
 `K = R11\R12`, and retain the mapping
