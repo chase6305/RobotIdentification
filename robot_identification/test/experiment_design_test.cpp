@@ -134,6 +134,34 @@ private:
     double value_;
 };
 
+void TestRejectedTrialsPreserveCoefficients() {
+    auto seed = Seed(-0.);
+    seed.cos_coefficients(0, 0) = -0.;
+    auto options = Options();
+    options.sample_count = 3;
+    for (const std::size_t budget : {1, 2, 3, 4, 5, 20}) {
+        options.max_evaluations = budget;
+        const auto result = OptimizeExcitationDesign(seed, Limits(), ConstantBackend(1.), options);
+        Require(result.accepted_steps == 0 && std::signbit(result.design.sin_coefficients(0, 0)) &&
+                    std::signbit(result.design.cos_coefficients(0, 0)),
+                "rejected equal-score trials changed signed-zero coefficients");
+    }
+    const double maximum = std::numeric_limits<double>::max();
+    seed.sin_coefficients(0, 0) = .75 * maximum;
+    seed.fundamental_frequency_hz = 1e-300;
+    const ExcitationLimits limits{Eigen::VectorXd::Constant(1, -maximum), Eigen::VectorXd::Constant(1, maximum),
+                                  Eigen::VectorXd::Constant(1, maximum), Eigen::VectorXd::Constant(1, maximum),
+                                  Eigen::VectorXd::Constant(1, maximum)};
+    options.duration_seconds = 1e300;
+    options.initial_step_fraction = 1.;
+    options.max_evaluations = 5;
+    const auto result = OptimizeExcitationDesign(seed, limits, ConstantBackend(1.), options);
+    Require(result.validation.passed && result.evaluations == 5 && result.feasible_evaluations == 2 &&
+                result.accepted_steps == 0 && result.design.sin_coefficients(0, 0) == seed.sin_coefficients(0, 0) &&
+                std::signbit(result.design.cos_coefficients(0, 0)),
+            "non-finite or infeasible trials changed the incumbent design");
+}
+
 void TestUnitScaleRange() {
     for (const double value : {std::numeric_limits<double>::denorm_min(), std::numeric_limits<double>::min(), 1e-150,
                                -3.7, 1e150, std::numeric_limits<double>::max()}) {
@@ -201,6 +229,7 @@ int main() {
     try {
         TestAnalyticInformation();
         TestOptimizationAndBudget();
+        TestRejectedTrialsPreserveCoefficients();
         TestUnitScaleRange();
         TestInvalidInputs();
         TestExtremeFixedScales();

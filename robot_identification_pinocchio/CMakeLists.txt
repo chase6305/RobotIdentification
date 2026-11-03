@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(robot_identification_pinocchio VERSION 0.2.1 LANGUAGES CXX)
+project(robot_identification_pinocchio VERSION 0.2.2 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)

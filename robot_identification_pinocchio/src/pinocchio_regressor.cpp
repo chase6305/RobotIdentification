@@ -6,6 +6,7 @@
 #include <optional>
 #include <pinocchio/algorithm/regressor.hpp>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace robot_identification_pinocchio {
@@ -16,11 +17,15 @@ PinocchioRegressor::PinocchioRegressor(std::shared_ptr<const pinocchio::Model> m
     }
     static constexpr std::array<const char*, 10> kParameterSuffixes{"mass", "mcx", "mcy", "mcz", "Ixx",
                                                                     "Ixy",  "Iyy", "Ixz", "Iyz", "Izz"};
+    constexpr std::string_view kParameterPrefix = "rigid_body/";
     parameter_names_.reserve(10 * (model_->njoints - 1));
     for (pinocchio::JointIndex joint = 1; joint < static_cast<pinocchio::JointIndex>(model_->njoints); ++joint) {
         if (model_->names[joint].empty()) throw std::invalid_argument("Pinocchio model contains an unnamed joint");
         for (const char* suffix : kParameterSuffixes) {
-            parameter_names_.push_back("rigid_body/" + model_->names[joint] + "/" + suffix);
+            auto& name = parameter_names_.emplace_back();
+            name.reserve(kParameterPrefix.size() + model_->names[joint].size() + 1 +
+                         std::char_traits<char>::length(suffix));
+            name.append(kParameterPrefix).append(model_->names[joint]).append("/").append(suffix);
         }
     }
 }

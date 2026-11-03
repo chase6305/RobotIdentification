@@ -77,7 +77,6 @@ class RawJointStateSession:
         self._model_digest = model_digest
         self._torque_source = torque_source
         self._joint_names = tuple(joint_names)
-        self._joint_name_set = frozenset(joint_names)
         self._incoming_names = ()
         self._order = ()
         self.sample_count = 0
@@ -114,11 +113,13 @@ class RawJointStateSession:
                 return self._reject(
                     "joint names must be unique, non-empty and CSV-safe")
             index = {name: offset for offset, name in enumerate(names)}
-            # Matching the already-validated joint set also validates each name.
-            if self._joint_names and (len(names) != len(self._joint_names) or
-                                      index.keys() != self._joint_name_set):
+            if self._joint_names and len(names) != len(self._joint_names):
                 return self._reject("joint set changed during the session")
-            order = tuple(index[name] for name in (self._joint_names or names))
+            try:
+                order = tuple(
+                    index[name] for name in (self._joint_names or names))
+            except KeyError:
+                return self._reject("joint set changed during the session")
         try:
             finite = (all(math.isfinite(value) for value in position) and
                       all(math.isfinite(value) for value in effort))
@@ -148,7 +149,6 @@ class RawJointStateSession:
                 self._stream.flush()
             self._digest.update(payload)
             self._joint_names = self._joint_names or names
-            self._joint_name_set = self._joint_name_set or frozenset(names)
             self._incoming_names = names
             self._order = order
             self._last_sample_ns = sample_ns

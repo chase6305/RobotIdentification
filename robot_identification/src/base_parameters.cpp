@@ -45,7 +45,7 @@ BaseParameterBasis::BaseParameterBasis(const Eigen::MatrixXd& calibration, doubl
     qr.setThreshold(tolerance);
     const Eigen::Index rank = qr.rank();
     if (rank == 0) throw std::invalid_argument("calibration regressor has no identifiable parameter directions");
-    const auto permutation = qr.colsPermutation().indices();
+    const auto& permutation = qr.colsPermutation().indices();
     selected_columns_.reserve(static_cast<std::size_t>(rank));
     full_to_base_ = Eigen::MatrixXd::Zero(rank, calibration.cols());
     for (Eigen::Index index = 0; index < rank; ++index) {

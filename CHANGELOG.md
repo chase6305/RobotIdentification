@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Core 0.2.12 borrows QR permutation indices and changes one trial coefficient
+  instead of copying an entire excitation design. Restore rejected coefficients
+  exactly, including signed zero. Rotate IRLS parameter buffers to avoid copying
+  a parameter vector before every subsequent solve. Numerical policies and
+  public interfaces are unchanged.
+- Pinocchio 0.2.2 reserves each final parameter name once. Recorder 0.2.1 removes
+  a duplicate joint-set cache; ordering and failure/recovery behavior are unchanged.
+- Tools 0.1.1 avoids discarded metadata digests and redundant JSON name scans,
+  uses the JSON scanner's numeric grammar for zero checks, and rejects missing
+  fields before allocating an unknown-field set. CSV error locations are
+  formatted only on rejected numeric fields. Review and rollback continue to
+  bind digests to the same validated byte snapshots.
+
 - Add an opt-in scalar hybrid-rollout demonstration: causal fixed tanh features,
   learned residual readout, positive inertia/damping and semi-implicit stepping.
   Compare a fitted physics baseline against independent exact synthetic motion;

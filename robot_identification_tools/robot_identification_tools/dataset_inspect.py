@@ -29,21 +29,25 @@ _MIN_FIXED_RANGE_LENGTH = -sys.float_info.min_10_exp
 
 
 def _parse_number(field: str, line_number: int, column: int) -> float:
-    location = f"line {line_number}, column {column}"
     hexadecimal = _HEX_NUMBER.fullmatch(field) is not None
     try:
         value = float.fromhex(field) if hexadecimal else float(field)
     except (ValueError, OverflowError) as error:
         raise ValueError(
-            f"{location} contains an invalid or out-of-range number") from error
+            f"line {line_number}, column {column} contains an invalid or out-of-range number"
+        ) from error
     if not math.isfinite(value):
-        raise ValueError(f"{location} contains a non-finite value")
+        raise ValueError(
+            f"line {line_number}, column {column} contains a non-finite value")
     if not hexadecimal and _DECIMAL_NUMBER.fullmatch(field) is None:
-        raise ValueError(f"{location} contains invalid numeric syntax")
+        raise ValueError(
+            f"line {line_number}, column {column} contains invalid numeric syntax"
+        )
     nonzero = _NONZERO_HEX if hexadecimal else _NONZERO_DECIMAL
     if value == 0.0 and nonzero.match(field):
         raise ValueError(
-            f"{location} contains a nonzero number that underflows to zero")
+            f"line {line_number}, column {column} contains a nonzero number that underflows to zero"
+        )
     return value
 
 

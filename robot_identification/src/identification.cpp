@@ -1267,8 +1267,9 @@ IdentificationResult Solve(const RegressionProblem& problem, const SolverOptions
         }
         // Only prepare another weighted solve when an iteration remains.
         if (options.huber_delta > 0.0 && iterations + 1 < limit) {
-            previous = result.parameters;
-            robust_residual.noalias() = problem.regressor * result.parameters;
+            // Keep the current solution and recycle the older output buffer.
+            previous.swap(result.parameters);
+            robust_residual.noalias() = problem.regressor * previous;
             robust_residual = problem.observation - robust_residual;
             if (!robust_residual.allFinite()) throw std::overflow_error("robust regression residuals are non-finite");
             for (Eigen::Index row = 0; row < robust_residual.size(); ++row) {

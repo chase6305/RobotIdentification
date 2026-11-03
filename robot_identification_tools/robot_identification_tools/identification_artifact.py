@@ -24,7 +24,7 @@ def _sha256(path: Path) -> str:
 
 
 def _read_object(path: Path) -> dict[str, object]:
-    return _read_object_with_digest(path)[0]
+    return _parse_object(path.read_bytes(), path)
 
 
 def _unique_object(pairs) -> dict[str, object]:
@@ -45,13 +45,20 @@ def _json_float(value: str) -> float:
     if not math.isfinite(result):
         raise ValueError(
             f"JSON number exceeds the finite floating-point range: {value}")
-    if result == 0.0 and re.search(r"[1-9]", value.lower().partition("e")[0]):
-        raise ValueError(f"nonzero JSON number underflows to zero: {value}")
+    # The JSON scanner has already checked the mantissa's numeric grammar.
+    if result == 0.0:
+        remainder = value.lstrip("-0.")
+        if remainder and remainder[0] not in "eE":
+            raise ValueError(f"nonzero JSON number underflows to zero: {value}")
     return result
 
 
 def _read_object_with_digest(path: Path) -> tuple[dict[str, object], str]:
     payload = path.read_bytes()
+    return _parse_object(payload, path), hashlib.sha256(payload).hexdigest()
+
+
+def _parse_object(payload: bytes, path: Path) -> dict[str, object]:
     try:
         value = json.loads(payload.decode("utf-8"),
                            object_pairs_hook=_unique_object,
@@ -61,7 +68,7 @@ def _read_object_with_digest(path: Path) -> tuple[dict[str, object], str]:
         raise ValueError(f"{path}: {error}") from error
     if not isinstance(value, dict):
         raise ValueError(f"{path} must contain a JSON object")
-    return value, hashlib.sha256(payload).hexdigest()
+    return value
 
 
 def _atomic_create(path: Path, value: dict[str, object]) -> None:
@@ -127,11 +134,11 @@ def _fields(value: object, required: set[str], optional: set[str],
             name: str) -> None:
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be an object")
-    missing = required - value.keys()
-    unknown = value.keys() - required - optional
+    missing = required.difference(value)
     if missing:
         raise ValueError(
             f"{name} is missing fields: {', '.join(sorted(missing))}")
+    unknown = value.keys() - required - optional
     if unknown:
         raise ValueError(
             f"{name} has unknown fields: {', '.join(sorted(unknown))}")
@@ -248,7 +255,7 @@ def create_candidate(dataset: Path,
                                                str) or not model_digest:
         raise ValueError("dataset and model_digest are required")
     _names(joint_names, "joint names")
-    if not parameters or any(not name for name in parameters):
+    if not parameters or "" in parameters:
         raise ValueError("parameters must be a non-empty named object")
     if len(parameters) > 100000:
         raise ValueError("candidate must have at most 100000 parameters")

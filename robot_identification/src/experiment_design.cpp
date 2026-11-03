@@ -153,19 +153,24 @@ ExcitationDesignResult OptimizeExcitationDesign(const HarmonicDesign& initial,
                     for (double sign : {1., -1.}) {
                         if (result.evaluations == options.max_evaluations) break;
                         ++result.evaluations;
-                        HarmonicDesign candidate = result.design;
-                        auto& coefficients = kind == 0 ? candidate.sin_coefficients : candidate.cos_coefficients;
-                        coefficients(joint, harmonic) +=
-                            sign * step * half_range[joint] / static_cast<double>(seed.harmonic_count());
-                        if (!std::isfinite(coefficients(joint, harmonic))) continue;
-                        const auto trajectory = candidate.trajectory();
+                        auto& coefficient = (kind == 0 ? result.design.sin_coefficients
+                                                       : result.design.cos_coefficients)(joint, harmonic);
+                        const double original = coefficient;
+                        const double candidate =
+                            original + sign * step * half_range[joint] / static_cast<double>(seed.harmonic_count());
+                        if (!std::isfinite(candidate)) continue;
+                        coefficient = candidate;
+                        const auto trajectory = result.design.trajectory();
+                        // The trajectory owns its copies. Restore the incumbent
+                        // before evaluating, then retain only accepted changes.
+                        coefficient = original;
                         auto validation =
                             ValidateExcitationTrajectory(trajectory, limits, options.duration_seconds, period);
                         if (!validation.passed) continue;
                         ++result.feasible_evaluations;
                         const auto quality = EvaluateExcitationDesign(trajectory, backend, options);
                         if (Better(quality, result.quality, options.improvement_tolerance)) {
-                            result.design = std::move(candidate);
+                            coefficient = candidate;
                             result.quality = quality;
                             result.validation = std::move(validation);
                             ++result.accepted_steps;
