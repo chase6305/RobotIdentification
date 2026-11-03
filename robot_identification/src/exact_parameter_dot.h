@@ -23,8 +23,11 @@ constexpr bool kBinary64ParameterDot =
 // loss of a small residual. No allocation or nonstandard integer type is needed.
 class ParameterDotAccumulator {
     static constexpr int kUnitExponent = -2148;
-    static constexpr std::size_t kWords = (4196 + std::numeric_limits<Eigen::Index>::digits + 63) / 64;
-    using Words = std::array<std::uint64_t, kWords>;
+    static constexpr int kProductExponentLimit = 2048;
+    // Cover the product exponent span, then allow carry bits for the column count.
+    static constexpr std::size_t kWordCount =
+        (kProductExponentLimit - kUnitExponent + std::numeric_limits<Eigen::Index>::digits + 63) / 64;
+    using Words = std::array<std::uint64_t, kWordCount>;
     Words positive_{};
     Words negative_{};
 
@@ -104,7 +107,7 @@ public:
 
     double Rounded() const {
         int comparison = 0;
-        for (std::size_t index = kWords; index-- > 0;)
+        for (std::size_t index = kWordCount; index-- > 0;)
             if (positive_[index] != negative_[index]) {
                 comparison = positive_[index] > negative_[index] ? 1 : -1;
                 break;
@@ -114,13 +117,13 @@ public:
         const auto& smaller = comparison > 0 ? negative_ : positive_;
         Words magnitude;
         std::uint64_t borrow = 0;
-        for (std::size_t index = 0; index < kWords; ++index) {
+        for (std::size_t index = 0; index < kWordCount; ++index) {
             const auto subtrahend = smaller[index] + borrow;
             const bool wrapped = subtrahend < smaller[index];
             magnitude[index] = larger[index] - subtrahend;
             borrow = wrapped || larger[index] < subtrahend;
         }
-        std::size_t highest_word = kWords - 1;
+        std::size_t highest_word = kWordCount - 1;
         while (magnitude[highest_word] == 0) --highest_word;
         const int highest = static_cast<int>(highest_word * 64) + TopBit(magnitude[highest_word]);
         constexpr int maximum_bit = 1023 - kUnitExponent;
@@ -189,48 +192,55 @@ inline double ParameterDot(const Eigen::MatrixXd& mapping,
                            const Eigen::VectorXd& values,
                            bool use_wide_screen) {
     if (!use_wide_screen) return ExactParameterDot(mapping, row, values);
-    long double sum = 0.L, absolute_sum = 0.L, correction = 0.L, partial = 0.L;
+    long double wide_sum = 0.L;
+    long double absolute_product_sum = 0.L;
+    long double summation_correction = 0.L;
+    long double block_sum = 0.L;
     // Fixed small blocks reduce the serial compensation work without storing
     // extra vectors or changing the public object layout.
-    unsigned block_used = 0;
-    const auto merge = [&](long double value) {
-        long double left = sum, right = value;
+    constexpr unsigned kProductsPerBlock = 8;  // Fixed by the rounding-error bound below.
+    unsigned block_product_count = 0;
+    const auto merge_block = [&](long double value) {
+        long double left = wide_sum, right = value;
         if (std::abs(left) < std::abs(right)) std::swap(left, right);
-        sum = left + right;
-        correction += right - (sum - left);
+        wide_sum = left + right;
+        summation_correction += right - (wide_sum - left);
     };
-    Eigen::Index used = 0;
+    Eigen::Index nonzero_product_count = 0;
     double last_coefficient = 0., last_value = 0.;
+
     for (Eigen::Index column = 0; column < values.size(); ++column) {
         const double coefficient = mapping(row, column), value = values[column];
         if (coefficient == 0. || value == 0.) continue;
         const long double product = static_cast<long double>(coefficient) * value;
-        partial += product;
-        if (++block_used == 8) {
-            merge(partial);
-            partial = 0.L;
-            block_used = 0;
+        block_sum += product;
+        if (++block_product_count == kProductsPerBlock) {
+            merge_block(block_sum);
+            block_sum = 0.L;
+            block_product_count = 0;
         }
-        absolute_sum += std::abs(product);
-        ++used;
+        absolute_product_sum += std::abs(product);
+        ++nonzero_product_count;
         last_coefficient = coefficient;
         last_value = value;
     }
-    if (block_used != 0) merge(partial);
-    if (used == 0) return 0.;
-    if (used == 1 && (std::abs(last_coefficient) == 1. || std::abs(last_value) == 1.))
+
+    if (block_product_count != 0) merge_block(block_sum);
+    if (nonzero_product_count == 0) return 0.;
+    if (nonzero_product_count == 1 && (std::abs(last_coefficient) == 1. || std::abs(last_value) == 1.))
         return last_coefficient * last_value;
-    const long double count = static_cast<long double>(used);
-    if (count * count * std::numeric_limits<long double>::epsilon() <= 1.L / 32.L) {
-        // Each partial contains at most eight nonzero products. Its seven
+
+    const long double wide_product_count = static_cast<long double>(nonzero_product_count);
+    if (wide_product_count * wide_product_count * std::numeric_limits<long double>::epsilon() <= 1.L / 32.L) {
+        // Each block contains at most eight nonzero products. Its seven
         // additions contribute at most gamma_7 times their absolute sum.
-        // FastTwoSum compensates the partial merges. Including product error,
+        // FastTwoSum compensates the block merges. Including product error,
         // the count guard bounds the total by 10.2 wide unit roundoffs times
-        // absolute_sum; the sixteen-unit margin also covers inward-rounded
+        // absolute product sum; the sixteen-unit margin also covers inward-rounded
         // interval endpoints. Uncertain rows still use the exact accumulator.
-        const long double margin = (8.L * std::numeric_limits<long double>::epsilon()) * absolute_sum;
+        const long double margin = (8.L * std::numeric_limits<long double>::epsilon()) * absolute_product_sum;
         double result;
-        if (ScreenParameterDot(sum + correction, margin, result)) return result;
+        if (ScreenParameterDot(wide_sum + summation_correction, margin, result)) return result;
     }
     return ExactParameterDot(mapping, row, values);
 }

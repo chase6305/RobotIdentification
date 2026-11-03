@@ -156,22 +156,20 @@ def _inspect_stream(stream: TextIO, header: list[str],
             len(set(joint_names)) != len(joint_names)):
         raise ValueError(
             "position joint names must be unique, non-empty, and CSV-safe")
-    raw = len(header) == 1 + 2 * len(joint_names)
-    prefixes = ("tau/",) if raw else ("dq/", "ddq/", "tau/")
+    is_raw_dataset = len(header) == 1 + 2 * len(joint_names)
+    prefixes = ("tau/",) if is_raw_dataset else ("dq/", "ddq/", "tau/")
     expected_header = (
         ["time_s"] + q_columns +
         [prefix + name for prefix in prefixes for name in joint_names])
     if header != expected_header:
         raise ValueError("columns do not match the identification CSV contract")
-    kind = "raw" if raw else "processed"
-
     sample_count = 0
     first_time = 0.0
     previous_time = 0.0
     minimum_interval = math.inf
     maximum_interval = 0.0
     maximum_torque = [0.0] * len(joint_names)
-    torque_offset = 1 + len(joint_names) * (1 if kind == "raw" else 3)
+    torque_offset = 1 + len(joint_names) * (1 if is_raw_dataset else 3)
     for line_number, line in enumerate(stream, start=2):
         line = line.removesuffix(separator)
         if separator == "\n":
@@ -212,7 +210,7 @@ def _inspect_stream(stream: TextIO, header: list[str],
     if not math.isfinite(mean_rate):
         raise ValueError("dataset mean sample rate is non-finite")
     return {
-        "kind": kind,
+        "kind": "raw" if is_raw_dataset else "processed",
         "joint_names": joint_names,
         "sample_count": sample_count,
         "duration_s": duration,

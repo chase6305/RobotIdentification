@@ -45,10 +45,11 @@ def _json_float(value: str) -> float:
     if not math.isfinite(result):
         raise ValueError(
             f"JSON number exceeds the finite floating-point range: {value}")
-    # The JSON scanner has already checked the mantissa's numeric grammar.
+    # This number token's syntax is checked. After the sign, zeros and decimal point,
+    # only an exponent marker or an empty suffix can still denote a zero mantissa.
     if result == 0.0:
-        remainder = value.lstrip("-0.")
-        if remainder and remainder[0] not in "eE":
+        significant_suffix = value.lstrip("-0.")
+        if significant_suffix and significant_suffix[0] not in "eE":
             raise ValueError(f"nonzero JSON number underflows to zero: {value}")
     return result
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(robot_identification VERSION 0.2.13 LANGUAGES CXX)
+project(robot_identification VERSION 0.2.14 LANGUAGES CXX)
 
 option(ROBOT_IDENTIFICATION_BUILD_EXAMPLES "Build standalone identification examples" OFF)
 
@@ -7,7 +7,13 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(Eigen3 3.3.1 REQUIRED NO_MODULE)
 
-add_library(robot_identification src/identification.cpp src/base_parameters.cpp src/experiment_design.cpp)
+add_library(robot_identification
+  src/identification.cpp
+  src/data_validation.cpp
+  src/dataset_csv.cpp
+  src/solver.cpp
+  src/base_parameters.cpp
+  src/experiment_design.cpp)
 add_library(robot_identification::robot_identification ALIAS robot_identification)
 target_compile_features(robot_identification PUBLIC cxx_std_17)
 target_link_libraries(robot_identification PUBLIC Eigen3::Eigen)

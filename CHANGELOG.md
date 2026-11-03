@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Core 0.2.14 separates weighted/robust solving, diagnostics and covariance into
+  `solver.cpp`, and CSV parsing/writing into `dataset_csv.cpp`. Put shared data
+  contracts in `data_validation.cpp` so I/O and solvers avoid unrelated trajectory
+  code. Make base/full column coordinates, trial coefficients and step
+  fractions explicit; iterate sine/cosine matrices directly and reserve the
+  base-parameter name cache once. Numerical expressions and public APIs remain
+  compatible.
+- Recorder 0.2.3 separates CSV encoding from durable writes and state commit,
+  with explicit ordering and failure-state comments. The scalar hybrid demo
+  names physical quantities, units, parameter indices and integration modes.
+
 - Core 0.2.13 factors its private calibration scratch in place, avoiding a
   second full matrix in QR, and reserves final actuator parameter names instead
   of constructing temporary prefixes. Public headers and numerical behavior

@@ -97,6 +97,29 @@ class RawJointStateSession:
         self.rejected_count += 1
         return reason
 
+    def _encode_csv_sample(
+        self,
+        names: tuple[str, ...],
+        position: Sequence[float],
+        effort: Sequence[float],
+        joint_order: tuple[int, ...],
+        elapsed_seconds: float,
+    ) -> bytes:
+        """Return CSV bytes, including the header before the first accepted sample.
+
+        joint_order gives incoming-array indices in output joint order.
+        """
+        fields = [f"{elapsed_seconds:.17g}"]
+        fields.extend(f"{position[offset]:.17g}" for offset in joint_order)
+        fields.extend(f"{effort[offset]:.17g}" for offset in joint_order)
+        row = ",".join(fields) + "\n"
+        if self.sample_count == 0:
+            joints = self._joint_names or names
+            header = (["time_s"] + [f"q/{name}" for name in joints] +
+                      [f"tau/{name}" for name in joints])
+            row = ",".join(header) + "\n" + row
+        return row.encode("utf-8")
+
     def append(self, names: Sequence[str], position: Sequence[float],
                effort: Sequence[float]) -> str | None:
         """Write a valid sample, or return its rejection reason without writing."""
@@ -105,12 +128,13 @@ class RawJointStateSession:
         if isinstance(names, (str, bytes)):
             return self._reject("joint names must be a sequence of names")
         names = tuple(names)
-        if not names or len(position) != len(names) or len(effort) != len(
-                names):
+        if (not names or len(position) != len(names) or
+                len(effort) != len(names)):
             return self._reject(
                 "name/position/effort dimensions are inconsistent")
+
         if names == self._incoming_names:
-            order = self._order
+            joint_order = self._order
         else:
             index = _name_index(names)
             if index is None:
@@ -119,10 +143,11 @@ class RawJointStateSession:
             if self._joint_names and len(names) != len(self._joint_names):
                 return self._reject("joint set changed during the session")
             try:
-                order = tuple(
+                joint_order = tuple(
                     index[name] for name in (self._joint_names or names))
             except KeyError:
                 return self._reject("joint set changed during the session")
+
         try:
             finite = (all(math.isfinite(value) for value in position) and
                       all(math.isfinite(value) for value in effort))
@@ -131,31 +156,28 @@ class RawJointStateSession:
         if not finite:
             return self._reject(
                 "position or effort contains a non-finite value")
-        sample_ns = time.monotonic_ns()
-        elapsed = (sample_ns - self._start_ns) * 1e-9
-        if sample_ns <= self._last_sample_ns or elapsed <= self._last_elapsed:
+
+        sample_time_ns = time.monotonic_ns()
+        elapsed_seconds = (sample_time_ns - self._start_ns) * 1e-9
+        if (sample_time_ns <= self._last_sample_ns or
+                elapsed_seconds <= self._last_elapsed):
             return self._reject("monotonic timestamp did not advance")
-        fields = [f"{elapsed:.17g}"]
-        fields.extend(f"{position[offset]:.17g}" for offset in order)
-        fields.extend(f"{effort[offset]:.17g}" for offset in order)
-        row = ",".join(fields) + "\n"
-        if self.sample_count == 0:
-            joints = self._joint_names or names
-            header = (["time_s"] + [f"q/{name}" for name in joints] +
-                      [f"tau/{name}" for name in joints])
-            row = ",".join(header) + "\n" + row
-        payload = row.encode("utf-8")
+
+        payload = self._encode_csv_sample(names, position, effort, joint_order,
+                                          elapsed_seconds)
         try:
             if self._stream.write(payload) != len(payload):
                 raise OSError("incomplete dataset write")
             if (self.sample_count + 1) % self._flush_interval == 0:
                 self._stream.flush()
+            # Commit digest, order, clock and count only after the write
+            # and any scheduled flush have succeeded.
             self._digest.update(payload)
             self._joint_names = self._joint_names or names
             self._incoming_names = names
-            self._order = order
-            self._last_sample_ns = sample_ns
-            self._last_elapsed = elapsed
+            self._order = joint_order
+            self._last_sample_ns = sample_time_ns
+            self._last_elapsed = elapsed_seconds
             self.sample_count += 1
         except BaseException:
             # A failed or interrupted write may have persisted only part of a row.

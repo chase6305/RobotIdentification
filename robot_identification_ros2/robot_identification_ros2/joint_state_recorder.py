@@ -14,7 +14,7 @@ from robot_identification_ros2.raw_joint_state_session import RawJointStateSessi
 
 
 class JointStateRecorder(Node):
-    """Non-real-time recorder that never changes robot control state."""
+    """Own ROS subscription/lifecycle; the session validates and stores samples."""
 
     def __init__(self) -> None:
         super().__init__("robot_identification_recorder")

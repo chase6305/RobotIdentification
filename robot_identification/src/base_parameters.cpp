@@ -38,30 +38,35 @@ BaseParameterBasis::BaseParameterBasis(const Eigen::MatrixXd& calibration, doubl
         throw std::invalid_argument("base parameter rank tolerance must be in (0, 1)");
     ValidateRegressor(calibration, calibration.cols());
     column_scales_ = calibration.cwiseAbs().colwise().maxCoeff().transpose();
-    Eigen::MatrixXd normalized = calibration;
-    for (Eigen::Index column = 0; column < normalized.cols(); ++column)
-        if (column_scales_[column] != 0.) normalized.col(column) /= column_scales_[column];
-    // Factor the private scratch in place; normalized outlives the decomposition.
-    Eigen::ColPivHouseholderQR<Eigen::Ref<Eigen::MatrixXd>> qr(normalized);
+    Eigen::MatrixXd qr_storage = calibration;
+    for (Eigen::Index column = 0; column < qr_storage.cols(); ++column)
+        if (column_scales_[column] != 0.) qr_storage.col(column) /= column_scales_[column];
+    // QR borrows this normalized copy; the caller's calibration is never modified.
+    // Declare storage before the decomposition so it remains alive until QR is destroyed.
+    Eigen::ColPivHouseholderQR<Eigen::Ref<Eigen::MatrixXd>> qr(qr_storage);
     qr.setThreshold(tolerance);
     const Eigen::Index rank = qr.rank();
     if (rank == 0) throw std::invalid_argument("calibration regressor has no identifiable parameter directions");
-    const auto& permutation = qr.colsPermutation().indices();
+    const auto& column_permutation = qr.colsPermutation().indices();
     selected_columns_.reserve(static_cast<std::size_t>(rank));
     full_to_base_ = Eigen::MatrixXd::Zero(rank, calibration.cols());
-    for (Eigen::Index index = 0; index < rank; ++index) {
-        selected_columns_.push_back(static_cast<std::size_t>(permutation[index]));
-        full_to_base_(index, permutation[index]) = column_scales_[permutation[index]];
+    for (Eigen::Index base_column = 0; base_column < rank; ++base_column) {
+        const Eigen::Index full_column = column_permutation[base_column];
+        selected_columns_.push_back(static_cast<std::size_t>(full_column));
+        full_to_base_(base_column, full_column) = column_scales_[full_column];
     }
+    // R11 * dependencies = R12 relates normalized dependent and selected columns.
     if (rank < calibration.cols()) {
-        const Eigen::MatrixXd dependencies = qr.matrixR()
-                                                 .topLeftCorner(rank, rank)
-                                                 .template triangularView<Eigen::Upper>()
-                                                 .solve(qr.matrixR().topRightCorner(rank, calibration.cols() - rank));
+        const Eigen::MatrixXd normalized_dependencies =
+            qr.matrixR()
+                .topLeftCorner(rank, rank)
+                .template triangularView<Eigen::Upper>()
+                .solve(qr.matrixR().topRightCorner(rank, calibration.cols() - rank));
         for (Eigen::Index column = rank; column < calibration.cols(); ++column)
             for (Eigen::Index row = 0; row < rank; ++row)
-                full_to_base_(row, permutation[column]) = CheckedConversion(
-                    static_cast<long double>(dependencies(row, column - rank)) * column_scales_[permutation[column]]);
+                full_to_base_(row, column_permutation[column]) =
+                    CheckedConversion(static_cast<long double>(normalized_dependencies(row, column - rank)) *
+                                      column_scales_[column_permutation[column]]);
     }
     calibration_error_ = ReconstructionError(calibration);
 }
@@ -75,96 +80,106 @@ const Eigen::VectorXd& BaseParameterBasis::column_scales() const noexcept { retu
 const Eigen::MatrixXd& BaseParameterBasis::full_to_base() const noexcept { return full_to_base_; }
 double BaseParameterBasis::calibration_error() const noexcept { return calibration_error_; }
 
-double BaseParameterBasis::ReconstructionError(const Eigen::MatrixXd& values) const {
-    ValidateRegressor(values, column_scales_.size());
+double BaseParameterBasis::ReconstructionError(const Eigen::MatrixXd& regressor) const {
+    ValidateRegressor(regressor, column_scales_.size());
     // Selected columns are exact identities in the learned mapping. Replaying
     // normalization and multiplication can introduce a spurious wide residual.
     if (parameter_count() == full_parameter_count()) return 0.;
     if ((column_scales_.array() != 0.).count() == full_to_base_.rows()) {
         // All nonzero calibration columns are independent. Only zero-column
-        // dependencies remain, with exact error zero or one. Check nonzero
+        // dependencies remain, with exact relative error zero or one. Check nonzero
         // entries directly so subnormal values cannot vanish in a norm.
-        for (Eigen::Index column = 0; column < values.cols(); ++column)
-            if (column_scales_[column] == 0. && (values.col(column).array() != 0.).any()) return 1.;
+        for (Eigen::Index column = 0; column < regressor.cols(); ++column)
+            if (column_scales_[column] == 0. && (regressor.col(column).array() != 0.).any()) return 1.;
         return 0.;
     }
-    Eigen::VectorXd divisors = column_scales_;
+
+    Eigen::VectorXd column_divisors = column_scales_;
+    constexpr double kSelectedColumnMarker = -1.;
     // Divisors are nonnegative. Reuse negative entries to mark selected
     // identities instead of allocating a separate per-call bitmap.
-    for (const auto column : selected_columns_) divisors[static_cast<Eigen::Index>(column)] = -1.;
-    for (Eigen::Index column = 0; column < values.cols(); ++column) {
-        if (divisors[column] < 0.) continue;
-        divisors[column] = std::max(divisors[column], values.col(column).cwiseAbs().maxCoeff());
-        if (divisors[column] == 0.) divisors[column] = 1.;
+    for (const auto column : selected_columns_)
+        column_divisors[static_cast<Eigen::Index>(column)] = kSelectedColumnMarker;
+    for (Eigen::Index column = 0; column < regressor.cols(); ++column) {
+        if (column_divisors[column] < 0.) continue;
+        column_divisors[column] = std::max(column_divisors[column], regressor.col(column).cwiseAbs().maxCoeff());
+        if (column_divisors[column] == 0.) column_divisors[column] = 1.;
     }
+
     // Bound extended-precision scratch independently of calibration size.
-    // An odd row count avoids the 4 KiB column stride of 256 extended values
+    // An odd row count avoids the 4 KiB column stride of 256 long doubles
     // on common platforms, while keeping the same per-row accumulation order.
-    const Eigen::Index block_rows = std::min<Eigen::Index>(values.rows(), 255);
-    Eigen::Matrix<long double, Eigen::Dynamic, Eigen::Dynamic> normalized(block_rows, full_to_base_.rows());
-    long double maximum_error = 0.L;
-    for (Eigen::Index begin = 0; begin < values.rows();) {
-        const Eigen::Index count = std::min(block_rows, values.rows() - begin);
-        for (Eigen::Index base = 0; base < full_to_base_.rows(); ++base) {
-            const auto selected = static_cast<Eigen::Index>(selected_columns_[static_cast<std::size_t>(base)]);
-            for (Eigen::Index row = 0; row < count; ++row)
-                normalized(row, base) =
-                    static_cast<long double>(values(begin + row, selected)) / column_scales_[selected];
+    const Eigen::Index rows_per_block = std::min<Eigen::Index>(regressor.rows(), 255);
+    Eigen::Matrix<long double, Eigen::Dynamic, Eigen::Dynamic> normalized_basis(rows_per_block, full_to_base_.rows());
+
+    long double maximum_relative_error = 0.L;
+    for (Eigen::Index block_start = 0; block_start < regressor.rows();) {
+        const Eigen::Index block_row_count = std::min(rows_per_block, regressor.rows() - block_start);
+        for (Eigen::Index base_column = 0; base_column < full_to_base_.rows(); ++base_column) {
+            const auto selected_column =
+                static_cast<Eigen::Index>(selected_columns_[static_cast<std::size_t>(base_column)]);
+            for (Eigen::Index row = 0; row < block_row_count; ++row)
+                normalized_basis(row, base_column) =
+                    static_cast<long double>(regressor(block_start + row, selected_column)) /
+                    column_scales_[selected_column];
         }
-        for (Eigen::Index column = 0; column < values.cols(); ++column) {
-            if (divisors[column] < 0.) continue;
-            const long double divisor = divisors[column];
-            long double maximum_difference = 0.L;
-            const auto observe = [&](Eigen::Index row, long double reconstructed) {
-                const long double difference = std::abs(reconstructed - values(begin + row, column));
-                if (difference > maximum_difference)
-                    maximum_difference = difference;
+        for (Eigen::Index column = 0; column < regressor.cols(); ++column) {
+            if (column_divisors[column] < 0.) continue;
+            const long double column_divisor = column_divisors[column];
+            long double maximum_absolute_difference = 0.L;
+            const auto accumulate_difference = [&](Eigen::Index row, long double reconstructed) {
+                const long double difference = std::abs(reconstructed - regressor(block_start + row, column));
+                if (difference > maximum_absolute_difference)
+                    maximum_absolute_difference = difference;
                 else if (std::isnan(difference))
                     return false;
                 return true;
             };
             // Reuse each coefficient for two adjacent rows. Each row keeps
-            // the original increasing-base multiplication/addition order.
+            // the same multiplication/addition order over increasing base columns.
             Eigen::Index row = 0;
-            for (; row + 1 < count; row += 2) {
-                long double first = 0.L, second = 0.L;
-                for (Eigen::Index base = 0; base < full_to_base_.rows(); ++base) {
-                    const long double coefficient = full_to_base_(base, column);
-                    first += normalized(row, base) * coefficient;
-                    second += normalized(row + 1, base) * coefficient;
+            for (; row + 1 < block_row_count; row += 2) {
+                long double first_reconstruction = 0.L, second_reconstruction = 0.L;
+                for (Eigen::Index base_column = 0; base_column < full_to_base_.rows(); ++base_column) {
+                    const long double coefficient = full_to_base_(base_column, column);
+                    first_reconstruction += normalized_basis(row, base_column) * coefficient;
+                    second_reconstruction += normalized_basis(row + 1, base_column) * coefficient;
                 }
-                if (!observe(row, first) || !observe(row + 1, second)) return std::numeric_limits<double>::infinity();
+                if (!accumulate_difference(row, first_reconstruction) ||
+                    !accumulate_difference(row + 1, second_reconstruction))
+                    return std::numeric_limits<double>::infinity();
             }
-            if (row < count) {
+            if (row < block_row_count) {
                 long double reconstructed = 0.L;
-                for (Eigen::Index base = 0; base < full_to_base_.rows(); ++base)
-                    reconstructed += normalized(row, base) * full_to_base_(base, column);
-                if (!observe(row, reconstructed)) return std::numeric_limits<double>::infinity();
+                for (Eigen::Index base_column = 0; base_column < full_to_base_.rows(); ++base_column)
+                    reconstructed += normalized_basis(row, base_column) * full_to_base_(base_column, column);
+                if (!accumulate_difference(row, reconstructed)) return std::numeric_limits<double>::infinity();
             }
             // The divisor is fixed within this column/block. Division and
             // the one-wide-step boundary correction are monotone in a
             // nonnegative residual, so only its maximum needs conversion.
-            const long double difference = maximum_difference;
-            long double error = difference / divisor;
-            if (!std::isfinite(error)) return std::numeric_limits<double>::infinity();
-            if (error >= maximum_error && difference != 0.L) {
+            const long double difference = maximum_absolute_difference;
+            long double relative_error = difference / column_divisor;
+            if (!std::isfinite(relative_error)) return std::numeric_limits<double>::infinity();
+            if (relative_error >= maximum_relative_error && difference != 0.L) {
                 // A wide quotient can land exactly on a double boundary
                 // while its exact ratio is slightly larger. Only such
                 // candidates need the fused division-residual check.
-                if (error <= std::numeric_limits<double>::max() &&
-                    static_cast<long double>(static_cast<double>(error)) == error &&
-                    std::fma(-error, divisor, difference) > 0.L)
-                    error = std::nextafter(error, std::numeric_limits<long double>::infinity());
-                maximum_error = error;
+                if (relative_error <= std::numeric_limits<double>::max() &&
+                    static_cast<long double>(static_cast<double>(relative_error)) == relative_error &&
+                    std::fma(-relative_error, column_divisor, difference) > 0.L)
+                    relative_error = std::nextafter(relative_error, std::numeric_limits<long double>::infinity());
+                maximum_relative_error = relative_error;
             }
         }
-        begin += count;
+        block_start += block_row_count;
     }
-    if (maximum_error > std::numeric_limits<double>::max()) return std::numeric_limits<double>::infinity();
-    const double rounded = static_cast<double>(maximum_error);
+
+    if (maximum_relative_error > std::numeric_limits<double>::max()) return std::numeric_limits<double>::infinity();
+    const double rounded = static_cast<double>(maximum_relative_error);
     // Do not hide a positive residual at zero or round a value down to the
     // caller's tolerance when converting the wide maximum to double.
-    return static_cast<long double>(rounded) < maximum_error
+    return static_cast<long double>(rounded) < maximum_relative_error
                ? std::nextafter(rounded, std::numeric_limits<double>::infinity())
                : rounded;
 }
@@ -228,13 +243,16 @@ BaseParameterRegressor::BaseParameterRegressor(std::shared_ptr<const RegressorBa
     if (!backend_ || backend_->parameter_count() != basis_.full_parameter_count() ||
         basis_.calibration_error() > tolerance)
         throw std::invalid_argument("backend does not match the calibrated base parameter basis");
-    const auto names = backend_->parameter_names();
-    std::vector<std::string_view> sorted(names.begin(), names.end());
-    std::sort(sorted.begin(), sorted.end());
-    if (names.size() != backend_->parameter_count() || sorted.empty() || sorted.front().empty() ||
-        std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end())
+    const auto full_parameter_names = backend_->parameter_names();
+    std::vector<std::string_view> sorted_name_views(full_parameter_names.begin(), full_parameter_names.end());
+    std::sort(sorted_name_views.begin(), sorted_name_views.end());
+    if (full_parameter_names.size() != backend_->parameter_count() || sorted_name_views.empty() ||
+        sorted_name_views.front().empty() ||
+        std::adjacent_find(sorted_name_views.begin(), sorted_name_views.end()) != sorted_name_views.end())
         throw std::invalid_argument("base parameter backend names are invalid");
-    for (const auto column : basis_.selected_columns()) parameter_names_.push_back("base/" + names[column]);
+    parameter_names_.reserve(basis_.parameter_count());
+    for (const auto full_column : basis_.selected_columns())
+        parameter_names_.push_back("base/" + full_parameter_names[full_column]);
 }
 
 std::size_t BaseParameterRegressor::parameter_count() const noexcept { return basis_.parameter_count(); }

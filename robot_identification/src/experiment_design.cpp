@@ -3,6 +3,7 @@
 #include <Eigen/SVD>
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -37,7 +38,9 @@ double ValidateOptions(const ExcitationDesignOptions& options, std::size_t dof, 
     return period;
 }
 
-bool Better(const ExcitationDesignQuality& candidate, const ExcitationDesignQuality& current, double tolerance) {
+bool IsBetterDesign(const ExcitationDesignQuality& candidate,
+                    const ExcitationDesignQuality& current,
+                    double tolerance) {
     if (candidate.rank != current.rank) return candidate.rank > current.rank;
     return candidate.mean_log_information > current.mean_log_information + tolerance;
 }
@@ -131,58 +134,64 @@ ExcitationDesignResult OptimizeExcitationDesign(const HarmonicDesign& initial,
                                                 const RegressorBackend& backend,
                                                 const ExcitationDesignOptions& options) {
     const auto seed = initial.trajectory();
-    const double period = ValidateOptions(options, seed.dof(), backend.parameter_count());
+    const double sample_period = ValidateOptions(options, seed.dof(), backend.parameter_count());
     ExcitationDesignResult result;
     result.design = initial;
-    result.validation = ValidateExcitationTrajectory(seed, limits, options.duration_seconds, period);
+    result.validation = ValidateExcitationTrajectory(seed, limits, options.duration_seconds, sample_period);
     if (!result.validation.passed)
         throw std::invalid_argument("initial excitation design violates the configured limits");
     result.initial_quality = result.quality = EvaluateExcitationDesign(seed, backend, options);
     result.evaluations = result.feasible_evaluations = 1;
-    double step = options.initial_step_fraction;
-    const Eigen::VectorXd half_range = .5 * limits.maximum_position - .5 * limits.minimum_position;
-    if ((half_range.array() <= 0.).any() || !half_range.allFinite())
+    double step_fraction = options.initial_step_fraction;
+    const Eigen::VectorXd position_half_ranges = .5 * limits.maximum_position - .5 * limits.minimum_position;
+    if ((position_half_ranges.array() <= 0.).any() || !position_half_ranges.allFinite())
         throw std::invalid_argument("excitation design position range is not representable");
-    while (step >= options.minimum_step_fraction && result.evaluations < options.max_evaluations) {
+    const double harmonic_count = static_cast<double>(seed.harmonic_count());
+
+    while (step_fraction >= options.minimum_step_fraction && result.evaluations < options.max_evaluations) {
         bool improved = false;
-        for (int kind = 0; kind < 2 && result.evaluations < options.max_evaluations; ++kind)
+        for (auto* coefficients : {&result.design.sin_coefficients, &result.design.cos_coefficients}) {
+            if (result.evaluations == options.max_evaluations) break;
             for (Eigen::Index harmonic = 0;
-                 harmonic < initial.sin_coefficients.cols() && result.evaluations < options.max_evaluations; ++harmonic)
+                 harmonic < initial.sin_coefficients.cols() && result.evaluations < options.max_evaluations;
+                 ++harmonic) {
                 for (Eigen::Index joint = 0;
-                     joint < initial.offset.size() && result.evaluations < options.max_evaluations; ++joint)
+                     joint < initial.offset.size() && result.evaluations < options.max_evaluations; ++joint) {
                     for (double sign : {1., -1.}) {
                         if (result.evaluations == options.max_evaluations) break;
                         ++result.evaluations;
-                        auto& coefficient = (kind == 0 ? result.design.sin_coefficients
-                                                       : result.design.cos_coefficients)(joint, harmonic);
-                        const double original = coefficient;
-                        const double candidate =
-                            original + sign * step * half_range[joint] / static_cast<double>(seed.harmonic_count());
-                        if (!std::isfinite(candidate)) continue;
-                        coefficient = candidate;
-                        const auto trajectory = result.design.trajectory();
-                        // The trajectory owns its copies. Restore the incumbent
+                        auto& coefficient = (*coefficients)(joint, harmonic);
+                        const double original_coefficient = coefficient;
+                        const double trial_coefficient =
+                            original_coefficient + sign * step_fraction * position_half_ranges[joint] / harmonic_count;
+                        if (!std::isfinite(trial_coefficient)) continue;
+                        coefficient = trial_coefficient;
+                        const auto trial_trajectory = result.design.trajectory();
+                        // The trial trajectory owns its copies. Restore the incumbent
                         // before evaluating, then retain only accepted changes.
-                        coefficient = original;
-                        auto validation =
-                            ValidateExcitationTrajectory(trajectory, limits, options.duration_seconds, period);
-                        if (!validation.passed) continue;
+                        coefficient = original_coefficient;
+                        auto trial_validation = ValidateExcitationTrajectory(trial_trajectory, limits,
+                                                                             options.duration_seconds, sample_period);
+                        if (!trial_validation.passed) continue;
                         ++result.feasible_evaluations;
-                        const auto quality = EvaluateExcitationDesign(trajectory, backend, options);
-                        if (Better(quality, result.quality, options.improvement_tolerance)) {
-                            coefficient = candidate;
-                            result.quality = quality;
-                            result.validation = std::move(validation);
+                        const auto trial_quality = EvaluateExcitationDesign(trial_trajectory, backend, options);
+                        if (IsBetterDesign(trial_quality, result.quality, options.improvement_tolerance)) {
+                            coefficient = trial_coefficient;
+                            result.quality = trial_quality;
+                            result.validation = std::move(trial_validation);
                             ++result.accepted_steps;
                             improved = true;
                         }
                     }
+                }
+            }
+        }
         // A budget-truncated poll did not test all coordinate directions.
         // It cannot justify shrinking the step or declaring convergence.
-        if (!improved && result.evaluations < options.max_evaluations) step *= options.step_contraction;
+        if (!improved && result.evaluations < options.max_evaluations) step_fraction *= options.step_contraction;
     }
-    result.final_step_fraction = step;
-    result.converged = step < options.minimum_step_fraction;
+    result.final_step_fraction = step_fraction;
+    result.converged = step_fraction < options.minimum_step_fraction;
     return result;
 }
 }  // namespace robot_identification

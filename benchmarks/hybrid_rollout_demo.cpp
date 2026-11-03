@@ -10,156 +10,205 @@
 #include <vector>
 
 namespace {
-constexpr double kPeriod = 0.005, kP = 12., kD = .18, kLoad = .4;
-using Parameters = Eigen::Vector4d;  // J [kg m^2], D [Nm s/rad], residual weights [Nm].
+constexpr double kControlPeriodSeconds = 0.005;
+constexpr double kPdPositionGain = 12.;  // Nm/rad: calibrated position feedback.
+constexpr double kPdVelocityGain = .18;  // Nm s/rad: calibrated velocity feedback, separate from plant damping.
+constexpr double kLoadTorque = .4;       // Nm: known opposing load.
+constexpr int kInertiaIndex = 0, kViscousDampingIndex = 1;
+constexpr int kPhysicalParameterCount = 2, kResidualFeatureCount = 2;
+constexpr int kParameterCount = kPhysicalParameterCount + kResidualFeatureCount;
+constexpr int kExactReferenceSubsteps = 0, kFittingSubsteps = 4;
+using ModelParameters = Eigen::Vector4d;  // Inertia [kg m^2], viscous damping [Nm s/rad], residual weights [Nm].
+
 struct State {
-    double q, v;
+    double position;  // rad
+    double velocity;  // rad/s
 };
 struct Sequence {
-    std::vector<double> command;
-    std::vector<State> observed;
+    std::vector<double> target_positions;  // rad, one command per control period.
+    std::vector<State> observed_states;
 };
-struct History {
-    std::array<double, 2> error{}, velocity{};
-    Eigen::Vector2d Observe(double e, double v) {
+struct ResidualFeatureHistory {
+    std::array<double, 2> position_errors{}, velocities{};
+    Eigen::Vector2d Observe(double position_error, double velocity) {
         // Inputs are normalized by 1 rad and 1 rad/s; hidden weights are fixed.
         const Eigen::Vector2d features(
-            std::tanh(3. * e + .4 * error[0] - .2 * error[1] + .08 * v - .04 * velocity[0] + .02 * velocity[1]),
-            std::tanh(2. * (e - error[1]) + .12 * (v - velocity[1])));
-        error = {e, error[0]};
-        velocity = {v, velocity[0]};
+            std::tanh(3. * position_error + .4 * position_errors[0] - .2 * position_errors[1] + .08 * velocity -
+                      .04 * velocities[0] + .02 * velocities[1]),
+            std::tanh(2. * (position_error - position_errors[1]) + .12 * (velocity - velocities[1])));
+        // Shift only after computing both features from the same two previous periods.
+        position_errors = {position_error, position_errors[0]};
+        velocities = {velocity, velocities[0]};
         return features;
     }
 };
 
-std::vector<State> Rollout(const Parameters& p, const std::vector<double>& command, State state, int substeps) {
-    std::vector<State> states{state};
-    states.reserve(command.size() + 1);
-    History history;
-    for (double target : command) {
-        const double error = target - state.q;
-        const double held_torque = kP * error - kD * state.v + p.tail<2>().dot(history.Observe(error, state.v)) - kLoad;
-        if (substeps == 0) {
-            // Independent exact solution with constant torque held for one controller period.
-            const double factor = -std::expm1(-p[1] * kPeriod / p[0]);
-            const double integral = p[0] * factor / p[1];
-            state.q += integral * state.v + held_torque / p[1] * (kPeriod - integral);
-            state.v = (1. - factor) * state.v + held_torque * factor / p[1];
+std::vector<State> Rollout(const ModelParameters& parameters,
+                           const std::vector<double>& target_positions,
+                           State state,
+                           int substeps) {
+    const double inertia = parameters[kInertiaIndex];
+    const double viscous_damping = parameters[kViscousDampingIndex];
+    std::vector<State> predicted_states{state};
+    predicted_states.reserve(target_positions.size() + 1);
+    ResidualFeatureHistory history;
+    for (double target_position : target_positions) {
+        const double position_error = target_position - state.position;
+        // Sample PD feedback and residual once per control period; hold this torque across all substeps.
+        // Plant viscous damping is applied by the integrator, separately from the PD velocity gain.
+        const double held_torque =
+            kPdPositionGain * position_error - kPdVelocityGain * state.velocity +
+            parameters.tail<kResidualFeatureCount>().dot(history.Observe(position_error, state.velocity)) - kLoadTorque;
+        if (substeps == kExactReferenceSubsteps) {
+            // Independent exact solution for the positive-damping synthetic reference, with held input torque.
+            const double decay_fraction = -std::expm1(-viscous_damping * kControlPeriodSeconds / inertia);
+            const double decay_integral_seconds = inertia * decay_fraction / viscous_damping;
+            // Integrate position from the old velocity before updating velocity.
+            state.position += decay_integral_seconds * state.velocity +
+                              held_torque / viscous_damping * (kControlPeriodSeconds - decay_integral_seconds);
+            state.velocity = (1. - decay_fraction) * state.velocity + held_torque * decay_fraction / viscous_damping;
         } else {
-            const double h = kPeriod / substeps;
+            const double substep_seconds = kControlPeriodSeconds / substeps;
             for (int step = 0; step < substeps; ++step) {
-                state.v = (p[0] * state.v + h * held_torque) / (p[0] + h * p[1]);
-                state.q += h * state.v;
+                // Backward-Euler velocity: J*(v_next-v)/h + B*v_next = held_torque.
+                // Advance position with the updated velocity (semi-implicit position step).
+                state.velocity = (inertia * state.velocity + substep_seconds * held_torque) /
+                                 (inertia + substep_seconds * viscous_damping);
+                state.position += substep_seconds * state.velocity;
             }
         }
-        if (!std::isfinite(state.q) || !std::isfinite(state.v)) throw std::runtime_error("non-finite rollout");
-        states.push_back(state);
+        if (!std::isfinite(state.position) || !std::isfinite(state.velocity))
+            throw std::runtime_error("non-finite rollout");
+        predicted_states.push_back(state);
     }
-    return states;
+    return predicted_states;
 }
 
-Sequence MakeSequence(const Parameters& truth, int variant, bool noisy) {
-    Sequence data;
-    for (int i = 0; i < 1200; ++i) {
-        const double t = i * kPeriod;
-        data.command.push_back(.18 * std::sin((1.7 + .7 * variant) * t + .2 * variant) +
-                               .12 * std::sin((5.3 + 1.1 * variant) * t));
+Sequence MakeSequence(const ModelParameters& true_parameters, int trajectory_variant, bool add_measurement_noise) {
+    Sequence sequence;
+    for (int sample_index = 0; sample_index < 1200; ++sample_index) {
+        const double time_seconds = sample_index * kControlPeriodSeconds;
+        sequence.target_positions.push_back(
+            .18 * std::sin((1.7 + .7 * trajectory_variant) * time_seconds + .2 * trajectory_variant) +
+            .12 * std::sin((5.3 + 1.1 * trajectory_variant) * time_seconds));
     }
-    data.observed = Rollout(truth, data.command, {.1 * variant, 0.}, 0);
-    if (noisy)
-        for (std::size_t i = 0; i < data.observed.size(); ++i) {
-            data.observed[i].q += .0002 * std::sin(1.618 * i + variant);
-            data.observed[i].v += .003 * std::cos(2.17 * i + variant);
+    sequence.observed_states =
+        Rollout(true_parameters, sequence.target_positions, {.1 * trajectory_variant, 0.}, kExactReferenceSubsteps);
+    if (add_measurement_noise)
+        for (std::size_t sample_index = 0; sample_index < sequence.observed_states.size(); ++sample_index) {
+            sequence.observed_states[sample_index].position +=
+                .0002 * std::sin(1.618 * sample_index + trajectory_variant);
+            sequence.observed_states[sample_index].velocity +=
+                .003 * std::cos(2.17 * sample_index + trajectory_variant);
         }
-    return data;
+    return sequence;
 }
 
-bool Admissible(const Parameters& p) {
-    return p.allFinite() && p[0] >= .02 && p[0] <= .3 && p[1] >= 0. && p[1] <= 1. &&
-           p.tail<2>().cwiseAbs().maxCoeff() <= 2.;
+bool Admissible(const ModelParameters& parameters) {
+    return parameters.allFinite() && parameters[kInertiaIndex] >= .02 && parameters[kInertiaIndex] <= .3 &&
+           parameters[kViscousDampingIndex] >= 0. && parameters[kViscousDampingIndex] <= 1. &&
+           parameters.tail<kResidualFeatureCount>().cwiseAbs().maxCoeff() <= 2.;
 }
 
-double Loss(const Parameters& p, const std::vector<Sequence>& sequences, int substeps) {
-    if (!Admissible(p)) return std::numeric_limits<double>::infinity();
-    double error = 0.;
-    std::size_t count = 0;
-    for (const auto& data : sequences) {
-        const auto states = Rollout(p, data.command, data.observed.front(), substeps);
-        for (std::size_t i = 1; i < states.size(); ++i) {
-            // Normalize q by 1 rad and v by 10 rad/s before combining errors.
-            error +=
-                std::pow(states[i].q - data.observed[i].q, 2) + .01 * std::pow(states[i].v - data.observed[i].v, 2);
-            ++count;
+double TrajectoryLoss(const ModelParameters& parameters, const std::vector<Sequence>& sequences, int substeps) {
+    if (!Admissible(parameters)) return std::numeric_limits<double>::infinity();
+    double squared_error = 0.;
+    std::size_t sample_count = 0;
+    for (const auto& sequence : sequences) {
+        const auto predicted_states =
+            Rollout(parameters, sequence.target_positions, sequence.observed_states.front(), substeps);
+        for (std::size_t sample_index = 1; sample_index < predicted_states.size(); ++sample_index) {
+            const auto& predicted = predicted_states[sample_index];
+            const auto& observed = sequence.observed_states[sample_index];
+            // Normalize position by 1 rad and velocity by 10 rad/s before combining errors.
+            squared_error += std::pow(predicted.position - observed.position, 2) +
+                             .01 * std::pow(predicted.velocity - observed.velocity, 2);
+            ++sample_count;
         }
     }
-    return error / count;
+    return squared_error / sample_count;
 }
 
-Parameters Initialize(const std::vector<Sequence>& sequences) {
-    std::size_t rows = 0;
-    for (const auto& data : sequences) rows += data.command.size();
+ModelParameters InitializeFromMomentumBalance(const std::vector<Sequence>& sequences) {
+    std::size_t row_count = 0;
+    for (const auto& sequence : sequences) row_count += sequence.target_positions.size();
     robot_identification::RegressionProblem problem;
-    problem.sample_count = rows;
+    problem.sample_count = row_count;
     problem.dof = 1;
-    problem.regressor.resize(rows, 4);
-    problem.observation.resize(rows);
-    problem.row_weights = Eigen::VectorXd::Ones(rows);
-    Eigen::Index row = 0;
-    for (const auto& data : sequences) {
-        History history;
-        for (std::size_t i = 0; i < data.command.size(); ++i, ++row) {
-            const auto& state = data.observed[i];
-            const auto& next = data.observed[i + 1];
-            const double error = data.command[i] - state.q;
-            const auto features = history.Observe(error, state.v);
-            // Backward-Euler momentum balance initializer; no q double differentiation.
-            problem.regressor.row(row) << next.v - state.v, kPeriod * next.v, -kPeriod * features[0],
-                -kPeriod * features[1];
-            problem.observation[row] = kPeriod * (kP * error - kD * state.v - kLoad);
+    problem.regressor.resize(row_count, kParameterCount);
+    problem.observation.resize(row_count);
+    problem.row_weights = Eigen::VectorXd::Ones(row_count);
+    Eigen::Index row_index = 0;
+    for (const auto& sequence : sequences) {
+        ResidualFeatureHistory history;
+        for (std::size_t sample_index = 0; sample_index < sequence.target_positions.size();
+             ++sample_index, ++row_index) {
+            const auto& state = sequence.observed_states[sample_index];
+            const auto& next_state = sequence.observed_states[sample_index + 1];
+            const double position_error = sequence.target_positions[sample_index] - state.position;
+            const auto features = history.Observe(position_error, state.velocity);
+            // One-period backward-Euler momentum balance [Nm s]; no second derivative of position.
+            // Damping uses the observed endpoint velocity, so this initializer approximates the exact reference.
+            // Columns follow [inertia, viscous damping, residual weight 1, residual weight 2].
+            problem.regressor.row(row_index) << next_state.velocity - state.velocity,
+                kControlPeriodSeconds * next_state.velocity, -kControlPeriodSeconds * features[0],
+                -kControlPeriodSeconds * features[1];
+            problem.observation[row_index] = kControlPeriodSeconds * (kPdPositionGain * position_error -
+                                                                      kPdVelocityGain * state.velocity - kLoadTorque);
         }
     }
     const auto fit = robot_identification::Solve(problem);
-    if (fit.rank != 4) throw std::runtime_error("insufficient excitation");
+    if (fit.rank != kParameterCount) throw std::runtime_error("insufficient excitation");
     std::cout << "linear_rank=" << fit.rank << " condition=" << fit.condition_number
               << " unconstrained=" << fit.parameters.transpose() << '\n';
-    return fit.parameters.cwiseMax(Parameters(.02, 0., -2., -2.)).cwiseMin(Parameters(.3, 1., 2., 2.));
+    return fit.parameters.cwiseMax(ModelParameters(.02, 0., -2., -2.)).cwiseMin(ModelParameters(.3, 1., 2., 2.));
 }
 
-Parameters Refine(Parameters p, const std::vector<Sequence>& training, int columns = 4) {
-    Parameters step(.005, .01, .05, .05);
-    double best = Loss(p, training, 4);
-    for (int iteration = 0; iteration < 400 && step.maxCoeff() > 1e-7; ++iteration) {
+ModelParameters RefineWithCoordinateSearch(ModelParameters parameters,
+                                           const std::vector<Sequence>& training_sequences,
+                                           int active_parameter_count = kParameterCount) {
+    ModelParameters parameter_steps(.005, .01, .05, .05);
+    double best_loss = TrajectoryLoss(parameters, training_sequences, kFittingSubsteps);
+    for (int iteration = 0; iteration < 400 && parameter_steps.maxCoeff() > 1e-7; ++iteration) {
         bool improved = false;
-        for (int column = 0; column < columns; ++column)
-            for (double sign : {-1., 1.}) {
-                Parameters trial = p;
-                trial[column] += sign * step[column];
-                const double value = Loss(trial, training, 4);
-                if (value < best) {
-                    p = trial;
-                    best = value;
+        for (int parameter_index = 0; parameter_index < active_parameter_count; ++parameter_index)
+            for (double direction : {-1., 1.}) {
+                ModelParameters trial_parameters = parameters;
+                trial_parameters[parameter_index] += direction * parameter_steps[parameter_index];
+                const double trial_loss = TrajectoryLoss(trial_parameters, training_sequences, kFittingSubsteps);
+                if (trial_loss < best_loss) {
+                    parameters = trial_parameters;
+                    best_loss = trial_loss;
                     improved = true;
                 }
             }
-        if (!improved) step *= .5;
+        if (!improved) parameter_steps *= .5;
     }
-    return p;
+    return parameters;
 }
 }  // namespace
 
 int main() {
-    const Parameters truth(.09, .11, .7, -.25);
-    const std::vector<Sequence> training{MakeSequence(truth, 0, true), MakeSequence(truth, 1, true)};
-    const std::vector<Sequence> holdout{MakeSequence(truth, 3, false)};
-    const Parameters baseline = Refine(Parameters(.13, .2, 0., 0.), training, 2);
-    const Parameters initial = Initialize(training), refined = Refine(initial, training);
-    const double before = Loss(initial, training, 4), after = Loss(refined, training, 4);
-    const double holdout_before = Loss(baseline, holdout, 4), holdout_after = Loss(refined, holdout, 4);
-    const double coarse = Loss(truth, holdout, 1), fine = Loss(truth, holdout, 4);
-    std::cout << "truth=" << truth.transpose() << "\nphysics_only=" << baseline.transpose()
-              << "\ninitial=" << initial.transpose() << "\nrefined=" << refined.transpose()
-              << "\ntraining_loss=" << before << " -> " << after << "\nholdout_loss=" << holdout_before << " -> "
-              << holdout_after << "\nintegrator_loss=" << coarse << " -> " << fine << '\n';
-    if (!(after < before && holdout_after < holdout_before && fine < .2 * coarse))
+    const ModelParameters true_parameters(.09, .11, .7, -.25);
+    const std::vector<Sequence> training_sequences{MakeSequence(true_parameters, 0, true),
+                                                   MakeSequence(true_parameters, 1, true)};
+    const std::vector<Sequence> holdout_sequences{MakeSequence(true_parameters, 3, false)};
+    const ModelParameters physics_only_parameters =
+        RefineWithCoordinateSearch(ModelParameters(.13, .2, 0., 0.), training_sequences, kPhysicalParameterCount);
+    const ModelParameters initial_parameters = InitializeFromMomentumBalance(training_sequences);
+    const ModelParameters refined_parameters = RefineWithCoordinateSearch(initial_parameters, training_sequences);
+    const double training_loss_before = TrajectoryLoss(initial_parameters, training_sequences, kFittingSubsteps);
+    const double training_loss_after = TrajectoryLoss(refined_parameters, training_sequences, kFittingSubsteps);
+    const double holdout_loss_before = TrajectoryLoss(physics_only_parameters, holdout_sequences, kFittingSubsteps);
+    const double holdout_loss_after = TrajectoryLoss(refined_parameters, holdout_sequences, kFittingSubsteps);
+    const double coarse_integrator_loss = TrajectoryLoss(true_parameters, holdout_sequences, 1);
+    const double fine_integrator_loss = TrajectoryLoss(true_parameters, holdout_sequences, kFittingSubsteps);
+    std::cout << "truth=" << true_parameters.transpose() << "\nphysics_only=" << physics_only_parameters.transpose()
+              << "\ninitial=" << initial_parameters.transpose() << "\nrefined=" << refined_parameters.transpose()
+              << "\ntraining_loss=" << training_loss_before << " -> " << training_loss_after
+              << "\nholdout_loss=" << holdout_loss_before << " -> " << holdout_loss_after
+              << "\nintegrator_loss=" << coarse_integrator_loss << " -> " << fine_integrator_loss << '\n';
+    if (!(training_loss_after < training_loss_before && holdout_loss_after < holdout_loss_before &&
+          fine_integrator_loss < .2 * coarse_integrator_loss))
         throw std::runtime_error("hybrid trajectory validation failed");
 }

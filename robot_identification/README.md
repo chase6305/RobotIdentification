@@ -37,6 +37,21 @@ Installed consumers use `find_package(robot_identification REQUIRED)` and
 are present, CTest also checks Python/C++ CSV interchange without ROS.
 Examples use synthetic data and do not supply hardware parameters.
 
+## Source layout / 源码职责
+
+| File | Responsibility / 职责 |
+|---|---|
+| `data_validation.cpp` | Dataset and regression contracts / 数据与回归问题的校验 |
+| `identification.cpp` | Preprocessing, trajectories and actuator composition / 信号处理与模型接口 |
+| `dataset_csv.cpp` | Raw/processed CSV parsing and writing / 原始与处理后数据的 CSV 读写 |
+| `solver.cpp` | WLS, ridge, Huber iteration, rank diagnostics, covariance and residual metrics / 求解与不确定性 |
+| `base_parameters.cpp` | QR basis, dependency reconstruction and parameter coordinates / 基参数与坐标映射 |
+| `experiment_design.cpp` | Information scoring and constrained coefficient search / 激励评价与受限搜索 |
+
+CSV and solver implementations depend on data validation, rather than on each
+other or the trajectory implementation. Solver workspaces stay private to one
+solve. Shared name/raw-buffer checks use private headers under `src/`.
+
 ## Data and CSV / 数据与 CSV
 
 ```text
