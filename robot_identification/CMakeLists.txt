@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(robot_identification VERSION 0.2.12 LANGUAGES CXX)
+project(robot_identification VERSION 0.2.13 LANGUAGES CXX)
 
 option(ROBOT_IDENTIFICATION_BUILD_EXAMPLES "Build standalone identification examples" OFF)
 

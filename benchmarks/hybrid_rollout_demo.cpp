@@ -1,5 +1,5 @@
 // Synthetic scalar prototype: calibrated PD + learned bounded residual,
-// positive inertia/damping, and semi-implicit trajectory matching.
+// positive inertia, nonnegative damping, and semi-implicit trajectory matching.
 #include <robot_identification/identification.h>
 
 #include <array>
@@ -38,17 +38,17 @@ std::vector<State> Rollout(const Parameters& p, const std::vector<double>& comma
     History history;
     for (double target : command) {
         const double error = target - state.q;
-        const double force = kP * error - kD * state.v + p.tail<2>().dot(history.Observe(error, state.v)) - kLoad;
+        const double held_torque = kP * error - kD * state.v + p.tail<2>().dot(history.Observe(error, state.v)) - kLoad;
         if (substeps == 0) {
             // Independent exact solution with constant torque held for one controller period.
             const double factor = -std::expm1(-p[1] * kPeriod / p[0]);
             const double integral = p[0] * factor / p[1];
-            state.q += integral * state.v + force / p[1] * (kPeriod - integral);
-            state.v = (1. - factor) * state.v + force * factor / p[1];
+            state.q += integral * state.v + held_torque / p[1] * (kPeriod - integral);
+            state.v = (1. - factor) * state.v + held_torque * factor / p[1];
         } else {
             const double h = kPeriod / substeps;
             for (int step = 0; step < substeps; ++step) {
-                state.v = (p[0] * state.v + h * force) / (p[0] + h * p[1]);
+                state.v = (p[0] * state.v + h * held_torque) / (p[0] + h * p[1]);
                 state.q += h * state.v;
             }
         }
@@ -112,7 +112,7 @@ Parameters Initialize(const std::vector<Sequence>& sequences) {
             const auto& next = data.observed[i + 1];
             const double error = data.command[i] - state.q;
             const auto features = history.Observe(error, state.v);
-            // Integrated balance, in angular-momentum units; no q double differentiation.
+            // Backward-Euler momentum balance initializer; no q double differentiation.
             problem.regressor.row(row) << next.v - state.v, kPeriod * next.v, -kPeriod * features[0],
                 -kPeriod * features[1];
             problem.observation[row] = kPeriod * (kP * error - kD * state.v - kLoad);

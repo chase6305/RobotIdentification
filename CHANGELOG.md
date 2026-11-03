@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Core 0.2.13 factors its private calibration scratch in place, avoiding a
+  second full matrix in QR, and reserves final actuator parameter names instead
+  of constructing temporary prefixes. Public headers and numerical behavior
+  remain compatible.
+- Recorder 0.2.2 shares one dictionary for name uniqueness and reordering,
+  and removes an unused subscription alias; the ROS node continues to own and
+  destroy its subscription. ROS 2 CI relies on its existing colcon coverage
+  instead of repeating the same Python suites after a successful run.
+
 - Core 0.2.12 borrows QR permutation indices and changes one trial coefficient
   instead of copying an entire excitation design. Restore rejected coefficients
   exactly, including signed zero. Rotate IRLS parameter buffers to avoid copying
@@ -16,7 +25,8 @@
   bind digests to the same validated byte snapshots.
 
 - Add an opt-in scalar hybrid-rollout demonstration: causal fixed tanh features,
-  learned residual readout, positive inertia/damping and semi-implicit stepping.
+  learned residual readout, positive inertia, nonnegative damping and
+  semi-implicit stepping.
   Compare a fitted physics baseline against independent exact synthetic motion;
   document force-scale anchors, integration error and identifiability limits.
   The demo uses the existing Eigen dependency; core interfaces and artifact

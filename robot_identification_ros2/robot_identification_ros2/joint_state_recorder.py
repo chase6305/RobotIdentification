@@ -58,8 +58,7 @@ class JointStateRecorder(Node):
             torque_source=self.get_parameter("torque_source").value)
         qos = QoSProfile(depth=qos_depth,
                          reliability=ReliabilityPolicy.RELIABLE)
-        self._subscription = self.create_subscription(JointState, input_topic,
-                                                      self._on_sample, qos)
+        self.create_subscription(JointState, input_topic, self._on_sample, qos)
         self.get_logger().info(
             f"recording {input_topic} to {self._session.partial_path}; qos_depth={qos_depth}"
         )

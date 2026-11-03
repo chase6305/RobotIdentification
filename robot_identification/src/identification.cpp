@@ -1202,11 +1202,17 @@ std::size_t JointActuatorRegressor::parameter_count() const noexcept {
 std::vector<std::string> JointActuatorRegressor::parameter_names() const {
     auto names = base_->parameter_names();
     names.reserve(parameter_count());
+    constexpr std::string_view kParameterPrefix = "actuator/";
     for (const auto& joint : joint_names_) {
-        if (options_.drive_inertia) names.push_back("actuator/" + joint + "/drive_inertia");
-        if (options_.viscous_friction) names.push_back("actuator/" + joint + "/viscous_friction");
-        if (options_.coulomb_friction) names.push_back("actuator/" + joint + "/coulomb_friction");
-        if (options_.torque_bias) names.push_back("actuator/" + joint + "/torque_bias");
+        const auto append_name = [&](std::string_view suffix) {
+            auto& name = names.emplace_back();
+            name.reserve(kParameterPrefix.size() + joint.size() + suffix.size());
+            name.append(kParameterPrefix).append(joint).append(suffix);
+        };
+        if (options_.drive_inertia) append_name("/drive_inertia");
+        if (options_.viscous_friction) append_name("/viscous_friction");
+        if (options_.coulomb_friction) append_name("/coulomb_friction");
+        if (options_.torque_bias) append_name("/torque_bias");
     }
     return names;
 }

@@ -134,13 +134,14 @@ positive `reduction_percent` describes this sample, not a general speedup guaran
 ## Correctness campaigns
 
 With stress targets enabled, `build/benchmarks/hybrid_rollout_demo` runs a scalar
-offline prototype combining positive inertia/damping, two fixed tanh features of
-six causal history inputs, learned residual readout weights and semi-implicit
-rollouts. It initializes with integrated linear balance, projects into fixture
-bounds, then refines a normalized trajectory loss by bounded coordinate search.
+offline prototype combining positive inertia, nonnegative damping, two fixed
+tanh features of six causal history inputs, learned residual readout weights
+and semi-implicit rollouts. It initializes with a backward-Euler momentum
+balance, projects into fixture bounds, then refines a normalized trajectory
+loss by bounded coordinate search.
 The physics-only baseline is fitted on the same training sequences. An exact
 held-torque solution generates the independent synthetic reference; holdout and
-integration-substep checks must pass. Known PD gains/load anchor the force scale.
+integration-substep checks must pass. Known PD gains/load anchor the torque scale.
 Finite search budget, noise and discretization leave parameter bias: this is a
 workflow demonstration, with no real-robot accuracy or parameter-uniqueness claim.
 

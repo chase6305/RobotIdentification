@@ -11,11 +11,14 @@ from pathlib import Path
 from typing import Sequence
 
 
-def _valid_names(names: Sequence[str]) -> bool:
-    return (all(
-        isinstance(name, str) and name and not any(character in name
-                                                   for character in ",\r\n")
-        for name in names) and len(set(names)) == len(names))
+def _name_index(names: Sequence[str]) -> dict[str, int] | None:
+    if not all(
+            isinstance(name, str) and name and not any(character in name
+                                                       for character in ",\r\n")
+            for name in names):
+        return None
+    index = {name: offset for offset, name in enumerate(names)}
+    return index if len(index) == len(names) else None
 
 
 def _exists(path: Path) -> bool:
@@ -53,7 +56,7 @@ class RawJointStateSession:
         if not isinstance(torque_source, str) or not torque_source:
             raise ValueError("torque_source must be a non-empty string")
         if isinstance(joint_names,
-                      (str, bytes)) or not _valid_names(joint_names):
+                      (str, bytes)) or _name_index(joint_names) is None:
             raise ValueError(
                 "joint_names must be unique non-empty CSV-safe names")
 
@@ -109,10 +112,10 @@ class RawJointStateSession:
         if names == self._incoming_names:
             order = self._order
         else:
-            if not _valid_names(names):
+            index = _name_index(names)
+            if index is None:
                 return self._reject(
                     "joint names must be unique, non-empty and CSV-safe")
-            index = {name: offset for offset, name in enumerate(names)}
             if self._joint_names and len(names) != len(self._joint_names):
                 return self._reject("joint set changed during the session")
             try:
@@ -132,9 +135,9 @@ class RawJointStateSession:
         elapsed = (sample_ns - self._start_ns) * 1e-9
         if sample_ns <= self._last_sample_ns or elapsed <= self._last_elapsed:
             return self._reject("monotonic timestamp did not advance")
-        fields = [format(elapsed, ".17g")]
-        fields.extend(format(position[offset], ".17g") for offset in order)
-        fields.extend(format(effort[offset], ".17g") for offset in order)
+        fields = [f"{elapsed:.17g}"]
+        fields.extend(f"{position[offset]:.17g}" for offset in order)
+        fields.extend(f"{effort[offset]:.17g}" for offset in order)
         row = ",".join(fields) + "\n"
         if self.sample_count == 0:
             joints = self._joint_names or names

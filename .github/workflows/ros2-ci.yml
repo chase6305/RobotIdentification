@@ -26,9 +26,5 @@ jobs:
           source build/ros2/install/setup.bash
           ros2 run robot_identification_tools dataset_inspect --help
           ros2 run robot_identification_tools identification_artifact --help
-      - name: Validate schema and Python contracts
-        run: |
-          source /opt/ros/humble/setup.bash
-          PYTHONPATH=robot_identification_tools python3 -m unittest discover -s robot_identification_tools/test
-          PYTHONPATH=robot_identification_ros2 python3 -m unittest discover -s robot_identification_ros2/test
-          python3 utils/check_schemas.py
+      - name: Validate schemas and artifact bindings
+        run: python3 utils/check_schemas.py

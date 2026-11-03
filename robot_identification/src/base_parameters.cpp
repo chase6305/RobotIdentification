@@ -41,7 +41,8 @@ BaseParameterBasis::BaseParameterBasis(const Eigen::MatrixXd& calibration, doubl
     Eigen::MatrixXd normalized = calibration;
     for (Eigen::Index column = 0; column < normalized.cols(); ++column)
         if (column_scales_[column] != 0.) normalized.col(column) /= column_scales_[column];
-    Eigen::ColPivHouseholderQR<Eigen::MatrixXd> qr(normalized);
+    // Factor the private scratch in place; normalized outlives the decomposition.
+    Eigen::ColPivHouseholderQR<Eigen::Ref<Eigen::MatrixXd>> qr(normalized);
     qr.setThreshold(tolerance);
     const Eigen::Index rank = qr.rank();
     if (rank == 0) throw std::invalid_argument("calibration regressor has no identifiable parameter directions");
