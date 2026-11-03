@@ -176,6 +176,12 @@ Drake 主体也是 [BSD 三条款](https://github.com/RobotLocomotion/drake/blob
 现有 `ActuatorRegressor` 的转子惯量、黏性/库仑摩擦和 bias 列仍用于线性参数辨识；
 两类模型应分别验证，不能把网络权重解释为刚体惯量或基参数。
 
+六维输入相同也不代表权重兼容：其引用的
+[Walk These Ways](https://github.com/Improbable-AI/walk-these-ways/blob/0e7236bdc81ce855cbe3d70345a7899452bdeb1c/go1_gym/envs/base/legged_robot.py)
+使用 `q-q_target+motor_offset`，并在每个仿真子步更新历史；零偏置时误差符号与
+`actuator_net` 相反。接入必须同时核对符号、偏置及历史更新周期；该实现按仿真子步
+更新历史，不能改用策略周期，也不能直接交换已有权重。
+
 接入顺序以数据和验证为先，暂不增加训练框架或 GUI 到 Eigen 核心：
 
 1. 采集同步的命令位置、实测位置、实测速度和输出标签，保留关节名称、会话、
@@ -192,12 +198,56 @@ Drake 主体也是 [BSD 三条款](https://github.com/RobotLocomotion/drake/blob
    scaler 只在训练集拟合。参考处理先拼接电机再移位，训练脚本按窗口随机划分，
    因而接入时需避免跨电机历史和相邻窗口泄漏。参考默认关闭 scaling；开启时必须
    让训练与部署使用同一变换。
-5. 在未参与训练的连续轨迹上，与相同输入可获得的静态 PD/线性执行器模型比较，
+5. 在未参与训练的连续轨迹上，与静态 PD 及使用同组历史特征的线性预测器比较，
    报告逐关节 MAE/RMSE、峰值误差、时延及饱和区间误差，保留真实采样间隔。
    模型、scaler、特征顺序、周期、单位和控制配置应共同绑定摘要。
 
-这是一条待实现并用实测数据验证的可选路径；本次只采用建模思路，未移植参考代码、
-权重或数据，也未改变现有 CSV、结果 Schema 和运行参数导入流程。
+完整网络训练与真机验证仍待实现；本次采用建模思路并提供独立合成原型，未移植参考
+代码、权重或数据，也未改变现有 CSV、结果 Schema 和运行参数导入流程。
+
+#### 半隐式步进与物理/学习混合辨识
+
+该方向结合两层选择：保留可解释的刚体参数，以因果历史残差补充执行器动态；
+通过半隐式前向步进拟合连续状态轨迹。令 B 为非负黏性阻尼，h 为步长，
+`H[k]` 为当前及过去的命令/状态历史，一个可选离散模型是：
+
+```text
+u[k] = tau_PD[k] + r_phi(H[k]) - c(q[k],v[k];theta) - g(q[k];theta)
+(M(q[k];theta) + h*B) * v[k+1] = M(q[k];theta)*v[k] + h*u[k]
+q[k+1] = integrate(q[k], h*v[k+1])
+```
+
+每步解线性系统，位置用更新后的速度推进；B 在速度更新中隐式处理。
+完整执行器网络输出 `tau_act` 时，右端直接使用该输出；学习残差时才与 PD 项相加。
+这是建模选择，不能同时重复计算同一控制力矩。
+[MuJoCo 的积分说明](https://mujoco.readthedocs.io/en/3.6.0/computation/#numerical-integration)
+区分半隐式位置更新与速度隐式处理；对高增益控制或学习项仍需验证步长收敛。
+
+辨识目标改为同一命令下预测的 q/v 轨迹误差，各分量按单位和噪声尺度归一化。
+训练窗口只在开始时初始化实测状态；随后滚动预测，并使用预测状态更新网络历史。
+会话切分先于窗口生成，测试使用完整独立轨迹。该路径可减少对 q 二阶数值微分的
+依赖，但仍依赖速度来源、初始状态和命令/反馈延迟的准确性。
+
+现有 `Solve()` 可初始化物理参数及固定非线性特征的线性读出；多步轨迹损失通常
+需要单独的非线性优化层。当前 Pinocchio 包只暴露逆动力学回归器，完整多体 rollout
+还需前向动力学适配。已有 QR 基参数 beta 不能唯一恢复完整惯性；rollout 必须先
+选定物理可行的完整模型，并保持质量矩阵正定、B 非负。
+
+优先固定已标定的电机增益、负载或部分惯性，先拟合物理模型，再学习小残差，
+最后有选择地联合校正。若惯量、阻尼、输入增益和残差幅值都自由变化，可能存在
+保持同一运动的尺度变换；灵活残差也可能吸收物理项。数值满秩、低轨迹误差或
+正则化均不能单独证明物理参数唯一，需检查激励、参数敏感性及独立负载/轨迹。
+
+相关研究入口包括[解析动力学与神经网络混合](https://arxiv.org/abs/2007.06045)
+和[通过可微仿真做轨迹辨识](https://arxiv.org/abs/2604.10351v2)。这里采用上述
+最小模型独立验证流程，不复现这些论文的真机结果。
+
+可选的 [`hybrid_rollout_demo`](../benchmarks/hybrid_rollout_demo.cpp) 用单轴合成系统
+验证这条流程：已知 PD/负载、正惯量和阻尼、六维历史的两个固定 tanh 特征及可学习
+读出。数据由恒定控制力矩下的解析解生成，初始化使用离散动量平衡，再以有界坐标
+搜索改善多步轨迹损失；测试轨迹不参与优化，同时比较不同积分子步数。
+历史每 5 ms 控制周期更新一次，物理积分子步内保持控制力矩，细分积分不改变历史周期。
+原型不训练完整 MLP，不输出既有力矩候选 artifact；其中线性初始化残差单位为角动量。
 
 #### QR 基参数
 
@@ -360,9 +410,15 @@ mapping from command-position error and velocity history to actuator output.
 Adoption first requires synchronized commands/states, explicit label units,
 per-joint/session history resets and trajectory-level holdouts before windowing.
 Fit scaling on training data only and bind the deployed model to its feature
-order, period and control configuration. Existing symmetric filtering and central
-differences are offline operations. No neural trainer, reference weights or new
-core dependency is introduced by this assessment.
+order, sign, period and control configuration. Existing symmetric filtering and
+central differences are offline operations.
+
+The opt-in `hybrid_rollout_demo` combines positive inertia/damping, fixed tanh
+history features and learned readout weights with semi-implicit trajectory
+matching. It uses an exact scalar reference, a fitted physics-only baseline and
+independent holdout motion. Known controller gains/load anchor the force scale;
+low rollout error does not establish unique physical parameters. Full MLP
+training and multibody forward-dynamics integration remain future adapter work.
 
 For column maxima s, factor `Z = Y*diag(1/s)` with pivoted QR, solve
 `K = R11\R12`, and retain the mapping

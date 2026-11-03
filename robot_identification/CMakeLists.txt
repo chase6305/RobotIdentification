@@ -5,7 +5,7 @@ option(ROBOT_IDENTIFICATION_BUILD_EXAMPLES "Build standalone identification exam
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+find_package(Eigen3 3.3.1 REQUIRED NO_MODULE)
 
 add_library(robot_identification src/identification.cpp src/base_parameters.cpp src/experiment_design.cpp)
 add_library(robot_identification::robot_identification ALIAS robot_identification)

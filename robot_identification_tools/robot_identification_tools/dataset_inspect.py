@@ -148,18 +148,14 @@ def _inspect_stream(stream: TextIO, header: list[str],
             len(set(joint_names)) != len(joint_names)):
         raise ValueError(
             "position joint names must be unique, non-empty, and CSV-safe")
-    raw_header = (["time_s"] + [f"q/{name}" for name in joint_names] +
-                  [f"tau/{name}" for name in joint_names])
-    processed_header = (["time_s"] + [f"q/{name}" for name in joint_names] +
-                        [f"dq/{name}" for name in joint_names] +
-                        [f"ddq/{name}" for name in joint_names] +
-                        [f"tau/{name}" for name in joint_names])
-    if header == raw_header:
-        kind = "raw"
-    elif header == processed_header:
-        kind = "processed"
-    else:
+    raw = len(header) == 1 + 2 * len(joint_names)
+    prefixes = ("tau/",) if raw else ("dq/", "ddq/", "tau/")
+    expected_header = (
+        ["time_s"] + q_columns +
+        [prefix + name for prefix in prefixes for name in joint_names])
+    if header != expected_header:
         raise ValueError("columns do not match the identification CSV contract")
+    kind = "raw" if raw else "processed"
 
     sample_count = 0
     first_time = 0.0

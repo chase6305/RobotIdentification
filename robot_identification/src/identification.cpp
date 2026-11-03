@@ -476,14 +476,14 @@ public:
         } else {
             diagnostic_svd_->compute(weighted_regressor_.topRows(data_rows_));
         }
-        if (diagnostic_svd_->info() != Eigen::Success || !diagnostic_svd_->singularValues().allFinite()) {
+        if (!diagnostic_svd_->singularValues().allFinite()) {
             throw std::runtime_error("regression diagnostic decomposition failed");
         }
         if (ridge_rows_ == 0) {
             result.parameters = diagnostic_svd_->solve(weighted_observation_);
         } else {
             regularized_svd_->compute(weighted_regressor_);
-            if (regularized_svd_->info() != Eigen::Success || !regularized_svd_->singularValues().allFinite()) {
+            if (!regularized_svd_->singularValues().allFinite()) {
                 throw std::runtime_error("regularized regression decomposition failed");
             }
             result.parameters = regularized_svd_->solve(weighted_observation_);

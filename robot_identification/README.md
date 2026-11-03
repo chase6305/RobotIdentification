@@ -20,7 +20,7 @@ optional drive inertia, viscous/Coulomb friction and torque bias columns.
 
 ## Build and run / 构建与运行
 
-Requires Eigen >=3.3, CMake >=3.15 and a C++17 library with floating-point
+Requires Eigen >=3.3.1, CMake >=3.15 and a C++17 library with floating-point
 `std::from_chars` support, verified with GCC 11/libstdc++.
 
 ```bash

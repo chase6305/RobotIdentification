@@ -85,8 +85,10 @@ int main(int argc, char** argv) {
         Eigen::MatrixXd basis = right * factors.asDiagonal();
         basis *= std::sqrt(variance);
         const Eigen::MatrixXd covariance = basis * basis.transpose();
+        const Eigen::MatrixXd difference = result.covariance - covariance;
         const double covariance_error =
-            (result.covariance - covariance).stableNorm() / std::max(1e-300, covariance.stableNorm());
+            Eigen::Map<const Eigen::VectorXd>(difference.data(), difference.size()).stableNorm() /
+            std::max(1e-300, Eigen::Map<const Eigen::VectorXd>(covariance.data(), covariance.size()).stableNorm());
         if (!std::isfinite(covariance_error) || covariance_error > 2e-6) {
             std::cerr << "covariance mismatch case=" << cases << " error=" << covariance_error << " cond=" << condition
                       << " scale=" << scale << '\n';

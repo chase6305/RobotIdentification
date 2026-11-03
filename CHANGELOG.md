@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add an opt-in scalar hybrid-rollout demonstration: causal fixed tanh features,
+  learned residual readout, positive inertia/damping and semi-implicit stepping.
+  Compare a fitted physics baseline against independent exact synthetic motion;
+  document force-scale anchors, integration error and identifiability limits.
+  The demo uses the existing Eigen dependency; core interfaces and artifact
+  schemas are unchanged.
+
 - Core 0.2.11 removes redundant IRLS weight/singular-value copies and intermediate
   results, moves trajectory bounds into validation output, and stores raw CSV
   chunks directly. Share CSV input and joint-name checks; derive validation
@@ -14,10 +21,18 @@
   joint names retain their owning storage.
   Compute rank/conditioning only for the final solve, avoiding unnecessary
   intermediate diagnostic overflow; reuse the measured rank in covariance.
+- Correct the minimum Eigen version to 3.3.1, which exports `Eigen3::Eigen`.
+  Remove JacobiSVD status queries unavailable in early Eigen 3.3 releases;
+  inputs and singular values remain checked for finiteness. Installed consumers
+  use the same config-package dependency as the core build.
+  Optional solver campaigns compute stable matrix norms through vector views
+  supported by the same minimum version.
 - Consolidate formatting and replay-argument runners, remove inactive header
   checks, skip generated directories at every depth, and shorten the benchmark
   guide around current commands. Processed CSV retains its final validation
   after paired measurements showed a regression when it was omitted.
+  Python inspection constructs only the selected CSV layout and reuses position
+  headers instead of allocating both expected layouts.
 
 - Core 0.2.10 reads CSV header fields directly without a string stream or
   whole-header copies. Share the raw chunk materialization loop while releasing

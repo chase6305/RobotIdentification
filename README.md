@@ -17,13 +17,13 @@
 
 核心 0.2.11 提供 QR 基参数约简、完整参数映射与受限 Fourier 激励优化，可与已有 Pinocchio 后端组合。[端到端示例](robot_identification/examples/identification_design_example.cpp)演示设计、拟合与独立验证；[算法说明与参考评估](docs/parameter-identification.md#参考项目评估与本次实现)记录公式、数值假设和限制。公开接口保持兼容，Pinocchio 后端仍为 0.2.1。
 
-[执行器动态网络方向](docs/parameter-identification.md#执行器动态网络方向)评估 `sunzhon/actuator_net`，明确命令/反馈历史、标签单位和独立轨迹验证的接入条件。
+[执行器动态网络方向](docs/parameter-identification.md#执行器动态网络方向)评估 `sunzhon/actuator_net`；[半隐式混合辨识](docs/parameter-identification.md#半隐式步进与物理学习混合辨识)提供可选合成原型，记录命令/反馈历史、标签单位和独立轨迹验证条件。
 
 ## 独立构建
 
 Ubuntu 上的 venv 示例需要 `python3-venv`。
 
-需要 CMake 3.15+、C++17、Eigen 3.3+；完整测试还需要 Python 3.10+ 和 `jsonschema==4.23.0`。
+需要 CMake 3.15+、C++17、Eigen 3.3.1+；完整测试还需要 Python 3.10+ 和 `jsonschema==4.23.0`。
 
 ```bash
 cmake -S robot_identification -B build/core -DBUILD_TESTING=ON \

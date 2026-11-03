@@ -17,13 +17,13 @@ For complete Pinocchio datasets, `backend.BuildProblem(dataset)` reuses call-loc
 
 Core 0.2.11 provides QR base parameters, a full-to-base mapping and constrained Fourier excitation design that compose with the Pinocchio backend. The [end-to-end example](robot_identification/examples/identification_design_example.cpp) covers design, fitting and independent validation; [algorithm and reference notes](docs/parameter-identification.md#参考项目评估与本次实现) describe equations, numerical assumptions and limits. Public interfaces remain compatible; the Pinocchio backend remains 0.2.1.
 
-The [actuator-network assessment](docs/parameter-identification.md#执行器动态网络方向) evaluates `sunzhon/actuator_net`, including command/state histories, label units and independent trajectory validation required for adoption.
+The [actuator-network assessment](docs/parameter-identification.md#执行器动态网络方向) evaluates `sunzhon/actuator_net`; [semi-implicit hybrid identification](docs/parameter-identification.md#半隐式步进与物理学习混合辨识) adds an optional synthetic prototype and documents command/state histories, label units and independent trajectory validation.
 
 ## Standalone build
 
 The Ubuntu venv recipe requires `python3-venv`.
 
-Requires CMake 3.15+, C++17, and Eigen 3.3+. Full validation also requires Python 3.10+ and `jsonschema==4.23.0`.
+Requires CMake 3.15+, C++17, and Eigen 3.3.1+. Full validation also requires Python 3.10+ and `jsonschema==4.23.0`.
 
 ```bash
 cmake -S robot_identification -B build/core -DBUILD_TESTING=ON \
