@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 #include "exact_parameter_dot.h"
@@ -227,7 +228,7 @@ BaseParameterRegressor::BaseParameterRegressor(std::shared_ptr<const RegressorBa
         basis_.calibration_error() > tolerance)
         throw std::invalid_argument("backend does not match the calibrated base parameter basis");
     const auto names = backend_->parameter_names();
-    auto sorted = names;
+    std::vector<std::string_view> sorted(names.begin(), names.end());
     std::sort(sorted.begin(), sorted.end());
     if (names.size() != backend_->parameter_count() || sorted.empty() || sorted.front().empty() ||
         std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end())

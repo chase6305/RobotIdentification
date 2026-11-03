@@ -1,5 +1,6 @@
 #include "robot_identification/identification.h"
 
+#include <cfenv>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -308,6 +309,29 @@ void TestLargeParameterConvergence() {
     }
 }
 
+void TestFinalDiagnostics() {
+    robot_identification::RegressionProblem problem;
+    problem.sample_count = 3;
+    problem.dof = 1;
+    problem.regressor.resize(3, 2);
+    problem.regressor << 1e150, 0., 0., 1e-160, 1e150, 0.;
+    problem.observation = Eigen::Vector3d(1e10, 0., -1e10);
+    problem.row_weights = Eigen::Vector3d::Ones();
+    robot_identification::SolverOptions options;
+    options.relative_rank_tolerance = std::numeric_limits<double>::denorm_min();
+    options.huber_delta = 1e-30;
+    options.max_iterations = 2;
+    std::fenv_t environment;
+    if (std::feholdexcept(&environment) != 0) throw std::runtime_error("cannot preserve floating-point environment");
+    const auto result = robot_identification::Solve(problem, options);
+    const bool overflow = std::fetestexcept(FE_OVERFLOW) != 0;
+    std::fesetenv(&environment);
+    // Unreported initial conditioning exceeds double range; the final robust
+    // weights make the returned condition and covariance representable.
+    if (result.rank != 2 || !std::isfinite(result.condition_number) || !result.covariance.allFinite() || overflow)
+        throw std::runtime_error("intermediate diagnostics overflowed despite finite final diagnostics");
+}
+
 void TestMassMatrixScaleChecks() {
     const Eigen::MatrixXd positions = Eigen::MatrixXd::Zero(1, 2);
     const Eigen::VectorXd parameters = Eigen::VectorXd::Ones(1);
@@ -385,6 +409,7 @@ int main() {
     TestSubnormalNormalizedErrors();
     TestCovarianceOverflowRejection();
     TestLargeParameterConvergence();
+    TestFinalDiagnostics();
     TestMassMatrixScaleChecks();
     TestMassMatrixBatchRecovery();
     TestWeightedSolves();

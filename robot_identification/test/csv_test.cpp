@@ -187,6 +187,35 @@ void TestHeaderNamesBeforeRows() {
     }
 }
 
+void TestLongHeaders() {
+    const Fixture fixture;
+    for (bool raw : {false, true}) {
+        for (const auto length : {2042, 4088, 8180}) {
+            std::string name = "关节";
+            name.append(length - name.size(), 'x');
+            std::string header = "time_s,q/" + name;
+            if (!raw) header += ",dq/" + name + ",ddq/" + name;
+            header += ",tau/" + name;
+            ExpectRejected(raw, fixture, header);
+            for (const std::string newline : {"\n", "\r\n", "\r"}) {
+                // Cross file-buffer boundaries, including CR/LF lookahead,
+                // blank records and an unterminated final numeric record.
+                fixture.Write(header + newline + newline + Row(raw, "0", "1") + newline + Row(raw, "1", "2") + newline +
+                              Row(raw, "2", "3"));
+                if (raw) {
+                    const auto data = robot_identification::ReadRawDatasetCsv(fixture.path);
+                    if (data.joint_names != std::vector<std::string>{name} || data.time_seconds.size() != 3)
+                        throw std::runtime_error("long raw CSV header changed a name or record boundary");
+                } else {
+                    const auto data = robot_identification::ReadDatasetCsv(fixture.path);
+                    if (data.joint_names != std::vector<std::string>{name} || data.samples.size() != 3)
+                        throw std::runtime_error("long processed CSV header changed a name or record boundary");
+                }
+            }
+        }
+    }
+}
+
 void RequireSameValue(double actual, double expected) {
     if (actual != expected || std::signbit(actual) != std::signbit(expected)) {
         throw std::runtime_error("CSV did not preserve a finite value exactly");
@@ -478,6 +507,7 @@ void TestLargeRawStorageBoundaries() {
 int main() {
     TestLargeRawStorageBoundaries();
     TestHeaderNamesBeforeRows();
+    TestLongHeaders();
     TestTimestampDiagnostics();
     TestInvalidFieldsAcrossSignals();
     TestNumericGrammar();

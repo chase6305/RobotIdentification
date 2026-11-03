@@ -8,6 +8,12 @@
   success from its existing failure state. Remove a duplicate derivative scan
   after each coefficient has already been checked. Public interfaces and
   numerical policies are unchanged.
+  Read header bytes through the existing file buffer and validate backend names
+  through views, removing per-byte stream setup and redundant string copies.
+  Header fields and column-order checks use views during validation; output
+  joint names retain their owning storage.
+  Compute rank/conditioning only for the final solve, avoiding unnecessary
+  intermediate diagnostic overflow; reuse the measured rank in covariance.
 - Consolidate formatting and replay-argument runners, remove inactive header
   checks, skip generated directories at every depth, and shorten the benchmark
   guide around current commands. Processed CSV retains its final validation

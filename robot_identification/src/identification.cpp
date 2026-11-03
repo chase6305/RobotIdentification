@@ -248,12 +248,21 @@ Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time, const Eigen::MatrixXd
 bool ReadCsvHeader(std::istream& input, std::string& line, char& separator) {
     line.clear();
     separator = '\n';
-    char character;
-    while (input.get(character)) {
+    // The header only needs byte delimiters. Use the existing file buffer
+    // without constructing an istream sentry for every joint-name byte.
+    auto* buffer = input.rdbuf();
+    using Traits = std::char_traits<char>;
+    while (true) {
+        const auto value = buffer->sbumpc();
+        if (Traits::eq_int_type(value, Traits::eof())) {
+            input.setstate(std::ios::eofbit | std::ios::failbit);
+            return !line.empty();
+        }
+        const char character = Traits::to_char_type(value);
         if (character == '\n') return true;
         if (character == '\r') {
-            if (input.peek() == '\n') {
-                input.get();
+            if (Traits::eq_int_type(buffer->sgetc(), Traits::to_int_type('\n'))) {
+                buffer->sbumpc();
             } else {
                 separator = '\r';
             }
@@ -261,17 +270,16 @@ bool ReadCsvHeader(std::istream& input, std::string& line, char& separator) {
         }
         line.push_back(character);
     }
-    return !line.empty();
 }
 
-std::vector<std::string> SplitCsvLine(const std::string& line) {
-    std::vector<std::string> fields;
-    // ReadCsvHeader already consumed the record separator. Copy fields
-    // directly, including an empty field after a final comma.
+std::vector<std::string_view> SplitCsvHeader(const std::string& line) {
+    std::vector<std::string_view> fields;
+    // Views borrow the header until CsvInput finishes validating it. Keep
+    // an empty field after a final comma.
     if (line.empty()) return fields;
     for (std::size_t begin = 0;;) {
         const auto end = line.find(',', begin);
-        fields.emplace_back(line, begin, end == std::string::npos ? end : end - begin);
+        fields.emplace_back(line.data() + begin, end == std::string::npos ? line.size() - begin : end - begin);
         if (end == std::string::npos) break;
         begin = end + 1;
     }
@@ -380,7 +388,7 @@ public:
         if (path.empty()) throw std::invalid_argument(std::string(kind) + " input path must not be empty");
         if (!input_) throw std::runtime_error("cannot open " + std::string(kind) + " input: " + path);
         if (!ReadCsvHeader(input_, line_, separator_)) throw std::runtime_error(std::string(kind) + " CSV is empty");
-        const auto header = SplitCsvLine(line_);
+        const auto header = SplitCsvHeader(line_);
         const auto groups = 1 + following_prefixes.size();
         if (header.size() <= groups || header[0] != "time_s" || (header.size() - 1) % groups != 0)
             throw std::runtime_error(std::string(kind) + " CSV header has an invalid shape");
@@ -392,13 +400,15 @@ public:
         for (std::size_t joint = 0; joint < dof; ++joint) {
             const auto& field = header[1 + joint];
             if (field.rfind("q/", 0) != 0 || field.size() <= 2) throw std::runtime_error("invalid q column name");
-            joint_names.push_back(field.substr(2));
+            joint_names.emplace_back(field.substr(2));
         }
         std::size_t column = 1 + dof;
-        for (const char* prefix : following_prefixes)
-            for (const auto& joint : joint_names)
-                if (header[column++] != prefix + joint)
+        for (std::string_view prefix : following_prefixes)
+            for (const auto& joint : joint_names) {
+                const auto field = header[column++];
+                if (field.substr(0, prefix.size()) != prefix || field.substr(prefix.size()) != joint)
                     throw std::runtime_error(std::string(kind) + " CSV columns do not share the same joint order");
+            }
         ValidateCsvJointNames(joint_names);
         values.resize(header.size());
     }
@@ -469,11 +479,6 @@ public:
         if (diagnostic_svd_->info() != Eigen::Success || !diagnostic_svd_->singularValues().allFinite()) {
             throw std::runtime_error("regression diagnostic decomposition failed");
         }
-        result.rank = static_cast<std::size_t>(diagnostic_svd_->rank());
-        const auto& singular_values = diagnostic_svd_->singularValues();
-        result.condition_number = result.rank < static_cast<std::size_t>(problem.regressor.cols())
-                                      ? std::numeric_limits<double>::infinity()
-                                      : singular_values[0] / singular_values[singular_values.size() - 1];
         if (ridge_rows_ == 0) {
             result.parameters = diagnostic_svd_->solve(weighted_observation_);
         } else {
@@ -483,6 +488,14 @@ public:
             }
             result.parameters = regularized_svd_->solve(weighted_observation_);
         }
+    }
+
+    void SetDiagnostics(IdentificationResult& result) const {
+        result.rank = static_cast<std::size_t>(diagnostic_svd_->rank());
+        const auto& singular_values = diagnostic_svd_->singularValues();
+        result.condition_number = result.rank < static_cast<std::size_t>(weighted_regressor_.cols())
+                                      ? std::numeric_limits<double>::infinity()
+                                      : singular_values[0] / singular_values[singular_values.size() - 1];
     }
 
     Eigen::MatrixXd Covariance(const Eigen::VectorXd& residual, std::size_t measured_rank) const {
@@ -517,7 +530,7 @@ public:
         // Forming A'WA squares its condition number and a second decomposition
         // can incorrectly erase observable, weakly excited directions.
         const auto& decomposition = ridge_rows_ == 0 ? *diagnostic_svd_ : *regularized_svd_;
-        const Eigen::Index rank = decomposition.rank();
+        const Eigen::Index rank = ridge_rows_ == 0 ? static_cast<Eigen::Index>(measured_rank) : decomposition.rank();
         Eigen::MatrixXd scaled_basis = decomposition.matrixV().leftCols(rank);
         for (Eigen::Index column = 0; column < rank; ++column) {
             double uncertainty;
@@ -1269,6 +1282,7 @@ IdentificationResult Solve(const RegressionProblem& problem, const SolverOptions
     // Weights are updated only when another solve remains, so this is the
     // vector consumed by the final solve, including at the iteration limit.
     result.final_row_weights = std::move(weights);
+    workspace.SetDiagnostics(result);
     const auto errors = MeasureErrors(result.residual);
     result.rmse = errors.rms;
     result.max_absolute_error = errors.maximum;
