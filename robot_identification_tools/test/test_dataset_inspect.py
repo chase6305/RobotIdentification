@@ -155,6 +155,36 @@ class DatasetInspectTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "non-finite"):
                 inspect_dataset_with_digest(path)
 
+    def test_long_headers_across_buffer_boundaries_preserve_digest(self):
+        for prefixes in (("q", "tau"), ("q", "dq", "ddq", "tau")):
+            for separator in ("\n", "\r\n", "\r"):
+                name = "关节_" + "x" * 4081
+                header = ",".join(["time_s"] +
+                                  [f"{p}/{name}" for p in prefixes])
+                payload = separator.join([header, ""] + [
+                    ",".join([str(index)] * (len(prefixes) + 1))
+                    for index in range(3)
+                ]).encode("utf-8")
+                for size in (1, 7, 8191, 8192):
+                    with self.subTest(prefixes=prefixes,
+                                      separator=separator,
+                                      size=size):
+                        reader = inspection._HashingReader(io.BytesIO(payload))
+                        with io.BufferedReader(reader,
+                                               buffer_size=size) as stream:
+                            summary = inspection._inspect_binary_stream(stream)
+                        self.assertEqual(summary["joint_names"], [name])
+                        self.assertEqual(summary["sample_count"], 3)
+                        self.assertEqual(summary["maximum_absolute_torque"],
+                                         {name: 2.})
+                        self.assertEqual(reader.digest.hexdigest(),
+                                         hashlib.sha256(payload).hexdigest())
+
+    def test_empty_and_header_only_files_are_rejected(self):
+        for text in ("", "time_s,q/a,tau/a", "time_s,q/a,tau/a\r\n"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                self.inspect_text(text)
+
     def inspect_text(self, text):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "dataset.csv"

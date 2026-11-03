@@ -33,6 +33,8 @@
   after paired measurements showed a regression when it was omitted.
   Python inspection constructs only the selected CSV layout and reuses position
   headers instead of allocating both expected layouts.
+  Scan header delimiters in buffered blocks while preserving original-byte
+  digests, newline handling and numeric-row boundaries.
 
 - Core 0.2.10 reads CSV header fields directly without a string stream or
   whole-header copies. Share the raw chunk materialization loop while releasing

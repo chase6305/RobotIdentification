@@ -100,20 +100,24 @@ def _inspect_binary_stream(source: io.BufferedReader) -> dict[str, object]:
     header = bytearray()
     separator = "\n"
     while True:
-        character = source.read(1)
-        if not character:
+        block = source.peek(1)
+        if not block:
             if not header:
                 raise ValueError("dataset is empty")
             break
-        if character == b"\n":
-            break
-        if character == b"\r":
+        boundary = min(
+            (offset for offset in (block.find(b"\n"), block.find(b"\r"))
+             if offset >= 0),
+            default=len(block))
+        header.extend(source.read(boundary))
+        if boundary == len(block):
+            continue
+        if source.read(1) == b"\r":
             if source.peek(1).startswith(b"\n"):
                 source.read(1)
             else:
                 separator = "\r"
-            break
-        header.extend(character)
+        break
     with io.TextIOWrapper(source, encoding="utf-8",
                           newline=separator) as stream:
         return _inspect_stream(stream,
