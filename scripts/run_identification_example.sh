@@ -10,5 +10,5 @@ cmake -S "$ROOT_DIR/robot_identification" -B "$BUILD_DIR" \
   -DBUILD_TESTING=ON \
   -DROBOT_IDENTIFICATION_BUILD_EXAMPLES=ON
 cmake --build "$BUILD_DIR" --parallel "$WORKERS"
-ctest --test-dir "$BUILD_DIR" --output-on-failure
+cmake -E chdir "$BUILD_DIR" ctest --output-on-failure
 "$BUILD_DIR/generic_regressor_example"

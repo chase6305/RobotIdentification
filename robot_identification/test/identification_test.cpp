@@ -235,6 +235,34 @@ void TestMetricScales() {
     if (!rejected) throw std::runtime_error("non-finite model prediction was accepted");
 }
 
+void TestSubnormalNormalizedErrors() {
+    robot_identification::RegressionProblem problem;
+    problem.dof = 1;
+    for (int rows : {5, 9, 65}) {
+        problem.sample_count = rows;
+        problem.regressor = Eigen::MatrixXd::Zero(rows, 1);
+        problem.regressor(0, 0) = 1.;
+        problem.row_weights = Eigen::VectorXd::Ones(rows);
+        for (double unit : {std::numeric_limits<double>::denorm_min(), std::ldexp(1., -1040),
+                            std::numeric_limits<double>::min(), 1.}) {
+            for (int observation : {1, 2, 3, 17}) {
+                problem.observation = Eigen::VectorXd::Zero(rows);
+                problem.observation[0] = observation * unit;
+                for (int prediction : {-3, 0, 1, 2, 4}) {
+                    const auto metrics = robot_identification::ValidateParameters(
+                        problem, Eigen::VectorXd::Constant(1, prediction * unit));
+                    const double expected = std::abs(double(observation - prediction) / observation);
+                    if (!std::isfinite(metrics.normalized_rmse) ||
+                        std::abs(metrics.normalized_rmse - expected) >
+                            32 * std::numeric_limits<double>::epsilon() * std::max(1., expected)) {
+                        throw std::runtime_error("RMS underflow changed a representable normalized error");
+                    }
+                }
+            }
+        }
+    }
+}
+
 void TestCovarianceOverflowRejection() {
     robot_identification::RegressionProblem problem;
     problem.sample_count = 4;
@@ -354,6 +382,7 @@ int main() {
     TestHarmonicScaleRobustness();
     TestMultiharmonicDerivativesAtZero();
     TestMetricScales();
+    TestSubnormalNormalizedErrors();
     TestCovarianceOverflowRejection();
     TestLargeParameterConvergence();
     TestMassMatrixScaleChecks();

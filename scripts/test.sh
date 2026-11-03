@@ -17,7 +17,7 @@ cmake -S robot_identification -B "$BUILD_ROOT/core" \
   -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DROBOT_IDENTIFICATION_BUILD_EXAMPLES=ON \
   "-DPython3_EXECUTABLE=$(command -v "$PYTHON_BIN")"
 cmake --build "$BUILD_ROOT/core" --parallel "$WORKERS"
-ctest --test-dir "$BUILD_ROOT/core" --output-on-failure
+cmake -E chdir "$BUILD_ROOT/core" ctest --output-on-failure
 cmake --install "$BUILD_ROOT/core" --prefix "$BUILD_ROOT/install"
 "$BUILD_ROOT/core/generic_regressor_example"
 
@@ -34,8 +34,12 @@ if [[ "$WITH_PINOCCHIO" == "--with-pinocchio" ]]; then
     -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
     "-DPython3_EXECUTABLE=$(command -v "$PYTHON_BIN")"
   cmake --build "$BUILD_ROOT/pinocchio" --parallel "$WORKERS"
-  ctest --test-dir "$BUILD_ROOT/pinocchio" --output-on-failure
+  cmake -E chdir "$BUILD_ROOT/pinocchio" ctest --output-on-failure
   cmake --install "$BUILD_ROOT/pinocchio" --prefix "$BUILD_ROOT/install"
 fi
-git diff --check
+if [[ -e "$ROOT_DIR/.git" ]]; then
+  git diff --check
+else
+  echo "Skipping git whitespace check: source tree has no .git metadata."
+fi
 echo "RobotIdentification validation passed."

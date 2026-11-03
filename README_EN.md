@@ -15,7 +15,7 @@ Recorders and model adapters depend on the identification core. No RobotServer, 
 
 For complete Pinocchio datasets, `backend.BuildProblem(dataset)` reuses call-local scratch. Individual samples and generic backend composition retain `Compute`; see the [Pinocchio backend](robot_identification_pinocchio/README.md).
 
-Core 0.1.1 / Pinocchio backend 0.2.1 share assembly validation and consume each batch regressor directly, avoiding per-sample temporary copies. Public interfaces and object layouts are unchanged; building the backend requires core >=0.1.1.
+Core 0.2.11 provides QR base parameters, a full-to-base mapping and constrained Fourier excitation design that compose with the Pinocchio backend. The [end-to-end example](robot_identification/examples/identification_design_example.cpp) covers design, fitting and independent validation; [algorithm and reference notes](docs/parameter-identification.md#参考项目评估与本次实现) describe equations, numerical assumptions and limits. Public interfaces remain compatible; the Pinocchio backend remains 0.2.1.
 
 ## Standalone build
 
@@ -27,9 +27,10 @@ Requires CMake 3.15+, C++17, and Eigen 3.3+. Full validation also requires Pytho
 cmake -S robot_identification -B build/core -DBUILD_TESTING=ON \
   -DROBOT_IDENTIFICATION_BUILD_EXAMPLES=ON
 cmake --build build/core --parallel 2
-ctest --test-dir build/core --output-on-failure
+cmake -E chdir build/core ctest --output-on-failure
 cmake --install build/core --prefix "$PWD/build/install"
 ./build/core/generic_regressor_example
+./build/core/identification_design_example
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 python3 -m pip install -r requirements-dev.txt

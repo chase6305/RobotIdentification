@@ -2,24 +2,23 @@
 # Copyright (c) 2026 RobotServer contributors.
 # SPDX-License-Identifier: MIT
 # ----------------------------------------------------------------------------
+"""Check or apply the repository's C++ and Python formatting."""
 
-import subprocess
-import re
-import os
-import shutil
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-import multiprocessing
 from functools import partial
+import multiprocessing
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
 import time
-import sys
 
-# Yapf requires python 3.6+
-if sys.version_info < (3, 6):
-    raise RuntimeError(
-        "Requires Python 3.6+, currently using Python {}.{}.".format(
-            sys.version_info.major, sys.version_info.minor))
+EXCLUDE_DIRS = {
+    ".venv", "build", ".git", "third_party", "deb_build", "install", "log",
+    ".cache", "__pycache__"
+}
 
 
 def _require_yapf():
@@ -32,49 +31,13 @@ def _require_yapf():
     if yapf.__version__ != "0.43.0":
         raise RuntimeError(
             "yapf 0.43.0 required. Install with `pip install yapf==0.43.0`.")
-    print("Using yapf version {}".format(yapf.__version__))
+    print(f"Using yapf version {yapf.__version__}")
 
 
-PYTHON_EXCLUDE_DIRS = [
-    "build",
-    ".git",
-    "third_party",
-    "script",
-    "deb_build",
-    "install",
-    "log",
-    ".cache",
-]
-
-PYTHON_EXCLUDE_FILES = [
-    "commit_format.py",
-]
-
-CPP_EXCLUDE_DIRS = [
-    "build", "install", "log", ".git", "third_party", "deb_build", ".cache"
-]
-
-
-def _glob_files(exclude_directories,
-                extensions,
-                exclude_files=None,
-                root_dir=None):
-    """
-    Find files with certain extensions in the root directory recursively,
-    excluding specified directories and files.
-
-    Args:
-        exclude_directories: list of directories to exclude, relative to the root repo directory.
-        extensions: list of extensions, e.g. ["cpp", "h"].
-        exclude_files: list of specific filenames to exclude.
-
-    Return:
-        List of file paths.
-    """
+def _glob_files(exclude_directories, extensions, root_dir=None):
+    """Find source files while pruning generated directories at every depth."""
     root_dir = Path(root_dir) if root_dir is not None else Path(
         __file__).resolve().parent.parent
-    exclude_paths = {root_dir / directory for directory in exclude_directories}
-    excluded_names = set(exclude_files or [])
     suffixes = tuple(f".{extension}" for extension in extensions)
     files = []
 
@@ -84,13 +47,11 @@ def _glob_files(exclude_directories,
     for directory, children, names in os.walk(root_dir, onerror=on_error):
         parent = Path(directory)
         children[:] = sorted(
-            name for name in children
-            if parent / name not in exclude_paths and name != "__pycache__")
-        for name in names:
-            path = parent / name
-            if name not in excluded_names and name.endswith(
-                    suffixes) and path.is_file():
-                files.append(str(path))
+            name for name in children if name not in exclude_directories)
+        files.extend(
+            str(parent / name)
+            for name in names
+            if name.endswith(suffixes) and (parent / name).is_file())
     return sorted(files)
 
 
@@ -107,286 +68,92 @@ def _worker_count(file_count, jobs=None):
 
 
 def _find_clang_format():
-    """
-    Find clang-format:
-      - not found: throw exception
-      - version mismatch: print warning
-    """
-    preferred_clang_format_name = "clang-format-18"
-    preferred_version_major = 18
-    clang_format_bin = shutil.which(preferred_clang_format_name)
-    if clang_format_bin is None:
-        clang_format_bin = shutil.which("clang-format")
-    if clang_format_bin is None:
+    binary = shutil.which("clang-format-18") or shutil.which("clang-format")
+    if binary is None:
         raise RuntimeError("clang-format not found.")
-    version_str = subprocess.check_output([clang_format_bin, "--version"
-                                          ]).decode("utf-8").strip()
-    try:
-        m = re.match("^clang-format version ([0-9.]*).*$", version_str)
-        if m:
-            version_str = m.group(1)
-            version_str_token = version_str.split(".")
-            major = int(version_str_token[0])
-            if major != preferred_version_major:
-                print("Warning: {} required, but got {}.".format(
-                    preferred_clang_format_name, version_str))
-        else:
-            raise
-    except:
-        print("Warning: failed to parse clang-format version {}, "
-              "please ensure {} is used.".format(version_str,
-                                                 preferred_clang_format_name))
-    print("Using clang-format version {}.".format(version_str))
-
-    return clang_format_bin
+    version = subprocess.check_output([binary, "--version"], text=True).strip()
+    match = re.search(r"clang-format version (\d+)(?:\.\d+)*", version)
+    if match is None or int(match[1]) != 18:
+        print(f"Warning: clang-format-18 required, but got {version}.")
+    print(f"Using {version}.")
+    return binary
 
 
-class CppFormatter:
-
-    standard_header = """// ----------------------------------------------------------------------------
-// Copyright (c) 2026 RobotServer contributors.
-// SPDX-License-Identifier: MIT
-// ----------------------------------------------------------------------------
-"""
-
-    def __init__(self, file_paths, clang_format_bin):
-        self.file_paths = file_paths
-        self.clang_format_bin = clang_format_bin
-
-    @staticmethod
-    def _check_style(file_path, clang_format_bin):
-        """
-        Returns (true, true) if (style, header) is valid.
-        """
-
-        cmd = [
-            clang_format_bin,
-            "-style=file",
-            "-output-replacements-xml",
-            file_path,
-        ]
-        result = subprocess.check_output(cmd).decode("utf-8")
-        if "<replacement " in result:
-            is_valid_style = False
-        else:
-            is_valid_style = True
-        return (is_valid_style, True)
-
-    @staticmethod
-    def _apply_style(file_path, clang_format_bin):
-        cmd = [
-            clang_format_bin,
-            "-style=file",
-            "-i",
-            file_path,
-        ]
-        subprocess.check_output(cmd)
-
-    def run(self, apply, no_parallel, verbose, jobs=None):
-        if apply:
-            print("Applying C++/CUDA style...")
-        else:
-            print("Checking C++/CUDA style...")
-
-        if verbose:
-            print("To format:")
-            for file_path in self.file_paths:
-                print("> {}".format(file_path))
-
-        start_time = time.time()
-        if no_parallel or len(self.file_paths) <= 1:
-            is_valid_files = map(
-                partial(self._check_style,
-                        clang_format_bin=self.clang_format_bin),
-                self.file_paths)
-        else:
-            # clang-format does its CPU work in child processes; threads
-            # avoid an additional Python process for every concurrent check.
-            with ThreadPoolExecutor(max_workers=_worker_count(
-                    len(self.file_paths), jobs)) as pool:
-                is_valid_files = list(
-                    pool.map(
-                        partial(self._check_style,
-                                clang_format_bin=self.clang_format_bin),
-                        self.file_paths))
-
-        changed_files = []
-        wrong_header_files = []
-        for is_valid, file_path in zip(is_valid_files, self.file_paths):
-            is_valid_style = is_valid[0]
-            is_valid_header = is_valid[1]
-            if not is_valid_style:
-                changed_files.append(file_path)
-                if apply:
-                    self._apply_style(file_path, self.clang_format_bin)
-            if not is_valid_header:
-                wrong_header_files.append(file_path)
-        print("Formatting takes {:.2f}s".format(time.time() - start_time))
-
-        return (changed_files, wrong_header_files)
+def _format_cpp(file_path, *, binary, apply):
+    result = subprocess.check_output(
+        [binary, "-style=file", "-output-replacements-xml", file_path],
+        text=True)
+    changed = "<replacement " in result
+    if changed and apply:
+        subprocess.check_call([binary, "-style=file", "-i", file_path])
+    return changed
 
 
-class PythonFormatter:
+def _format_python(file_path, *, style_config, apply):
+    from yapf.yapflib.yapf_api import FormatFile
 
-    standard_header = """# ----------------------------------------------------------------------------
-# Copyright (c) 2026 RobotServer contributors.
-# SPDX-License-Identifier: MIT
-# ----------------------------------------------------------------------------
-"""
-
-    def __init__(self, file_paths, style_config):
-        self.file_paths = file_paths
-        self.style_config = style_config
-
-    @staticmethod
-    def _check_style(file_path, style_config):
-        """
-        Returns (true, true) if (style, header) is valid.
-        """
-
-        from yapf.yapflib.yapf_api import FormatFile
-
-        _, _, changed = FormatFile(file_path,
-                                   style_config=style_config,
-                                   in_place=False)
-        return (not changed, True)
-
-    @staticmethod
-    def _apply_style(file_path, style_config):
-        from yapf.yapflib.yapf_api import FormatFile
-
-        _, _, _ = FormatFile(file_path,
-                             style_config=style_config,
-                             in_place=True)
-
-    def run(self, apply, no_parallel, verbose, jobs=None):
-        if apply:
-            print("Applying Python style...")
-        else:
-            print("Checking Python style...")
-
-        if verbose:
-            print("To format:")
-            for file_path in self.file_paths:
-                print("> {}".format(file_path))
-
-        start_time = time.time()
-        if no_parallel or len(self.file_paths) <= 1:
-            is_valid_files = map(
-                partial(self._check_style, style_config=self.style_config),
-                self.file_paths)
-        else:
-            with multiprocessing.Pool(_worker_count(len(self.file_paths),
-                                                    jobs)) as pool:
-                is_valid_files = pool.map(
-                    partial(self._check_style, style_config=self.style_config),
-                    self.file_paths)
-
-        changed_files = []
-        wrong_header_files = []
-        for is_valid, file_path in zip(is_valid_files, self.file_paths):
-            is_valid_style = is_valid[0]
-            is_valid_header = is_valid[1]
-            if not is_valid_style:
-                changed_files.append(file_path)
-                if apply:
-                    self._apply_style(file_path, self.style_config)
-            if not is_valid_header:
-                wrong_header_files.append(file_path)
-
-        print("Formatting takes {:.2f}s".format(time.time() - start_time))
-        return (changed_files, wrong_header_files)
+    _, _, changed = FormatFile(file_path,
+                               style_config=style_config,
+                               in_place=apply)
+    return changed
 
 
-def _filter_files(files, ignored_patterns):
-    return [
-        file for file in files if not any(
-            [ignored_pattern in file for ignored_pattern in ignored_patterns])
-    ]
+def _run_formatter(files, formatter, pool_type, args):
+    if args.verbose:
+        for file_path in files:
+            print(f"> {file_path}")
+    start = time.monotonic()
+    if args.no_parallel or len(files) <= 1:
+        results = list(map(formatter, files))
+    else:
+        # clang-format does its work in child processes; YAPF runs Python code.
+        with pool_type(_worker_count(len(files), args.jobs)) as pool:
+            results = list(pool.map(formatter, files))
+    print(f"Formatting takes {time.monotonic() - start:.2f}s")
+    return [path for path, changed in zip(files, results) if changed]
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--apply",
-        dest="apply",
-        action="store_true",
-        default=False,
-        help="Apply style to files in-place.",
-    )
-    parser.add_argument(
-        "--no_parallel",
-        dest="no_parallel",
-        action="store_true",
-        default=False,
-        help="Disable parallel execution.",
-    )
-    parser.add_argument(
-        "--verbose",
-        dest="verbose",
-        action="store_true",
-        default=False,
-        help="If true, prints file names while formatting.",
-    )
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--apply",
+                        action="store_true",
+                        help="Apply style to files in-place.")
+    parser.add_argument("--no_parallel",
+                        action="store_true",
+                        help="Disable parallel execution.")
+    parser.add_argument("--verbose",
+                        action="store_true",
+                        help="Print file names while formatting.")
     parser.add_argument(
         "--jobs",
         type=_positive_jobs,
         help="Maximum parallel checks (default: min(CPU count, 16)).")
     args = parser.parse_args()
-
-    # Check formatting libs
     _require_yapf()
-    clang_format_bin = _find_clang_format()
-    pwd = Path(os.path.dirname(os.path.abspath(__file__)))
-    python_style_config = str(pwd.parent / ".style.yapf")
-
-    # Check or apply style
-    cpp_formatter = CppFormatter(
-        _glob_files(CPP_EXCLUDE_DIRS,
-                    ["h", "hpp", "cpp", "cuh", "cu", "isph", "ispc", "h.in"]),
-        clang_format_bin=clang_format_bin)
-    python_formatter = PythonFormatter(_glob_files(
-        PYTHON_EXCLUDE_DIRS, ["py"], exclude_files=PYTHON_EXCLUDE_FILES),
-                                       style_config=python_style_config)
-
+    binary = _find_clang_format()
+    root = Path(__file__).resolve().parent.parent
     changed_files = []
-    wrong_header_files = []
-    changed_files_cpp, wrong_header_files_cpp = cpp_formatter.run(
-        apply=args.apply,
-        no_parallel=args.no_parallel,
-        verbose=args.verbose,
-        jobs=args.jobs)
-    changed_files.extend(changed_files_cpp)
-    wrong_header_files.extend(wrong_header_files_cpp)
-    print(f"apply cpp file num is {len(changed_files_cpp)}")
-
-    changed_files_python, wrong_header_files_python = python_formatter.run(
-        apply=args.apply,
-        no_parallel=args.no_parallel,
-        verbose=args.verbose,
-        jobs=args.jobs)
-    changed_files.extend(changed_files_python)
-    wrong_header_files.extend(wrong_header_files_python)
-    print(f"apply python file num is {len(changed_files_python)}")
-
-    if len(changed_files) == 0 and len(wrong_header_files) == 0:
+    for label, extensions, formatter, pool_type in (
+        ("C++/CUDA", ["h", "hpp", "cpp", "cuh", "cu", "isph", "ispc", "h.in"],
+         partial(_format_cpp, binary=binary,
+                 apply=args.apply), ThreadPoolExecutor),
+        ("Python", ["py"],
+         partial(_format_python,
+                 style_config=str(root / ".style.yapf"),
+                 apply=args.apply), multiprocessing.Pool),
+    ):
+        print(f"{'Applying' if args.apply else 'Checking'} {label} style...")
+        changed_files.extend(
+            _run_formatter(_glob_files(EXCLUDE_DIRS, extensions), formatter,
+                           pool_type, args))
+    if not changed_files:
         print("All files passed style check.")
-        exit(0)
+        return 0
+    print("Style applied to the following files:" if args.
+          apply else "Style error found in the following files:")
+    print("\n".join(changed_files))
+    return 1
 
-    if args.apply:
-        if len(changed_files) != 0:
-            print("Style applied to the following files:")
-            print("\n".join(changed_files))
-            exit(1)
-        if len(wrong_header_files) != 0:
-            print("Please correct license header *manually* in the following "
-                  "files (see util/check_style.py for the standard header):")
-            print("\n".join(wrong_header_files))
-            exit(1)
-    else:
-        error_files_no_duplicates = list(set(changed_files +
-                                             wrong_header_files))
-        if len(error_files_no_duplicates) != 0:
-            print("Style error found in the following files:")
-            print("\n".join(error_files_no_duplicates))
-            exit(1)
+
+if __name__ == "__main__":
+    raise SystemExit(main())

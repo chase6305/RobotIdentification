@@ -61,9 +61,21 @@ void ExpectRejected(bool raw, const Fixture& fixture, const std::string& text) {
 void TestNumericGrammar() {
     const Fixture fixture;
     for (bool raw : {false, true}) {
+        for (int rows = 0; rows < 3; ++rows) {
+            std::string text = Header(raw) + "\n\n";
+            for (int row = 0; row < rows; ++row) text += Row(raw, std::to_string(row), "1") + "\n";
+            if (raw || rows == 0) {
+                ExpectRejected(raw, fixture, text);
+            } else {
+                fixture.Write(text);
+                const auto data = robot_identification::ReadDatasetCsv(fixture.path);
+                if (data.samples.size() != static_cast<std::size_t>(rows) || !data.Validate())
+                    throw std::runtime_error("short processed CSV changed its valid row contract");
+            }
+        }
         for (const std::string token :
              {"0", "-0", " +1.25", "\t-2.5e+2", "\r\f\v1.25", "0x1.8p+2", "-0x.8", " +0X1.8P+2", "0x1e2", "1.", ".5",
-              "0e-9999", "-0x0p-9999", "1.7976931348623157e308", "2.2250738585072014e-308"}) {
+              "0e-9999", "-0x0p-9999", "0x1p+2", "-0X1P-2", "1.7976931348623157e308", "2.2250738585072014e-308"}) {
             const double expected = std::stod(token);
             for (const std::string newline : {"\n", "\r\n"}) {
                 // Blank rows and a final row without a newline remain valid.
@@ -84,15 +96,15 @@ void TestNumericGrammar() {
                 }
             }
         }
-        for (const std::string& token : std::vector<std::string>{"",        " ",         "1 ",
-                                                                 "1junk",   "1e",        "nan",
-                                                                 "inf",     "-infinity", "1e9999",
-                                                                 "1e-9999", "\"1\"",     "1,2",
-                                                                 "--1",     "+-1",       "-+1",
-                                                                 "++1",     "0x-1",      "0x+1",
-                                                                 "-0x-1",   "0x",        "0x1p",
-                                                                 "0x1e+2",  "0x1p+1024", "0x1p-1075",
-                                                                 "1_000",   "１２",      std::string("1\0junk", 6)}) {
+        for (const std::string& token :
+             std::vector<std::string>{"",        " ",          "1 ",        "1junk",
+                                      "1e",      "nan",        "inf",       "-infinity",
+                                      "1e9999",  "1e-9999",    "\"1\"",     "1,2",
+                                      "--1",     "+-1",        "-+1",       "++1",
+                                      "0x-1",    "0x+1",       "-0x-1",     "0x",
+                                      "0x1p",    "0x1e+2",     "0x1p+1024", "0x1p-1075",
+                                      "0x1p+-2", "-0X0P+-999", "0x1p--2",   "0x1p-+2",
+                                      "0x1p++2", "1_000",      "１２",      std::string("1\0junk", 6)}) {
             ExpectRejected(raw, fixture,
                            Header(raw) + "\n" + Row(raw, "0", token) + "\n" + Row(raw, "1", "2") + "\n" +
                                Row(raw, "2", "3") + "\n");
@@ -128,6 +140,24 @@ void TestTimestampDiagnostics() {
         fixture.Write(Header(raw) + "\r\n" + Row(raw, "-3", "1") + "\r\n\r\n" + Row(raw, "-2", "2") + "\r\n" +
                       Row(raw, "-1", "3"));
         Read(raw, fixture.path);
+    }
+}
+
+void TestInvalidFieldsAcrossSignals() {
+    const Fixture fixture;
+    for (bool raw : {false, true}) {
+        const std::string prefix = Header(raw) + "\n" + Row(raw, "0", "1") + "\n" + Row(raw, "1", "2") + "\n";
+        const std::size_t columns = raw ? 3 : 5;
+        for (std::size_t column = 0; column < columns; ++column) {
+            for (const std::string token : {"nan", "1e9999", "1e-9999"}) {
+                std::string row;
+                for (std::size_t field = 0; field < columns; ++field) {
+                    if (field) row += ',';
+                    row += field == column ? token : "2";
+                }
+                ExpectRejected(raw, fixture, prefix + row);
+            }
+        }
     }
 }
 
@@ -182,7 +212,8 @@ void CheckRoundTrip(const Fixture& fixture, const std::vector<double>& values) {
     }
     robot_identification::WriteRawDatasetCsv(raw, fixture.path);
     const auto restored_raw = robot_identification::ReadRawDatasetCsv(fixture.path);
-    if (restored_raw.joint_names != raw.joint_names || restored_raw.time_seconds.size() != raw.time_seconds.size()) {
+    if (restored_raw.joint_names != raw.joint_names || restored_raw.time_seconds.size() != raw.time_seconds.size() ||
+        !restored_raw.Validate()) {
         throw std::runtime_error("raw round trip changed dimensions");
     }
     for (std::size_t index = 0; index < values.size(); ++index) {
@@ -192,7 +223,8 @@ void CheckRoundTrip(const Fixture& fixture, const std::vector<double>& values) {
     }
     robot_identification::WriteDatasetCsv(processed, fixture.path);
     const auto restored = robot_identification::ReadDatasetCsv(fixture.path);
-    if (restored.joint_names != processed.joint_names || restored.samples.size() != values.size()) {
+    if (restored.joint_names != processed.joint_names || restored.samples.size() != values.size() ||
+        !restored.Validate()) {
         throw std::runtime_error("processed round trip changed dimensions");
     }
     for (std::size_t index = 0; index < values.size(); ++index) {
@@ -447,6 +479,7 @@ int main() {
     TestLargeRawStorageBoundaries();
     TestHeaderNamesBeforeRows();
     TestTimestampDiagnostics();
+    TestInvalidFieldsAcrossSignals();
     TestNumericGrammar();
     TestFiniteRangeRoundTrip();
     TestLocaleIndependence();

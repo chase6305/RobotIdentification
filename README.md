@@ -15,7 +15,7 @@
 
 整批 Pinocchio 数据可用 `backend.BuildProblem(dataset)` 复用调用内工作区；单样本和通用后端组合继续使用 `Compute`。详见 [Pinocchio 后端](robot_identification_pinocchio/README.md)。
 
-核心 0.1.1 / Pinocchio 后端 0.2.1 共用组装校验，批处理直接消费当前回归矩阵，避免逐样本临时副本；公开接口和对象布局不变。后端构建需要核心 >=0.1.1。
+核心 0.2.11 提供 QR 基参数约简、完整参数映射与受限 Fourier 激励优化，可与已有 Pinocchio 后端组合。[端到端示例](robot_identification/examples/identification_design_example.cpp)演示设计、拟合与独立验证；[算法说明与参考评估](docs/parameter-identification.md#参考项目评估与本次实现)记录公式、数值假设和限制。公开接口保持兼容，Pinocchio 后端仍为 0.2.1。
 
 ## 独立构建
 
@@ -27,9 +27,10 @@ Ubuntu 上的 venv 示例需要 `python3-venv`。
 cmake -S robot_identification -B build/core -DBUILD_TESTING=ON \
   -DROBOT_IDENTIFICATION_BUILD_EXAMPLES=ON
 cmake --build build/core --parallel 2
-ctest --test-dir build/core --output-on-failure
+cmake -E chdir build/core ctest --output-on-failure
 cmake --install build/core --prefix "$PWD/build/install"
 ./build/core/generic_regressor_example
+./build/core/identification_design_example
 ```
 
 安装后的 C++ 消费者使用 `find_package(robot_identification REQUIRED)` 和 `robot_identification::robot_identification`。

@@ -81,6 +81,9 @@ public:
     [[nodiscard]] std::size_t harmonic_count() const noexcept;
     [[nodiscard]] double period_seconds() const noexcept;
     [[nodiscard]] ExcitationSample Evaluate(double time_seconds) const;
+    // Successful calls reuse the four vector allocations when their sizes match.
+    // Non-finite times and overflowing results throw; outputs may then be partial.
+    void EvaluateInto(double time_seconds, ExcitationSample& sample) const;
     [[nodiscard]] HarmonicBounds ConservativeBounds() const;
 
 private:

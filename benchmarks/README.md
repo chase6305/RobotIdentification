@@ -1,12 +1,13 @@
 # Synthetic identification benchmarks / 合成辨识基准
 
-These opt-in Linux/GNU-linker executables measure warmed calls and report the
-median of five repetitions. They are software measurements, not hardware timing
-guarantees or evidence that a robot trajectory is safe or sufficiently exciting.
-Compile both libraries and consumers in Release mode with matching compiler and
-Eigen allocation ABI.
+These Linux/GNU-linker programs measure software behavior on synthetic data.
+They do not establish hardware timing, trajectory safety or sufficient excitation.
+合成基准用于复现软件性能与数值行为；不替代硬件验证，也不设置 CI 时序门槛。
 
-The lightweight core requires C++17 and Eigen, with no ROS or Pinocchio:
+## Build
+
+Build both the library and consumers in Release mode with matching compiler,
+headers and Eigen allocation ABI:
 
 ```bash
 cmake -S robot_identification -B build/benchmark-core -DCMAKE_BUILD_TYPE=Release \
@@ -19,8 +20,16 @@ cmake --build build/benchmarks --parallel 2
 build/benchmarks/core_bench
 ```
 
-With a configured native Pinocchio environment, install the optional backend in
-Release mode and enable its benchmark:
+Optional CMake switches:
+
+| Switch | Enables | Additional requirement |
+|---|---|---|
+| `ROBOT_IDENTIFICATION_BENCH_STRESS_TARGETS=ON` | Analytic numerical/storage campaigns | Extended-range `long double` for wide-scale oracles |
+| `ROBOT_IDENTIFICATION_BENCH_EXACT_DOT_REFERENCE=ON` | `parameter_dot_stress` | Boost headers; core >=0.2.0 |
+| `ROBOT_IDENTIFICATION_BENCH_PINOCCHIO=ON` | `pinocchio_bench`, and `pinocchio_stress` when stress targets are enabled | Installed native Pinocchio backend |
+
+For Pinocchio, first build and install the backend with the same Release and
+allocation settings, adding native dependency prefixes to `CMAKE_PREFIX_PATH`:
 
 ```bash
 cmake -S robot_identification_pinocchio -B build/benchmark-pin -DCMAKE_BUILD_TYPE=Release \
@@ -28,146 +37,181 @@ cmake -S robot_identification_pinocchio -B build/benchmark-pin -DCMAKE_BUILD_TYP
   -DCMAKE_INSTALL_PREFIX="$PWD/build/benchmark-install"
 cmake --build build/benchmark-pin --parallel 2
 cmake --install build/benchmark-pin
-cmake -S benchmarks -B build/benchmarks -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH="$PWD/build/benchmark-install" -DROBOT_IDENTIFICATION_BENCH_PINOCCHIO=ON
-cmake --build build/benchmarks --parallel 2
-build/benchmarks/pinocchio_bench
 ```
 
-Core cases use a 1,500-row/12-parameter system with Huber IRLS, optional ridge,
-and a seven-axis/20-harmonic trajectory. The Pinocchio cases assemble 1,000
-samples on two/14-axis scalar-joint chains. Backend versions >=0.2.0 additionally
-measure the named batch API with matching model coordinate names.
+`COLCON_IGNORE` excludes these consumers from ROS workspace discovery. The core
+and default benchmarks require neither ROS nor Pinocchio.
 
-Allocation counters apply to the benchmark thread. GNU linker wrappers count
-malloc/calloc calls in the executable and static libraries; executable overrides
-count ordinary/array/aligned C++ new. The counters are disjoint and their sum is
-printed as the tracked total. Direct C allocation inside prebuilt shared
-libraries can escape those wrappers. Instrumentation is compiled into these
-standalone executables. Pinocchio reports per-batch counts; core cases report
-per-call counts.
+## Timing and allocation measurements
 
-Use matching installed builds, identical harness sources, the same allowed CPU
-(optional `taskset -c CPU ...`) and a quiet machine for comparisons. Record raw
-output, CPU/compiler/dependency versions and build flags. `COLCON_IGNORE` keeps
-these CMake consumers outside workspace package discovery.
+| Program | Timed operation | Reporting |
+|---|---|---|
+| `core_bench` | Huber/ridge solves on 1,500 rows and 12 parameters; seven-axis/20-harmonic trajectories | Warmed median of five repetitions; allocations per call |
+| `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Median milliseconds, allocations per read, process peak RSS |
+| `design_bench CASE [ITERATIONS]` | One API batch; fixture construction excluded | JSON wall/process CPU microseconds per call and checksum |
+| `parameter_bench CASE [ITERATIONS]` | Warmed `ToBaseParameters`; construction excluded | JSON wall/process CPU time, allocations and checksum |
+| `pinocchio_bench` | Generic and named batch assembly of 1,000 samples on two/14-axis chains | Warmed median milliseconds and allocations per batch |
 
-基准只测量预热后的合成调用，报告五轮中位数；不构成硬件时序或轨迹验收保证。
-核心用例覆盖 Huber IRLS、ridge 和多谐波轨迹；可选 Pinocchio 用例比较逐样本通用
-组装与具名批量入口。库和程序均应以匹配的 Release、编译器和 Eigen 配置构建。
+GNU linker wrappers count executable/static-library `malloc` and `calloc`;
+C++ overrides count ordinary, array and aligned `new`. These disjoint counters
+apply to the benchmark thread; direct C allocation inside shared libraries can
+escape instrumentation. `design_bench` has no allocation instrumentation.
 
-计数针对执行基准的线程，覆盖可执行文件/静态库中被包装的 malloc/calloc，以及
-被覆盖函数捕获的 C++ new/new[]/对齐 new；共享库内部直接 C 分配可能不被捕获。
-保存原始输出和运行环境，区分每次调用与每批数据的统计单位。
+For comparisons, use identical harness sources, matched installed headers and
+libraries, alternating fresh processes and an allowed CPU (`taskset -c CPU` if
+needed). Preserve raw observations, compiler/build flags and dependency versions.
+CPU and wall medians are separate statistics; shared-host scheduling, frequency,
+filesystem cache and allocator state still affect results. Do not compare an
+older API emulation with a current native API as though only internals changed.
 
-Measure raw CSV read/checksum/destruction as a complete file operation:
+### API cases
+
+Use `parameter_bench` for mapping and `design_bench` for the other groups.
+
+| Program/group | Cases |
+|---|---|
+| Parameter mapping | `map-scalar`, `map-unit`, `map-sparse`, `map-dense`, `map-dense-small`, `map-dense-wide`, `map-dense-large`, `map-dense-signed` |
+| Basis reduction | `basis-scalar`, `basis-small`, `basis-batch`, `basis-full-rank`, `basis-zero-scalar`, `basis-zero-small`, `basis-zero-batch` |
+| Dependency error | `reconstruction-scalar`, `reconstruction-pair`, `reconstruction-small`, `reconstruction-wide`, `reconstruction-large`, `reconstruction-254`, `reconstruction-255`, `reconstruction-256`, `reconstruction-511`, `reconstruction-batch` |
+| Envelopes | `bounds-dense`, `bounds-sine`, `bounds-exact` |
+| Sampling | `trajectory-owning`, `trajectory-reused`, `trajectory-validation` |
+| Information/search | `quality-unit`, `quality-scaled`, `optimize`, `optimize-scaled` |
+
+The mapping cases include one owning result-vector allocation. `map-unit` has
+80 independent columns; `map-sparse` adds 80 zero columns. Dense shapes are
+rank/columns 8/16 (small), 24/192 (wide), 80/160 (default), 160/320 (large) and
+24/96 with alternating parameter signs (signed).
+
+Basis cases check dependencies and construct reduced output; reconstruction
+cases time `ReconstructionError` alone. The usual basis has 80 directions and
+140 columns, with 14 rows (small) or 65,537 (batch); the full-rank case has 80
+independent columns. Zero cases retain only zero-column dependencies. Scalar
+cases isolate one-row/two-column inputs; pair and 254/255/256/511-row cases
+exercise reconstruction block tails.
+
+Envelope cases use both coefficient families, only sine, or exact dyadic 3-4-5
+amplitudes. Exact boundaries can require more work than ordinary coefficients.
+Sampling compares owning output with buffer reuse; validation checks 201 samples.
+Search uses seven independent actuators and a 15-evaluation budget; scaled cases
+fix parameter/noise scales. Core >=0.2.0 enables these APIs; `trajectory-reused`
+uses `EvaluateInto` at >=0.2.4 and owning evaluation/assignment on older cores.
+The Pinocchio batch comparison requires backend >=0.2.0.
 
 ```bash
-python3 benchmarks/generate_raw_csv.py --samples 200000 --dof 14 --output build/raw-fixture.csv
+build/benchmarks/parameter_bench map-dense 10000
+build/benchmarks/design_bench reconstruction-255 2000
+build/benchmarks/design_bench basis-batch 1
+build/benchmarks/design_bench trajectory-reused 100000
+build/benchmarks/design_bench trajectory-validation 1000
+build/benchmarks/design_bench optimize-scaled 20
+```
+
+### CSV comparisons
+
+```bash
+python3 benchmarks/generate_raw_csv.py --samples 200000 --dof 14 \
+  --output build/raw-fixture.csv
+python3 benchmarks/generate_raw_csv.py --format processed --samples 200000 --dof 14 \
+  --output build/processed-fixture.csv
 build/benchmarks/csv_bench build/raw-fixture.csv 1
-build/benchmarks/csv_bench build/raw-fixture.csv 5
+build/benchmarks/csv_bench build/processed-fixture.csv 5 processed
+python3 benchmarks/compare_csv.py build/before/csv_bench build/after/csv_bench \
+  build/raw-fixture.csv --rounds 4 --repetitions 5 --output build/csv-comparison.json
 ```
 
-The generator refuses to overwrite and prints the file size and SHA-256. One
-repetition skips warmup; use a fresh process for peak-RSS comparisons. Multiple
-repetitions warm once and report the median. `peak_rss_kib` comes from Linux
-`getrusage` for the entire process, including any warmup. Allocation counts are
-per read, with the same scope limitations above. Compare the same fixture and
-retain its digest. Filesystem cache, allocator and host activity affect results.
+The generator refuses replacement and reports size/SHA-256. Processed fixtures
+include analytic velocity and acceleration of the sine position. One repetition
+skips warmup; multiple repetitions warm once. `peak_rss_kib` is Linux `getrusage`
+for the whole process, including warmup/launcher history; compare RSS in fresh
+processes. Chunked imports still retain storage proportional to final dataset size.
 
-CSV 基准包含读取、校验和计算及返回值销毁；与控制热调用的范围不同。单轮不预热，
-峰值 RSS 比较使用独立新进程；多轮先预热一次，报告中位数。生成器拒绝覆盖已有
-文件，输出大小与摘要。分块读取仍须为最终数据集保留与行数/关节数成正比的存储，
-并非恒定内存接口；减少峰值的代价可能是更多块分配。
+The comparison helper snapshots both executables, runs fresh copies at one path
+in alternating order, checks dimensions/checksums, and hashes the fixture before
+and after with bounded memory. Dependencies must remain discoverable after copying.
+Add `--format processed` or `--cpu CPU` as needed. Reports must use new paths;
+positive `reduction_percent` describes this sample, not a general speedup guarantee.
 
-Enable `-DROBOT_IDENTIFICATION_BENCH_STRESS_TARGETS=ON` for deterministic analytic
-solver campaigns:
+## Correctness campaigns
+
+Enable stress targets, then run a program with an optional duration in seconds
+(default 60; allowed 1–86,400). Fixed seeds produce reproducible cases; duration
+and scheduling determine counts. Programs stop on a mismatch and report counts.
+
+| Program | Reference and coverage |
+|---|---|
+| `solver_stress` | Orthogonal analytic systems; dimensions, rank, conditioning, weights and ridge |
+| `solver_scale_stress` | Common weights through `1e±300`, design scales through `1e±130`, extended-range covariance |
+| `csv_stress` | Bitwise raw round trips across chunk boundaries, signed zero, finite extremes, LF/CRLF/CR, late-error rejection and retained owning results |
+| `preprocessing_stress` | Independent long-double Lagrange derivatives, nonuniform intervals, extreme scales, unusable-result rejection |
+| `metrics_stress` | Independent extended-range RMS/absolute errors and normalized ratios, sparse subnormals, zero references, residual overflow |
+| `robust_stress` | Scalar Huber score roots by bisection, weighted covariance, outliers, weight/design exponents ±1000/±450, one/two-iteration stops |
+| `trajectory_stress` | Closed-form position through jerk and envelopes; phase/product underflow, cancellation, overflow, inactive harmonics |
+| `design_stress` | Known-rank cosine bases, column units at binary exponents -300..300, weighted fits, independent holdout, analytic Gram eigenvalues and constrained search |
+| `pinocchio_stress` | Four workers, shared backends, model-owner churn, scalar/translation joints, actuator composition and native RNEA |
 
 ```bash
-build/benchmarks/solver_stress 3600
 build/benchmarks/solver_scale_stress 3600
 build/benchmarks/csv_stress 3600
-build/benchmarks/preprocessing_stress 3600
-# Also requires ROBOT_IDENTIFICATION_BENCH_PINOCCHIO=ON:
-build/benchmarks/pinocchio_stress 3600
+build/benchmarks/robust_stress 3600
+build/benchmarks/design_stress 3600
 ```
 
-The optional duration is 1–86,400 seconds (default 60). Orthogonal synthetic
-systems vary dimensions, conditioning, rank and weights; the first campaign also
-covers ridge. The second varies common weights through `1e±300` and design scales
-through `1e±130`, using extended-range long-double covariance oracles. Noise stays
-bounded relative to the weakest nonzero singular direction so the constructed
-reference remains meaningful under floating-point perturbations. These opt-in
-correctness programs report case counts and stop on a mismatch. They are separate
-from timing benchmarks and do not add CTest timing gates.
+Solver noise is bounded relative to the weakest nonzero singular direction.
+Parameter error is `norm(actual-reference) / max(1, norm(reference))`; covariance
+error uses stable Frobenius norms and denominator `max(1e-300, norm(reference))`.
+Pinocchio uses the parameter-error convention, requires scalar named batches to
+match generic assembly exactly, and rejects named multi-coordinate batches.
 
-`csv_stress` varies row/joint counts across chunk boundaries and checks bitwise
-raw-CSV round trips, signed zero, subnormal/maximum finite values and LF/CRLF/CR
-line endings. It appends a late invalid row, checks rejection and retained owning
-results, and removes only its own temporary directory. `pinocchio_stress` uses
-four workers with shared immutable backends, model-owner churn and scalar or
-translation joints. Single-sample matrices and actuator-augmented problems are
-checked against native RNEA with known parameters; scalar named batches must
-match generic assembly exactly, while unsupported named multi-coordinate batches
-must reject. Its error is `norm(actual-reference) / max(1, norm(reference))`.
-Each worker has a fixed seed; runtime and scheduling determine the case count.
+Preprocessing allowance is
+`64 * epsilon(double) * sum(abs(w * input)) + sum(abs(w) * input_error) + 32 * denorm_min(double)`.
+Acceleration propagates velocity allowances through the second derivative; this
+handles nearly linear inputs and double quantization without a relative-only
+acceleration test. Trajectory sample allowance is
+`128 * epsilon(double) * sum(abs(contributions)) + 4 * denorm_min(double)`;
+envelopes use `8 * epsilon(double)` times their magnitude plus the same subnormal
+allowance. Ordinary phases use the API's double phase; subnormal phases use the
+extended product. Nonfinite active phases and unrepresentable final samples reject.
 
-`preprocessing_stress` checks three-point differentiation against independent
-long-double Lagrange weights, varying nonuniform time steps and position scales.
-It requires an extended-range long double oracle, covers finite results with
-overflowing double secants, and requires rejection of unrepresentable results.
-For Lagrange weights `w`, its rounding allowance is
-`64 * epsilon(double) * sum(abs(w * input)) + sum(abs(w) * input_error) +
-32 * denorm_min(double)`. The acceleration comparison propagates the velocity
-allowances through the second derivative. This remains meaningful when a nearly
-linear position makes acceleration much smaller than the differentiated inputs;
-a relative tolerance on acceleration alone can reject ordinary rounding. The
-subnormal term accounts for double quantization. The seed is fixed.
+Metrics form normalized RMS ratios before rounding the individual RMS values.
+Huber fits must solve their reported weight set and retain/reduce the initial WLS
+objective; only converged fits are compared with the Huber root. Fits consuming
+the 200-iteration cap without convergence are counted separately. Design holdout
+checks must reject a newly excited zero calibration column.
 
-An optional second argument replays from a case index (0–100000000):
-`preprocessing_stress 10 7342120`. Prefix RNG replay occurs before the requested
-campaign duration and can take time. Rejections and accepted cases are counted
-only in the measured campaign, with the first index reported. Failure output
-includes the captured input and the compared coefficients.
+For replay, append a case index: `PROGRAM 10 INDEX`. Preprocessing accepts up to
+100000000 and generates the RNG prefix before starting the timed campaign.
+Metrics, trajectory and design accept up to 1000000000000 and seed each case
+directly. Failure output identifies the case and relevant input.
 
-The reported parameter error is `norm(actual-reference) / max(1, norm(reference))`;
-covariance error is the Frobenius norm of its difference divided by
-`max(1e-300, norm(reference_covariance))`, evaluated with stable norms. Parameter
-error therefore uses an absolute scale for small reference vectors rather than
-being a pure relative error.
+### Exact parameter-dot reference
 
-可选随机验证使用固定种子和解析正交系统，检查不同维度、秩、条件数、ridge 和
-权重范围。宽尺度协方差参考使用扩展范围的 long double。时间参数默认 60 秒，
-可显式运行一小时；程序遇到不一致即失败，不将合成性能设为 CI 时序门槛。
+```bash
+build/benchmarks/parameter_dot_stress 60 0
+```
 
-新增 `csv_stress` 检查跨分块的位级往返、有限极值、三种换行和末尾错误；
-`pinocchio_stress` 以四个线程检查后端共享、所有权切换、具名批量与通用组装、
-执行器组合及原生逆动力学参考。它们只验证合成软件行为，不能替代硬件测试。
-`preprocessing_stress` 用独立的扩展范围拉格朗日权重检查时间/位置尺度、可表示导数
-和不可表示结果拒绝；容差按差分权重的绝对贡献和前一阶段舍入误差传播计算，
-并保留次正规量化余量。可用第二参数重放指定编号的用例。
+This separately enabled program uses Boost `cpp_int` dyadics built with `frexp`
+and compares public API outputs with exact adjacent-double midpoints/tie parity.
+It covers up to 257 columns, product/block cancellation, subnormal ties, exact
+overflow/nonzero underflow, zero-column mappings and sampled caller rounding modes.
+`rounding_samples` includes nearest and the three directed modes. Counts include
+repeated boundary fixtures, not globally unique inputs. Keep corrected-cancellation
+cases in correctness checks; an incorrect zero is not a useful timing baseline.
+The core does not depend on Boost or this reference implementation.
 
-After sourcing the installed ROS packages, run an independent 14-axis recorder
-load test on Linux:
+## Recorder load test
+
+After sourcing installed ROS packages:
 
 ```bash
 ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=78 python3 benchmarks/recorder_soak.py \
-  --duration 3600 --rate 1000 --qos-depth 1000 \
-  --output build/soaks/recorder.json
+  --duration 3600 --rate 1000 --qos-depth 1000 --output build/soaks/recorder.json
 ```
 
-The producer reverses joint order periodically and injects NaN, missing-effort
-and duplicate-name messages. Validation checks every recorded joint/torque row,
-strict sample order, metadata counts and the raw-file SHA-256. It reports missing
-valid/invalid deliveries separately. The default minimum delivery fraction is
-0.95 for both classes; use `--minimum-delivery-fraction 1` to require all sent
-messages. A passing default run can therefore include transport losses. QoS
-depth trades queue memory and callback latency against burst tolerance; these
-measurements do not establish loss-free or source-time acquisition. Receipt
-timestamps remain process-monotonic. Output must be a new `.json` path; CSV and
-logs are retained beside it. A 1,000 Hz, one-hour run writes about 1.8 GB of CSV.
-
-`recorder_soak.py` 自带十四关节合成发布器，独立于控制仓库；检查重排、非法消息、
-每行数据、计数与摘要，明确记录未送达数量。默认要求至少 95% 的有效/无效消息
-分别送达，可用参数设为 100%。队列深度不改变时间戳来源，也不构成无丢包承诺；
-一小时 1000 Hz 测试会保留约 1.8 GB 数据，请使用新的输出路径。
+The 14-axis producer periodically reverses joint order and sends NaN,
+missing-effort and duplicate-name messages. Validation checks every joint/torque
+row, strict ordering, metadata counts and raw-file SHA-256. Reports distinguish
+missing valid/invalid deliveries; the default minimum is 95% for each class.
+Use `--minimum-delivery-fraction 1` to require all sent messages. Queue depth
+trades memory/latency against burst tolerance; timestamps remain process-monotonic.
+Outputs must use a new `.json` path; CSV/logs remain beside it. At 1000 Hz, one hour
+writes about 1.8 GB. Passing the default threshold can include transport losses.

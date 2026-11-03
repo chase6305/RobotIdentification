@@ -2,6 +2,141 @@
 
 ## Unreleased
 
+- Core 0.2.11 removes redundant IRLS weight/singular-value copies and intermediate
+  results, moves trajectory bounds into validation output, and stores raw CSV
+  chunks directly. Share CSV input and joint-name checks; derive validation
+  success from its existing failure state. Remove a duplicate derivative scan
+  after each coefficient has already been checked. Public interfaces and
+  numerical policies are unchanged.
+- Consolidate formatting and replay-argument runners, remove inactive header
+  checks, skip generated directories at every depth, and shorten the benchmark
+  guide around current commands. Processed CSV retains its final validation
+  after paired measurements showed a regression when it was omitted.
+
+- Core 0.2.10 reads CSV header fields directly without a string stream or
+  whole-header copies. Share the raw chunk materialization loop while releasing
+  each field before allocating the next output. Preserve header grammar, numeric
+  parsing, row order and bounded spare capacity. Benchmarks inherit the core's
+  exported C++17 requirement and share identical instrumented-target setup.
+  Public headers and numerical algorithms are unchanged.
+
+- Core 0.2.9 stores solver decompositions in place, removing heap ownership
+  indirection while preserving the allocation-saving diagnostic-input branch.
+  Share raw/processed CSV
+  writer setup while preserving validation order, headers, numeric formatting
+  and close-time errors. Consolidate repeated CMake test declarations and keep
+  the core README focused on current contracts, with version history here.
+  Public headers and numerical policies are unchanged.
+
+- Core 0.2.8 reduces dependency-check division work to once per column/row block.
+  The largest nonnegative residual gives the same corrected quotient by
+  monotonicity. Preserve row accumulation order, outward conversion, tolerance
+  policy, NaN/infinite handling and bounded scratch. Add column-scale, block-tail,
+  rounding-mode and fused-residual maximum regressions. Public headers are unchanged.
+- Core 0.2.7 shares each dependency coefficient between two adjacent rows in
+  `ReconstructionError`, retaining each row's increasing-base accumulation order,
+  the 255-row scratch bound and outward error conversion. Public headers, object
+  layouts, tolerance policy and heap workspace are unchanged. Add analytical
+  pair/block-tail regressions and isolated reconstruction benchmarks.
+- Core 0.2.6 reduces dense coordinate mapping overhead with eight-product wide
+  blocks and compensated partial-sum merging. A derived16-unit-roundoff screen
+  preserves exact nearest-even output and range checks through the existing
+  integer fallback. Public layouts, independent/zero-column shortcuts and core
+  dependencies are unchanged. Add block-tail/cancellation tests, longer dyadic
+  reference rows and benchmarks for several dense matrix shapes.
+- Core 0.2.5 preserves cancellation in `ToBaseParameters`. IEEE binary64 stored
+  mapping products are accumulated exactly when a compensated wide screen cannot
+  certify nearest/ties-even rounding. Range checks use the exact coordinate,
+  including positive values lost below zero and values just beyond max double.
+  The integer fallback uses bounded stack storage and no additional dependency.
+  Independent nonzero columns bypass redundant zero entries. Add rounding-mode,
+  product-residual and range regressions, mapping benchmarks and an optional
+  independent Boost integer reference campaign.
+
+- Core 0.2.4 adds `HarmonicTrajectory::EvaluateInto` for owning output-buffer
+  reuse. Sampled limit validation and excitation scoring reuse buffers across
+  samples while the existing owning `Evaluate` API remains available.
+  Guard wide amplitude square roots and derivative products before outward
+  conversion: a wide result can itself land below the exact value on a double
+  boundary. Screen ordinary wide calculations with an error margin and recompute
+  uncertain joints with fused residuals, preserving exact Pythagorean bounds.
+  Add exact-dyadic boundary validation and sampling benchmarks.
+  Forward configured dependency prefixes to the core and Pinocchio CTest
+  install consumers, including builds configured without environment prefixes.
+
+- Core 0.2.3 rounds the extended-precision dependency error upward on return.
+  A value above the caller's tolerance cannot pass merely because conversion
+  rounded it down, and a positive error cannot become zero during conversion.
+  Check the fused division residual when a wide quotient lands on a double
+  boundary; exactly representable error ratios retain their exact boundary.
+  When only zero calibration columns are dependent, check those columns directly
+  without allocating reconstruction scratch. Newly excited subnormal columns
+  still fail, and dimensions/finite values remain validated first.
+
+- Core 0.2.2 preserves small contributions in harmonic envelope accumulation
+  and offset addition by accumulating positive addition residuals and rounding
+  their final combination outward. Fix a
+  sparse-validation false pass after cancellation at a position boundary; exact
+  sums retain their exact bounds. Reuse the dependency divisor workspace for
+  selected-column markers, removing a per-call bitmap allocation. Use an odd
+  bounded row-block size to avoid power-of-two cache strides in reconstruction.
+
+- Core 0.2.1 treats selected base columns as exact identities, fixing spurious
+  zero-tolerance holdout rejection and avoiding their redundant reconstruction.
+  Unit parameter/noise scales use direct normalization without an overflowing
+  reciprocal; non-unit scales retain extended-range arithmetic. Add synthetic
+  design benchmarks and independent-column/default-scale stress coverage.
+- Standalone and ROS validation support unpacked source archives without Git
+  metadata; Git checkout roots retain the final whitespace check.
+
+- Core 0.2.0 adds normalized, column-pivoted QR base parameter identification,
+  an explicit full-to-base transform, holdout dependency checks and a composable
+  backend wrapper. Bound reconstruction scratch by row blocks and avoid copying
+  the full source regressor during problem reduction. Existing public object
+  layouts and signatures remain unchanged.
+- Add constrained Fourier experiment design using deterministic coordinate
+  pattern search and SVD log information. Keep parameter/noise scales fixed,
+  rank deficiency visible, evaluation budgets strict and limit checks mandatory.
+  A coordinate poll interrupted by the budget cannot shrink the search step or
+  report convergence.
+  Include an end-to-end example and native Pinocchio integration validation.
+
+- Run CTest from the selected build directory using CMake 3.15-compatible commands.
+  Avoid silently passing with zero tests when older CTest ignores `--test-dir`.
+
+- Recover representable harmonic samples after phase/product underflow or
+  overflowing partial sums. Preserve sums of individually underflowing
+  derivatives, skip inactive harmonics, and include the final sample for every
+  positive validation duration. Add independent trajectory sample/envelope checks.
+
+- Preserve derivative envelopes from subnormal amplitudes and prevent normal
+  amplitudes from rounding inward before a limit check. Keep amplitudes and
+  envelope sums in extended range and round the final conversion outward, removing
+  one temporary vector. Retain owning outputs and unchanged public object layouts.
+
+- Exclude the documented `.venv` directory from Python and C++ formatting scans,
+  keeping installed dependency sources outside style checks and format edits.
+
+- Reject repeated hexadecimal exponent signs such as `0x1p+-2` independently
+  of the standard library conversion behavior. Preserve valid signed exponents
+  and keep raw/processed C++ and Python numeric acceptance aligned.
+
+- Preserve representable normalized RMSE when individual RMS values are
+  subnormal or underflow to zero. Retain the scaled roots and combine mantissas
+  before restoring their exponent difference. Add sparse analytic cases and an
+  independent extended-range, directly replayable metric validation campaign.
+
+- Preserve finite velocity and acceleration on strongly unequal adjacent sample
+  intervals. Anchor interior differentiation at the larger-weight secant and
+  retry underflowed weights in extended range. Add mirrored analytic quadratic
+  cases and include them in the replayable preprocessing campaign.
+
+- Avoid rescanning parsed raw CSV datasets after validating every header and
+  numeric row. Preserve minimum sample counts and test invalid values in every
+  signal column. Extend file benchmarks and fixture generation to processed CSV
+  with analytic velocity and acceleration; retain its final validation after
+  paired measurements found slower reads when it was omitted.
+
 - Read raw CSV once into growing column-oriented chunks, then release each
   consumed field while assembling the owning output matrices. Avoid retaining
   the complete flat parse buffer beside all outputs. Preserve numeric grammar,

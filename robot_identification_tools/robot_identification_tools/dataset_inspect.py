@@ -16,9 +16,8 @@ from typing import BinaryIO, TextIO
 # Numeric rows are unquoted, with optional leading ASCII whitespace per field.
 # float() completes decimal grammar validation after this inexpensive alphabet
 # check, rejecting malformed exponents and repeated signs/decimal points.
-_DECIMAL_FIELD = r"[ \t\n\v\f\r]*[+\-.0-9eE]+"
 _DECIMAL_ROW = re.compile(r"[+\-.0-9eE,]+")
-_DECIMAL_NUMBER = re.compile(_DECIMAL_FIELD)
+_DECIMAL_NUMBER = re.compile(r"[ \t\n\v\f\r]*[+\-.0-9eE]+")
 _HEX_NUMBER = re.compile(
     r"[ \t\n\v\f\r]*[+-]?0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)"
     r"(?:[pP][+-]?[0-9]+)?")
@@ -32,7 +31,6 @@ _MIN_FIXED_RANGE_LENGTH = -sys.float_info.min_10_exp
 def _parse_number(field: str, line_number: int, column: int) -> float:
     location = f"line {line_number}, column {column}"
     hexadecimal = _HEX_NUMBER.fullmatch(field) is not None
-    decimal = _DECIMAL_NUMBER.fullmatch(field) is not None
     try:
         value = float.fromhex(field) if hexadecimal else float(field)
     except (ValueError, OverflowError) as error:
@@ -40,7 +38,7 @@ def _parse_number(field: str, line_number: int, column: int) -> float:
             f"{location} contains an invalid or out-of-range number") from error
     if not math.isfinite(value):
         raise ValueError(f"{location} contains a non-finite value")
-    if not hexadecimal and not decimal:
+    if not hexadecimal and _DECIMAL_NUMBER.fullmatch(field) is None:
         raise ValueError(f"{location} contains invalid numeric syntax")
     nonzero = _NONZERO_HEX if hexadecimal else _NONZERO_DECIMAL
     if value == 0.0 and nonzero.match(field):

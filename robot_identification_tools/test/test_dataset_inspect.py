@@ -35,7 +35,8 @@ class DatasetInspectTest(unittest.TestCase):
     def test_rejects_numeric_extensions_not_supported_by_cpp(self):
         for token in ("1_000", "１２", "١", '"1"', "1 ", "1\t", "\u00a01",
                       "1\u00a0", "1e", "++1", "--1", "+-1", "0x+1", "-0x-1",
-                      "0x1e+2", "0x", ".", "1\0x"):
+                      "0x1e+2", "0x", ".", "1\0x", "0x1p+-2", "-0X0P+-999",
+                      "0x1p--2", "0x1p-+2", "0x1p++2"):
             with self.subTest(token=token):
                 with self.assertRaisesRegex(ValueError, "line 2, column 2"):
                     self.inspect_text(

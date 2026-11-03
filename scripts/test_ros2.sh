@@ -45,5 +45,9 @@ colcon --log-base "$BUILD_ROOT/test-log" test --paths "${PACKAGE_PATHS[@]}" \
   --return-code-on-test-failure
 colcon test-result --test-result-base "$BUILD_ROOT/build" --verbose
 "$PYTHON_BIN" utils/ros2_recording_smoke.py
-git diff --check
+if [[ -e "$ROOT_DIR/.git" ]]; then
+  git diff --check
+else
+  echo "Skipping git whitespace check: source tree has no .git metadata."
+fi
 echo "RobotIdentification ROS 2 validation passed."

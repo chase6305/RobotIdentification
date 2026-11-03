@@ -72,24 +72,7 @@ void Compare(const Eigen::MatrixXd& actual,
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc > 3) {
-        std::cerr << "Usage: " << argv[0] << " [DURATION_SECONDS] [FIRST_CASE]\n";
-        return 2;
-    }
-    const double seconds = synthetic_validation::DurationSeconds(std::min(argc, 2), argv);
-    unsigned long long first_case = 0;
-    if (argc == 3) {
-        try {
-            std::size_t consumed = 0;
-            const std::string argument(argv[2]);
-            first_case = std::stoull(argument, &consumed);
-            if (argument.empty() || argument.front() == '-' || consumed != argument.size() || first_case > 100000000)
-                throw std::invalid_argument("case");
-        } catch (const std::exception&) {
-            std::cerr << "FIRST_CASE must be an integer between 0 and 100000000.\n";
-            return 2;
-        }
-    }
+    const auto [seconds, first_case] = synthetic_validation::ReplayCampaign(argc, argv, 100000000);
     if (std::numeric_limits<long double>::max_exponent <= 2100) {
         std::cerr << "This validation oracle requires extended-range long double.\n";
         return 2;
@@ -104,17 +87,29 @@ int main(int argc, char** argv) {
         for (int draw = 0, count = rows - 1 + rows * dof; draw < count; ++draw) (void)unit(random);
     }
     const auto started = std::chrono::steady_clock::now();
-    unsigned long long cases = 0, accepted = 0, rejected = 0, extreme_cases = 0;
+    unsigned long long cases = 0, accepted = 0, rejected = 0, extreme_cases = 0, unequal_spacing_cases = 0;
     double next_progress = 0;
     try {
         while (std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() < seconds) {
             robot_identification::RawDataset raw;
             if ((first_case + cases) % 32 == 0) {
                 raw.joint_names = {"extreme"};
-                raw.time_seconds = Eigen::VectorXd::LinSpaced(7, 0., 9.);
-                raw.position.resize(7, 1);
-                const double maximum = std::numeric_limits<double>::max();
-                raw.position << 0., 0., maximum, -maximum, maximum, 0., 0.;
+                const auto variant = ((first_case + cases) / 32) % 9;
+                if (variant == 0) {
+                    raw.time_seconds = Eigen::VectorXd::LinSpaced(7, 0., 9.);
+                    raw.position.resize(7, 1);
+                    const double maximum = std::numeric_limits<double>::max();
+                    raw.position << 0., 0., maximum, -maximum, maximum, 0., 0.;
+                } else {
+                    const std::array<double, 4> short_steps{std::numeric_limits<double>::denorm_min(), 1e-308, 1e-200,
+                                                            1e-30};
+                    const double short_step = short_steps[(variant - 1) / 2];
+                    const bool reverse = variant % 2 == 0;
+                    raw.time_seconds =
+                        reverse ? Eigen::Vector3d(-2., -short_step, 0.) : Eigen::Vector3d(0., short_step, 2.);
+                    raw.position = reverse ? Eigen::Vector3d(2e307, 0., 0.) : Eigen::Vector3d(0., 0., 2e307);
+                    ++unequal_spacing_cases;
+                }
                 ++extreme_cases;
             } else {
                 const int rows = 3 + random() % 98, dof = 1 + random() % 7;
@@ -169,7 +164,8 @@ int main(int argc, char** argv) {
             const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             if (elapsed >= next_progress) {
                 std::cout << "elapsed_s=" << elapsed << " cases=" << cases << " accepted=" << accepted
-                          << " rejected=" << rejected << " extreme_cases=" << extreme_cases << std::endl;
+                          << " rejected=" << rejected << " extreme_cases=" << extreme_cases
+                          << " unequal_spacing_cases=" << unequal_spacing_cases << std::endl;
                 next_progress = elapsed + 60;
             }
         }
@@ -178,5 +174,6 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::cout << "PASSED first_case=" << first_case << " cases=" << cases << " accepted=" << accepted
-              << " rejected=" << rejected << " extreme_cases=" << extreme_cases << std::endl;
+              << " rejected=" << rejected << " extreme_cases=" << extreme_cases
+              << " unequal_spacing_cases=" << unequal_spacing_cases << std::endl;
 }

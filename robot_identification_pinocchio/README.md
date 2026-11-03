@@ -66,3 +66,15 @@ ordering.
 名称错误、顺序颠倒和多自由度关节的歧义标签会提前报错；采集时应相应配置
 `joint_names`。位置式 `Compute(sample)` 保留原有固定基座 `nq == nv` 接口，通用
 组装调用方需要自行保证坐标顺序。
+
+
+With core >=0.2.0, `BaseParameterBasis` can analyze a rich batch regressor and
+`BaseParameterRegressor` can wrap this backend for identifiable coordinates.
+Pass the wrapped backend to `OptimizeExcitationDesign` for constrained Fourier
+experiment design. The optional `pinocchio_design_test` validates this pipeline
+against native RNEA torque on training and independent trajectories. The existing
+backend API retains its core >=0.1.1 requirement.
+
+核心 >=0.2.0 时可将丰富批次的回归矩阵用于基参数分析，再包装本后端做受限
+Fourier 激励优化。基参数组合需与原始惯性值区分；原生 RNEA 集成测试包含独立
+轨迹验证，既有后端接口的最低核心版本仍为 0.1.1。

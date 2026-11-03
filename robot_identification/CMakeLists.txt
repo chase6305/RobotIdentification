@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(robot_identification VERSION 0.1.1 LANGUAGES CXX)
+project(robot_identification VERSION 0.2.11 LANGUAGES CXX)
 
 option(ROBOT_IDENTIFICATION_BUILD_EXAMPLES "Build standalone identification examples" OFF)
 
@@ -7,7 +7,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
-add_library(robot_identification src/identification.cpp)
+add_library(robot_identification src/identification.cpp src/base_parameters.cpp src/experiment_design.cpp)
 add_library(robot_identification::robot_identification ALIAS robot_identification)
 target_compile_features(robot_identification PUBLIC cxx_std_17)
 target_link_libraries(robot_identification PUBLIC Eigen3::Eigen)
@@ -45,6 +45,12 @@ install(DIRECTORY schema/ DESTINATION ${CMAKE_INSTALL_DATADIR}/robot_identificat
 
 include(CTest)
 if(BUILD_TESTING)
+  foreach(name IN ITEMS base_parameters experiment_design covariance preprocessing trajectory csv)
+    add_executable(robot_identification_${name}_test test/${name}_test.cpp)
+    target_link_libraries(robot_identification_${name}_test PRIVATE robot_identification::robot_identification)
+    add_test(NAME robot_identification_${name}_test COMMAND robot_identification_${name}_test)
+  endforeach()
+
   add_executable(robot_identification_assembly_test test/regression_assembly_test.cpp)
   target_link_libraries(robot_identification_assembly_test PRIVATE robot_identification::robot_identification)
   add_test(NAME robot_identification_assembly_test COMMAND robot_identification_assembly_test)
@@ -52,18 +58,6 @@ if(BUILD_TESTING)
   add_executable(robot_identification_test test/identification_test.cpp)
   target_link_libraries(robot_identification_test PRIVATE robot_identification::robot_identification)
   add_test(NAME robot_identification_test COMMAND robot_identification_test)
-
-  add_executable(robot_identification_covariance_test test/covariance_test.cpp)
-  target_link_libraries(robot_identification_covariance_test PRIVATE robot_identification::robot_identification)
-  add_test(NAME robot_identification_covariance_test COMMAND robot_identification_covariance_test)
-
-  add_executable(robot_identification_preprocessing_test test/preprocessing_test.cpp)
-  target_link_libraries(robot_identification_preprocessing_test PRIVATE robot_identification::robot_identification)
-  add_test(NAME robot_identification_preprocessing_test COMMAND robot_identification_preprocessing_test)
-
-  add_executable(robot_identification_csv_test test/csv_test.cpp)
-  target_link_libraries(robot_identification_csv_test PRIVATE robot_identification::robot_identification)
-  add_test(NAME robot_identification_csv_test COMMAND robot_identification_csv_test)
 
   # Interchange tests use the repository's pure-Python tools, without ROS.
   # A standalone copy of this library can still build its own C++ tests.
@@ -87,7 +81,7 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND}
       -S ${CMAKE_CURRENT_SOURCE_DIR}/test/consumer
       -B ${ROBOT_IDENTIFICATION_CONSUMER_BUILD}
-      -DCMAKE_PREFIX_PATH=${ROBOT_IDENTIFICATION_CONSUMER_INSTALL}
+      "-DCMAKE_PREFIX_PATH=${ROBOT_IDENTIFICATION_CONSUMER_INSTALL};${CMAKE_PREFIX_PATH}"
       "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
       "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
       "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
@@ -105,11 +99,13 @@ if(BUILD_TESTING)
 endif()
 
 if(ROBOT_IDENTIFICATION_BUILD_EXAMPLES)
-  add_executable(generic_regressor_example examples/generic_regressor_example.cpp)
-  target_link_libraries(generic_regressor_example PRIVATE robot_identification::robot_identification)
-  install(TARGETS generic_regressor_example RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-  if(BUILD_TESTING)
-    add_test(NAME generic_regressor_example_runs COMMAND generic_regressor_example)
-    set_tests_properties(generic_regressor_example_runs PROPERTIES LABELS "example")
-  endif()
+  foreach(name IN ITEMS generic_regressor_example identification_design_example)
+    add_executable(${name} examples/${name}.cpp)
+    target_link_libraries(${name} PRIVATE robot_identification::robot_identification)
+    install(TARGETS ${name} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    if(BUILD_TESTING)
+      add_test(NAME ${name}_runs COMMAND ${name})
+      set_tests_properties(${name}_runs PROPERTIES LABELS "example")
+    endif()
+  endforeach()
 endif()

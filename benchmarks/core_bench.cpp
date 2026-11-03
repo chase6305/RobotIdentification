@@ -77,4 +77,26 @@ int main() {
         auto sample = trajectory.Evaluate(time);
         return sample.position.sum() + sample.jerk.sum();
     });
+    Measure("harmonic_bounds", 10000, [&] {
+        const auto bounds = trajectory.ConservativeBounds();
+        return bounds.maximum_position.sum() + bounds.maximum_absolute_jerk.sum();
+    });
+    Eigen::MatrixXd sparse_sine = Eigen::MatrixXd::Zero(7, 20), sparse_cosine = sparse_sine;
+    sparse_sine.col(0) = sine.col(0);
+    sparse_cosine.col(0) = cosine.col(0);
+    const robot_identification::HarmonicTrajectory sparse(Eigen::VectorXd::Zero(7), sparse_sine, sparse_cosine, .1);
+    time = 0.;
+    Measure("harmonic_sparse_evaluate", 50000, [&] {
+        time += .0001;
+        const auto sample = sparse.Evaluate(time);
+        return sample.position.sum() + sample.jerk.sum();
+    });
+    const robot_identification::HarmonicTrajectory constant(
+        Eigen::VectorXd::Constant(7, .2), Eigen::MatrixXd::Zero(7, 20), Eigen::MatrixXd::Zero(7, 20), .1);
+    time = 0.;
+    Measure("harmonic_constant_evaluate", 50000, [&] {
+        time += .0001;
+        const auto sample = constant.Evaluate(time);
+        return sample.position.sum() + sample.jerk.sum();
+    });
 }

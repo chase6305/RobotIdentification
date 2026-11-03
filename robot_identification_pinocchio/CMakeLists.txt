@@ -50,6 +50,12 @@ if(BUILD_TESTING)
   target_link_libraries(pinocchio_regressor_test PRIVATE robot_identification::pinocchio Threads::Threads)
   add_test(NAME pinocchio_regressor_test COMMAND pinocchio_regressor_test)
 
+  if(robot_identification_VERSION VERSION_GREATER_EQUAL "0.2.0")
+    add_executable(pinocchio_design_test test/pinocchio_design_test.cpp)
+    target_link_libraries(pinocchio_design_test PRIVATE robot_identification::pinocchio)
+    add_test(NAME pinocchio_design_test COMMAND pinocchio_design_test)
+  endif()
+
   set(PINOCCHIO_CONSUMER_INSTALL "${CMAKE_CURRENT_BINARY_DIR}/consumer-install")
   set(PINOCCHIO_CONSUMER_BUILD "${CMAKE_CURRENT_BINARY_DIR}/consumer-build")
   add_test(NAME robot_identification_pinocchio_install
@@ -59,7 +65,7 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND}
       -S ${CMAKE_CURRENT_SOURCE_DIR}/test/consumer
       -B ${PINOCCHIO_CONSUMER_BUILD}
-      -DCMAKE_PREFIX_PATH=${PINOCCHIO_CONSUMER_INSTALL}
+      "-DCMAKE_PREFIX_PATH=${PINOCCHIO_CONSUMER_INSTALL};${CMAKE_PREFIX_PATH}"
       "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
       "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
       "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}"

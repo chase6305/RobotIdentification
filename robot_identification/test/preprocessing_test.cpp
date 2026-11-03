@@ -249,6 +249,37 @@ void TestRepresentableDerivativesAcrossOverflowingDifferences() {
     if (!rejected) throw std::runtime_error("unrepresentable derivative was accepted after extended-range retry");
 }
 
+void TestHighlyUnequalSpacing() {
+    for (double short_step : {std::numeric_limits<double>::denorm_min(), 1e-308, 1e-200, 1e-30}) {
+        for (bool reverse : {false, true}) {
+            robot_identification::RawDataset raw;
+            raw.joint_names = {"quadratic"};
+            raw.time_seconds = reverse ? Eigen::Vector3d(-2., -short_step, 0.) : Eigen::Vector3d(0., short_step, 2.);
+            raw.position = reverse ? Eigen::Vector3d(2e307, 0., 0.) : Eigen::Vector3d(0., 0., 2e307);
+            raw.torque = Eigen::Vector3d::Zero();
+            // q(t) = a*t*(t-short_step), mirrored in time when requested.
+            // Its small derivatives remain finite even when short_step/2
+            // underflows, or an interior slope weight rounds to one in double.
+            const long double coefficient = 2e307L / (2.L * (2.L - short_step));
+            const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+            for (std::size_t row = 0; row < result.samples.size(); ++row) {
+                const long double time =
+                    reverse ? -static_cast<long double>(raw.time_seconds[row]) : raw.time_seconds[row];
+                const long double velocity = (reverse ? -1.L : 1.L) * coefficient * (2.L * time - short_step);
+                const long double acceleration = 2.L * coefficient;
+                const auto& sample = result.samples[row];
+                for (const auto& pair :
+                     {std::pair{sample.velocity[0], velocity}, std::pair{sample.acceleration[0], acceleration}}) {
+                    if (std::abs(static_cast<long double>(pair.first) - pair.second) >
+                        32.L * std::numeric_limits<double>::epsilon() * std::abs(pair.second)) {
+                        throw std::runtime_error("unequal timestamp spacing lost a representable derivative");
+                    }
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -259,4 +290,5 @@ int main() {
     TestInvalidNamesBeforeNumericalWork();
     TestPreprocessingEntryValidation();
     TestRepresentableDerivativesAcrossOverflowingDifferences();
+    TestHighlyUnequalSpacing();
 }

@@ -1,4 +1,4 @@
-"""Generate a deterministic synthetic raw CSV for offline reader measurements."""
+"""Generate a deterministic raw or processed CSV for reader measurements."""
 import argparse
 import hashlib
 import json
@@ -11,6 +11,7 @@ def main():
     parser.add_argument("--samples", type=int, default=200000)
     parser.add_argument("--dof", type=int, default=14)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--format", choices=("raw", "processed"), default="raw")
     args = parser.parse_args()
     if args.samples < 3 or args.dof < 1:
         parser.error("--samples must be at least 3 and --dof must be positive")
@@ -25,22 +26,37 @@ def main():
                     raise OSError("incomplete synthetic fixture write")
                 digest.update(payload)
 
-            header = (["time_s"] +
-                      [f"q/j{joint}" for joint in range(args.dof)] +
-                      [f"tau/j{joint}" for joint in range(args.dof)])
+            prefixes = ("q", "tau") if args.format == "raw" else ("q", "dq",
+                                                                  "ddq", "tau")
+            header = ["time_s"] + [
+                f"{prefix}/j{joint}" for prefix in prefixes
+                for joint in range(args.dof)
+            ]
             write(",".join(header) + "\n")
             for row in range(args.samples):
-                values = ([row * .001] + [
+                position = [
                     math.sin(row * .003 + joint * .2)
                     for joint in range(args.dof)
-                ] + [
+                ]
+                torque = [
                     .5 * math.cos(row * .007 - joint * .3)
                     for joint in range(args.dof)
-                ])
+                ]
+                if args.format == "raw":
+                    values = [row * .001] + position + torque
+                else:
+                    velocity = [
+                        3. * math.cos(row * .003 + joint * .2)
+                        for joint in range(args.dof)
+                    ]
+                    acceleration = [-9. * value for value in position]
+                    values = [row * .001
+                             ] + position + velocity + acceleration + torque
                 write(",".join(format(value, ".17g") for value in values) +
                       "\n")
         print(
-            json.dumps(dict(samples=args.samples,
+            json.dumps(dict(format=args.format,
+                            samples=args.samples,
                             dof=args.dof,
                             bytes=args.output.stat().st_size,
                             sha256=digest.hexdigest()),

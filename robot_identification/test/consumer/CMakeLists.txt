@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 project(robot_identification_consumer LANGUAGES CXX)
 
-find_package(robot_identification REQUIRED CONFIG)
+find_package(robot_identification 0.2.0 REQUIRED CONFIG)
 add_executable(robot_identification_consumer main.cpp)
 target_compile_features(robot_identification_consumer PRIVATE cxx_std_17)
 target_link_libraries(robot_identification_consumer PRIVATE robot_identification::robot_identification)
