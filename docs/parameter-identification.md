@@ -182,11 +182,17 @@ Drake 主体也是 [BSD 三条款](https://github.com/RobotLocomotion/drake/blob
 `actuator_net` 相反。接入必须同时核对符号、偏置及历史更新周期；该实现按仿真子步
 更新历史，不能改用策略周期，也不能直接交换已有权重。
 
+随附 [CSV](https://github.com/sunzhon/actuator_net/blob/ec8d395d54b255e283df6bc26b2c29637a839d3d/app/resources/actuator_data.csv)
+的表头和首段预览含两组 `index/time/diff`；同一行命令与反馈的时间值并不总相等。
+处理脚本没有使用这些时间列对齐，应先确认时钟域、单位和命令实际生效时间，
+再构造因果历史，避免把尚未生效的命令用于当前状态。
+
 接入顺序以数据和验证为先，暂不增加训练框架或 GUI 到 Eigen 核心：
 
 1. 采集同步的命令位置、实测位置、实测速度和输出标签，保留关节名称、会话、
    时间戳、采样周期、控制模式与增益。当前 raw CSV 只有 `time/q/tau`，
    缺少命令和速度来源，不能从实测位置反推控制目标。
+   若命令来自归一化策略 action，需先按实际控制器还原目标位置单位及默认姿态偏置。
 2. 固定特征顺序为 `[e[k],e[k-1],e[k-2],dq[k],dq[k-1],dq[k-2]]`，其中
    `e=q_command-q`；明确周期、命令/反馈延迟和历史初始化策略。
    每个关节、会话、控制模式切换或采样中断都重新建立历史。
@@ -411,7 +417,8 @@ Adoption first requires synchronized commands/states, explicit label units,
 per-joint/session history resets and trajectory-level holdouts before windowing.
 Fit scaling on training data only and bind the deployed model to its feature
 order, sign, period and control configuration. Existing symmetric filtering and
-central differences are offline operations.
+central differences are offline operations. Reconcile distinct command/state
+timestamps causally before building histories.
 
 The opt-in `hybrid_rollout_demo` combines positive inertia/damping, fixed tanh
 history features and learned readout weights with semi-implicit trajectory
