@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
     std::mt19937_64 random(0x20261029b0b057ULL);
     std::uniform_real_distribution<double> unit(-1., 1.);
     const auto started = std::chrono::steady_clock::now();
-    unsigned long long cases = 0, limited_cases = 0, unconverged_cases = 0;
+    unsigned long long cases = 0, limited_cases = 0, unconverged_cases = 0, ridge_cases = 0;
     double next_progress = 0, maximum_parameter_error = 0, maximum_covariance_error = 0;
     robot_identification::RegressionProblem problem;
     problem.dof = 1;
@@ -44,6 +44,16 @@ int main(int argc, char** argv) {
             options.huber_delta = scale * .25;
             options.max_iterations = cases % 16 == 0 ? 1 : cases % 16 == 1 ? 2 : 200;
             options.convergence_tolerance = 1e-12;
+            // Anchor ridge to the measured information scale. Use a normal
+            // ridge value; keep the remaining cases unregularized.
+            const long double proposed_ridge = .3L * common_weight * scale * scale;
+            if (cases % 3 == 0 && proposed_ridge >= std::numeric_limits<double>::min() &&
+                proposed_ridge <= std::numeric_limits<double>::max()) {
+                options.ridge = static_cast<double>(proposed_ridge);
+                ++ridge_cases;
+            }
+            const long double ridge_weight = static_cast<long double>(options.ridge) / scale / scale;
+            const long double normalized_ridge = ridge_weight / common_weight;
             const auto actual = robot_identification::Solve(problem, options);
             if (actual.rank != 1 || actual.condition_number != 1. || !actual.final_row_weights.allFinite() ||
                 (actual.final_row_weights.array() <= 0.).any())
@@ -59,10 +69,10 @@ int main(int argc, char** argv) {
                 const long double residual = static_cast<long double>(actual.residual[row]) / scale;
                 weighted_squared_residual += weight * residual * residual;
             }
-            const long double fitted = weighted_observation / weight_sum;
+            const long double fitted = weighted_observation / (weight_sum + ridge_weight);
             if (std::abs(actual.parameters[0] - fitted) > 1e-11L * std::max(1.L, std::abs(fitted)))
                 throw std::runtime_error("returned parameters do not solve their reported weights");
-            const long double covariance = weighted_squared_residual / ((rows - 1) * weight_sum);
+            const long double covariance = weighted_squared_residual / ((rows - 1) * (weight_sum + ridge_weight));
             const double covariance_error =
                 static_cast<double>(std::abs(actual.covariance(0, 0) - covariance) / covariance);
             if (!std::isfinite(covariance_error) || covariance_error > 5e-12)
@@ -85,9 +95,10 @@ int main(int argc, char** argv) {
                         residual <= delta ? .5L * residual * residual : delta * (residual - .5L * delta);
                     loss += (static_cast<long double>(problem.row_weights[row]) / common_weight) * value;
                 }
-                return loss;
+                return loss + .5L * normalized_ridge * parameter * parameter;
             };
-            const long double initial_loss = objective(original_weighted_observation / original_weight_sum);
+            const long double initial_loss =
+                objective(original_weighted_observation / (original_weight_sum + normalized_ridge));
             if (objective(actual.parameters[0]) >
                 initial_loss + 256.L * std::numeric_limits<double>::epsilon() * std::max(1.L, initial_loss))
                 throw std::runtime_error("IRLS increased the Huber loss above its initial weighted fit");
@@ -95,13 +106,13 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("unconverged result stopped before consuming its iteration budget");
 
             if (options.max_iterations == 200 && actual.converged) {
-                long double lower = problem.observation.minCoeff() / scale;
-                long double upper = problem.observation.maxCoeff() / scale;
+                long double lower = std::min(0.L, static_cast<long double>(problem.observation.minCoeff()) / scale);
+                long double upper = std::max(0.L, static_cast<long double>(problem.observation.maxCoeff()) / scale);
                 const long double delta = static_cast<long double>(options.huber_delta) / scale;
                 for (int iteration = 0; iteration < 256; ++iteration) {
                     const long double middle = .5L * lower + .5L * upper;
                     if (middle == lower || middle == upper) break;
-                    long double score = 0;
+                    long double score = -normalized_ridge * middle;
                     for (int row = 0; row < rows; ++row) {
                         const long double residual =
                             static_cast<long double>(problem.observation[row]) / scale - middle;
@@ -127,7 +138,7 @@ int main(int argc, char** argv) {
             const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             if (elapsed >= next_progress) {
                 std::cout << "elapsed_s=" << elapsed << " cases=" << cases << " limited_cases=" << limited_cases
-                          << " unconverged_cases=" << unconverged_cases
+                          << " unconverged_cases=" << unconverged_cases << " ridge_cases=" << ridge_cases
                           << " max_parameter_error=" << maximum_parameter_error
                           << " max_covariance_error=" << maximum_covariance_error << std::endl;
                 next_progress = elapsed + 60;
@@ -141,6 +152,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::cout << "PASSED cases=" << cases << " limited_cases=" << limited_cases
-              << " unconverged_cases=" << unconverged_cases << " max_parameter_error=" << maximum_parameter_error
+              << " unconverged_cases=" << unconverged_cases << " ridge_cases=" << ridge_cases
+              << " max_parameter_error=" << maximum_parameter_error
               << " max_covariance_error=" << maximum_covariance_error << std::endl;
 }

@@ -6,10 +6,10 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
-#include <string_view>
 #include <utility>
 
 #include "exact_parameter_dot.h"
+#include "name_validation.h"
 
 namespace robot_identification {
 namespace {
@@ -244,11 +244,8 @@ BaseParameterRegressor::BaseParameterRegressor(std::shared_ptr<const RegressorBa
         basis_.calibration_error() > tolerance)
         throw std::invalid_argument("backend does not match the calibrated base parameter basis");
     const auto full_parameter_names = backend_->parameter_names();
-    std::vector<std::string_view> sorted_name_views(full_parameter_names.begin(), full_parameter_names.end());
-    std::sort(sorted_name_views.begin(), sorted_name_views.end());
-    if (full_parameter_names.size() != backend_->parameter_count() || sorted_name_views.empty() ||
-        sorted_name_views.front().empty() ||
-        std::adjacent_find(sorted_name_views.begin(), sorted_name_views.end()) != sorted_name_views.end())
+    if (full_parameter_names.size() != backend_->parameter_count() ||
+        !detail::HasUniqueNonemptyNames(full_parameter_names))
         throw std::invalid_argument("base parameter backend names are invalid");
     parameter_names_.reserve(basis_.parameter_count());
     for (const auto full_column : basis_.selected_columns())

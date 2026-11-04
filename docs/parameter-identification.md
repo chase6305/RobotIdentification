@@ -72,7 +72,7 @@ FastTwoSum 的依据与舍入假设见
 | 固定 71 维最小参数 | 后端声明参数数量与名称 |
 | GUI 内部构造矩阵和求解 | 核心库提供可测试的 `BuildRegressionProblem()` 与 `Solve()` |
 | 普通采样直接按固定 10 ms 处理 | 数据集要求真实、严格递增时间戳 |
-| 三阶 Butterworth + 差分 | 提供独立的位置/力矩对称零相位平滑窗口和非均匀时间三点差分；力矩默认不平滑，后续可增加版本化 Butterworth 策略 |
+| 三阶 Butterworth + 差分 | 提供独立的位置/力矩中心移动平均窗口（边缘截断）和非均匀时间三点差分；力矩默认不平滑，后续可增加版本化 Butterworth 策略 |
 | LMI/DSDP 物理约束 | 核心提供通用质量矩阵验证；约束求解器作为可选后端，不成为基础依赖 |
 | 固定型号符号代码注册表 | Pinocchio、生成代码或厂商模型通过回归器后端接入 |
 | 正则表达式覆盖运行 YAML | 输出候选 artifact，禁止自动覆盖运行配置 |
@@ -120,7 +120,7 @@ ridge 可以改善数值稳定性，但不能把秩亏伪装成充分激励。Hu
 
 RMSE 和平均绝对误差先按最大绝对值缩放再统计，避免平方或求和的中间溢出/下溢。归一化 RMSE 在两个 RMS 为次正规数或舍入为零时保留尺度信息，避免把非零误差比值误报为零或无穷大。无法表示的预测残差会报错；参考观测全为零而误差非零时，归一化 RMSE 仍为无穷大。求解器仍会拒绝不可表示的加权数据、预测残差或最终协方差。
 
-协方差复用最后一次实际求解的 SVD，使用同一秩阈值和保留方向，避免重新分解信息矩阵时平方条件数并丢失弱可观测方向。ridge 协方差使用增广系统，对外报告的秩仍仅来自测量数据。秩亏时采用最小范数伪逆约定：零空间中的零协方差不代表确定性，必须同时检查秩。加权残差平方和超出 double 范围时，保留根误差的尾数和指数，先与奇异值做比例再平方；一致缩放所有行权重不会抹去可表示的协方差。最终协方差出现非有限值时抛出溢出异常，避免返回不可用的不确定性估计。鲁棒迭代达到次数上限时省去未使用的下一轮权重计算，返回的权重仍对应实际完成的最后一次求解。
+协方差复用最后一次实际求解的奇异方向与奇异值，使用同一秩阈值和保留方向，避免重新分解信息矩阵时平方条件数并丢失弱可观测方向。ridge 协方差使用增广系统，对外报告的秩仍仅来自测量数据；最终诊断前仅保留协方差所需的方向与奇异值，释放增广分解工作区。秩亏时采用最小范数伪逆约定：零空间中的零协方差不代表确定性，必须同时检查秩。加权残差平方和超出 double 范围时，保留根误差的尾数和指数，先与奇异值做比例再平方；一致缩放所有行权重不会抹去可表示的协方差。最终协方差出现非有限值时抛出溢出异常，避免返回不可用的不确定性估计。鲁棒迭代达到次数上限时省去未使用的下一轮权重计算，返回的权重仍对应实际完成的最后一次求解。
 
 鲁棒迭代的收敛判定使用缩放后的参数变化范数与相对比值，保留原有绝对/相对容差语义，避免大参数的平方范数或容差乘积溢出后提前报告收敛。
 
@@ -303,48 +303,35 @@ long double 都可能得到零；将第二例的映射再乘 `2^-1000`，则应�
 [Ogita、Rump、Oishi，2005，§1.1与§2](https://www.tuhh.de/ti3/paper/rump/OgRuOi05.pdf)。
 Boost大整数只用于可选的独立参考程序，以相邻double的精确中点检验结果。
 
-校准输入必须覆盖足够丰富的状态。样本矩阵的零空间也可能来自激励不足，不能自动
-证明结构不可辨识。约简新数据时逐列检查 `Y ~= Y_base*T`；误差按该列校准/当前
-最大值中的较大者归一化，零校准列在新数据中被激励时会拒绝。默认误差阈值为
-1e-8，默认 QR 相对秩阈值为 1e-10。输入维度、有限值和阈值均校验。
-核心 0.2.1 按精确恒等关系处理已选择的独立列，它们对依赖重构误差贡献为零；
-满列秩时仍先检查输入维度与有限值。避免对这些列重复回代，也修复零误差容差下
-由归一化再乘回尺度产生的微小舍入残差误拒绝。非独立列仍逐列检查。
-核心 0.2.2 复用除数向量中的负标记表示独立列；有效列尺度始终非负，
-数值计算仍从原始尺度读取，因此无需另外分配逐列位图。
-校验缓存的行块上限为 255，避开常见 16 字节 long double 在 256 行时产生的
-4 KiB 列跨度；每行仍按原有基参数顺序累加。该选择的收益依赖矩阵尺寸和缓存架构，
-不改变依赖误差定义或输出坐标。
+校准输入必须覆盖足够丰富的状态；样本零空间也可能来自激励不足，不能证明结构不可辨识。
+约简新数据时逐列检查 `Y ~= Y_base*T`，以该列校准/当前最大绝对值中的较大者归一化
+最大绝对重构差值，再取所有列的最大误差。默认依赖误差阈值为 1e-8，QR 相对秩阈值为
+1e-10；输入维度、有限值和阈值均先校验。
 
-核心 0.2.7 在同一列内同时重建相邻两行，每个系数只读取一次；两行分别保留按基参数
-索引递增的乘加顺序，并按原行顺序检查误差。每块的奇数尾行继续单独累加，
-255 行缓存上限不变，不新增堆工作区或公开对象成员。向上转换、融合除法残差检查、
-输入校验和容差策略均沿用原实现；该改动针对依赖校验，不改变 QR 学习算法。
+已选择的独立列按精确恒等关系处理，误差贡献为零，满列秩也不跳过输入校验。
+若所有非零校准列均已选中，剩余依赖只有零列：新数据中这些列全零时误差为 0，
+否则为 1 并拒绝约简。直接比较元素，避免范数平方下溢，并省去除数向量和重构缓存；
+输出坐标的范围检查仍保留。含非零依赖时不能使用此捷径，基准分别覆盖这两类情形。
 
-核心 0.2.8 对每列、每行块先取最大绝对残差，再执行一次除法和融合除法残差检查。
-同一列的除数固定且为正，舍入除法及其至多一格的扩展精度修正均对残差单调，
-因此得到与逐行检查相同的最大误差。不同列仍各用自己的除数；NaN 残差会拒绝，
-无穷残差保留到最终非有限检查。各行的乘加顺序、255 行缓存上限和向上转换不变，
-不新增堆工作区、公开成员或核心依赖；QR 学习仍是数值过程。
+一般依赖检查复用除数向量的负标记识别独立列，无需额外位图；有效尺度非负，
+数值计算仍读取原始尺度。有界扩展精度临时工作区最多缓存 255 行，不随总样本行数
+增长。相邻两行共用系数读取，各自按基参数索引递增累计，并按原行顺序检查误差；
+奇数尾行单独处理，不增加公开对象成员或核心依赖。
 
-核心 0.2.3 对返回的依赖误差向上转换，避免真实误差略大于 double 容差时，
-因舍入成同一数而误通过。例如单行校准矩阵 `[3,3]` 与新数据 `[0,1]` 的误差为
-`1/3`，严格大于向下舍入的 double `1/3`；约 `1e-400` 的正误差也不能在返回时变成零。
-后者返回最小正 double，使零容差拒绝，而足够大的次正规数容差仍可接受。
+每列、每行块先取最大绝对残差，再执行一次除法和必要的 FMA 检查。列除数固定为正，
+舍入除法及其至多一格的扩展精度修正对非负残差单调，因而保留逐行检查的最大误差；
+各列仍使用自己的除数。NaN 或无穷残差均返回无穷大误差。
 
-扩展精度除法也可能恰好舍入到某个 double 边界。对可能成为最大值、且落在这种
-边界上的商 `q`，使用 `fma(-q, divisor, difference)` 检查除法残差；正残差使该商
-向上进一格，再进行最终转换。精确的 `1/2` 等边界保持原值。
-FMA 的一次最终舍入定义见
+返回值向上转换为 double，避免略大于容差的误差向下舍入后误通过。例如校准 `[3,3]`
+与新数据 `[0,1]` 的误差 `1/3` 严格大于向下舍入的 double `1/3`；约 `1e-400` 的
+正误差返回最小正 double，使零容差拒绝，而足够大的次正规数容差仍可接受。
+可能成为最大值且恰落在 double 边界的扩展精度商 `q`，以
+`fma(-q, divisor, difference)` 检查除法残差；正残差使商向上进一格后再转换，
+精确的 `1/2` 等边界保持原值。FMA 的一次最终舍入定义见
 [WG14 N1570 委员会草案 §7.12.13.1](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf#page=276)。
-这里检查的是已算得的扩展精度重构差值的归一化和返回转换，使用二进制默认舍入、
-可表示的残差及正确 FMA 行为；没有对 QR、列归一化和全部乘加提供完整区间证明。
 
-若非零校准列的数量恰好等于基参数秩，这些列都已被选中，剩余依赖仅为零列。
-其误差可精确判定：新数据中所有这些列仍为零时是 0，否则是 1。
-实现直接比较元素是否为零，跳过除数向量和重构缓存；不使用可能平方下溢的范数判断。
-维度和有限值仍先校验，输出坐标的范围检查也保留。该优化不适用于含非零依赖的矩阵，
-基准分别提供两类用例。
+上述保证针对已算得的扩展精度重构差值的归一化和返回转换，依赖二进制默认舍入、
+可表示残差及正确 FMA 行为；不为 QR、列归一化和全部乘加提供完整区间证明。
 
 beta 是可辨识组合，与原始惯性参数通常具有不同的尺度与含义。它不能直接写回
 URDF，也不能据此推断原始参数或质量矩阵物理可行。当前接口不提供唯一的完整
@@ -364,10 +351,11 @@ Hz 频率和秒时间；本次优化正余弦系数，保持 offset 和频率固
 ```text
 A = diag(1/sigma) * Y * D
 F = A.transpose() * A / N
-score = mean(log(nonzero eigenvalues(F)))
-      = mean(2*log(nonzero singular_values(A)) - log(N))
+score = mean(log(retained eigenvalues(F)))
+      = mean(2*log(retained singular_values(A)) - log(N))
 ```
 
+仅统计相对秩阈值保留的方向；正但低于阈值的奇异值不参与评分。
 N 是时间样本数；噪声尺度使用各关节广义力/力矩的单位，参数尺度使用相应参数
 单位，使 A 的列可在统一参考尺度下比较。两个尺度向量为空时视为全一，且在整个
 搜索中固定。实现直接对缩放后的 A 做 SVD 并恢复对数尺度，避免显式构造 F 后
@@ -395,7 +383,7 @@ N 是时间样本数；噪声尺度使用各关节广义力/力矩的单位，�
 6. 扩展现有 ROS 2 recorder，增加显式 session action、激励轨迹联锁和可选 GUI；
 7. 候选 artifact 的签名、审批和导入工具。
 
-谐波振幅通过 `hypot` 求值，导数逐次乘频率，避免中间平方、立方的上溢/下溢隐藏真实包络或丢失可表示导数。位置区间的半宽也在全宽溢出时保留有限值；极小振幅仍必须满足保守位置限位。
+谐波振幅在扩展精度中求二范数，导数逐次乘频率，避免中间平方、立方的上溢/下溢隐藏真实包络或丢失可表示导数。位置区间的半宽也在全宽溢出时保留有限值；极小振幅仍必须满足保守位置限位。
 
 ### 安全边界
 
@@ -439,9 +427,10 @@ reuses bounded row-block scratch; input, output and QR storage still scale with
 their matrix dimensions.
 
 Experiment design stacks `A = diag(1/noise_std)*Y*diag(parameter_scales)` with
-scales fixed across candidates, then maximizes the mean log nonzero eigenvalue
-of `A.transpose()*A/N` using SVD without forming the normal matrix. Rank is the
-first search criterion; the score is D-optimal for the complete parameter set
+scales fixed across candidates, then maximizes the mean log eigenvalue of
+`A.transpose()*A/N` over directions retained by the relative rank threshold,
+using SVD without forming the normal matrix. Rank is the first search criterion;
+the score is D-optimal for the complete parameter set
 only at full column rank. Coefficient pattern search preserves fixed offsets and
 frequency, requires a feasible seed, and applies conservative and sampled
 position/velocity/acceleration/jerk limits to every accepted candidate. Noise
@@ -455,7 +444,9 @@ prediction. Native Pinocchio tests use RNEA as an independent torque reference.
 Existing execution and artifact-review boundaries still apply.
 
 
-Harmonic envelopes use scaled hypot, successive coefficient/frequency products, and overflow-resistant position half-spans. Tiny amplitudes must still satisfy conservative position bounds when sparse sampling misses their peaks.
+Harmonic envelopes use extended-precision amplitudes, successive coefficient/frequency
+products, and overflow-resistant position half-spans. Tiny amplitudes must still
+satisfy conservative position bounds when sparse sampling misses their peaks.
 
 For harmonic h, `omega_h = 2*pi*f*h`, with f in Hz and time in seconds.
 The position is `offset + sum(a_h*sin(omega_h*t) + b_h*cos(omega_h*t))`;
@@ -465,7 +456,8 @@ acceleration and jerk use those units per second, second squared and second cube
 The order-d envelope is `sum(hypot(a_h,b_h)*omega_h^d)`. Amplitudes, envelope
 sums and exceptional sample intermediates use extended precision; final envelope conversion
 rounds outward. A direct wide squared norm is used only when exponent-range
-checks cover every finite double square; narrower platforms retain `hypot`.
+checks cover every finite double square; narrower platforms scale the coefficients
+before forming the norm.
 Core 0.2.2 keeps positive FastTwoSum addition residuals in a separate upper sum,
 then combines that error with the ordinary sum and offset using outward rounding.
 This preserves tiny contributions across cancellation without widening exact sums.

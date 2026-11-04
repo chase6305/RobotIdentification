@@ -35,7 +35,8 @@ struct ExcitationDesignQuality {
     std::size_t rank{0};
     std::size_t parameter_count{0};
     double condition_number{std::numeric_limits<double>::infinity()};
-    // Mean log of the nonzero eigenvalues of Y_scaled' Y_scaled / N.
+    // Mean log eigenvalue of Y_scaled' Y_scaled / N over directions
+    // retained by the relative rank threshold.
     // This is a D-optimal information score only at full column rank.
     double mean_log_information{-std::numeric_limits<double>::infinity()};
     [[nodiscard]] bool fully_identifiable() const noexcept { return parameter_count != 0 && rank == parameter_count; }

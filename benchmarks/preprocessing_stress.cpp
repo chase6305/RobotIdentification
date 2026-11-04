@@ -1,6 +1,7 @@
-// Independent Lagrange-weight checks across data/time scales; no timing claim.
+// Independent window-sum and Lagrange-weight checks; no timing claim.
 #include <robot_identification/identification.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -41,11 +42,18 @@ bool Reference(const Eigen::VectorXd& time,
             }
             if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<double>::max()) return false;
             output(row, column) = static_cast<double>(value);
-            // Allow rounding in each differentiated input and propagate the
-            // first pass's error through D for acceleration. Relative error in
-            // a nearly cancelled acceleration alone is not a useful bound.
-            bounds(row, column) = 64.L * std::numeric_limits<double>::epsilon() * magnitude + propagated +
-                                  32.L * std::numeric_limits<double>::denorm_min();
+            // Secant evaluation can cancel two large weighted slopes even
+            // when the equivalent middle Lagrange contribution is small.
+            const long double left_change = static_cast<long double>(values(first + 1, column)) - values(first, column);
+            const long double right_change =
+                static_cast<long double>(values(first + 2, column)) - values(first + 1, column);
+            const long double weighted_secant_magnitude =
+                std::abs(weights[0] * left_change) + std::abs(weights[2] * right_change);
+            // Preserve small weights on highly unequal intervals, and propagate
+            // earlier-stage error through the same linear derivative operator.
+            bounds(row, column) =
+                64.L * std::numeric_limits<double>::epsilon() * std::max(magnitude, weighted_secant_magnitude) +
+                propagated + 32.L * std::numeric_limits<double>::denorm_min();
         }
     }
     return true;
@@ -54,7 +62,7 @@ void Compare(const Eigen::MatrixXd& actual,
              const Eigen::MatrixXd& reference,
              const ErrorBound& bounds,
              const char* label) {
-    if (!actual.allFinite()) throw std::runtime_error("accepted derivative is nonfinite");
+    if (!actual.allFinite()) throw std::runtime_error("accepted output is nonfinite");
     for (Eigen::Index column = 0; column < actual.cols(); ++column) {
         const long double scale = reference.col(column).cwiseAbs().maxCoeff();
         for (Eigen::Index row = 0; row < actual.rows(); ++row) {
@@ -68,6 +76,164 @@ void Compare(const Eigen::MatrixXd& actual,
             }
         }
     }
+}
+
+// Deliberately recompute every window in extended precision. This oracle does
+// not use the production running sum, rebasing, or Eigen's reduction order.
+void SmoothReference(const Eigen::MatrixXd& values,
+                     std::size_t window,
+                     Eigen::MatrixXd& output,
+                     ErrorBound& bounds,
+                     const ErrorBound* input_bounds = nullptr) {
+    output.resize(values.rows(), values.cols());
+    bounds.resize(values.rows(), values.cols());
+    const Eigen::Index radius =
+        static_cast<Eigen::Index>(std::min(window / 2, static_cast<std::size_t>(values.rows() - 1)));
+    for (Eigen::Index column = 0; column < values.cols(); ++column) {
+        long double column_maximum = 0;
+        for (Eigen::Index row = 0; row < values.rows(); ++row)
+            column_maximum = std::max(column_maximum, std::abs(static_cast<long double>(values(row, column))));
+        for (Eigen::Index row = 0; row < values.rows(); ++row) {
+            const Eigen::Index begin = std::max<Eigen::Index>(0, row - radius);
+            const Eigen::Index end = std::min<Eigen::Index>(values.rows(), row + radius + 1);
+            long double sum = 0, propagated = 0;
+            for (Eigen::Index term = begin; term < end; ++term) {
+                sum += static_cast<long double>(values(term, column));
+                if (input_bounds) propagated += (*input_bounds)(term, column);
+            }
+            const long double count = end - begin;
+            output(row, column) = static_cast<double>(sum / count);
+            // A conservative absolute forward-error bound also covers a
+            // rolling reduction whose cancelled terms exceed this window's
+            // current sum. Propagate earlier-stage uncertainty separately.
+            bounds(row, column) = propagated / count;
+            if (window != 1) {
+                bounds(row, column) +=
+                    8.L * (values.rows() + 1) * std::numeric_limits<double>::epsilon() * column_maximum +
+                    32.L * std::numeric_limits<double>::denorm_min();
+            }
+        }
+    }
+}
+
+struct SmoothingCoverage {
+    unsigned long long cases = 0, extreme_cases = 0, trimmed_cases = 0, long_window_cases = 0;
+    std::array<unsigned long long, 7> windows{};
+    std::array<unsigned long long, 3> dofs{};
+};
+
+void ValidateSmoothedCase(unsigned long long index, SmoothingCoverage& coverage) {
+    constexpr std::array<std::size_t, 7> windows{1, 3, 5, 31, 65, 67, 129};
+    constexpr std::array<int, 3> dofs{1, 7, 14};
+    // Each extra case has its own seed. It neither consumes the legacy RNG
+    // nor changes which original window-one case FIRST_CASE replays.
+    std::mt19937_64 random(0x20261103a6e7ULL ^ (index * 0x9e3779b97f4a7c15ULL));
+    std::uniform_real_distribution<double> unit(0., 1.);
+    const auto window_index = index % windows.size();
+    const auto dof_index = (index / windows.size()) % dofs.size();
+    const auto window = windows[window_index];
+    const auto torque_window = windows[(index / 3) % windows.size()];
+    const int dof = dofs[dof_index];
+    const int rows = index % 11 == 0 ? 3 : 3 + random() % 203;
+    const bool extreme = index % 13 == 0;
+    const double step = extreme ? 1e100 : std::ldexp(1., static_cast<int>(random() % 321) - 160);
+    const double scale =
+        extreme ? std::numeric_limits<double>::max() : std::ldexp(1., static_cast<int>(random() % 1001) - 500);
+    robot_identification::RawDataset raw;
+    for (int joint = 0; joint < dof; ++joint) raw.joint_names.push_back("axis_" + std::to_string(joint));
+    raw.time_seconds.resize(rows);
+    raw.position.resize(rows, dof);
+    raw.torque.resize(rows, dof);
+    raw.time_seconds[0] = 0.;
+    for (int row = 0; row < rows; ++row) {
+        if (row > 0) raw.time_seconds[row] = raw.time_seconds[row - 1] + step * (.25 + 4. * unit(random));
+        for (int joint = 0; joint < dof; ++joint) {
+            double shape = .4 * std::sin(.17 * row + .3 * joint) + .1 * unit(random);
+            if (extreme) {
+                switch ((index / 13) % 4) {
+                    case 0:
+                        shape = 1.;
+                        break;
+                    case 1:
+                        shape = row % 2 == 0 ? 1. : -1.;
+                        break;
+                    case 2:
+                        shape = row % 3 == 0 ? -1. : .75;
+                        break;
+                    default:
+                        shape = row == rows / 2 ? 1. : 0.;
+                        break;
+                }
+            }
+            raw.position(row, joint) = scale * shape;
+            raw.torque(row, joint) =
+                scale * (extreme ? (row % 3 == 0 ? -.5 : 1.) : .7 * std::cos(.11 * row + .2 * joint));
+        }
+    }
+    const std::size_t trim_front = index % 17 == 0 ? rows - 1 : index % 3;
+    const std::size_t trim_back = index % 17 == 0 ? 0 : std::min<std::size_t>(index % 2, rows - trim_front - 1);
+    const Eigen::Index retained_rows = rows - trim_front - trim_back;
+    Eigen::MatrixXd position, velocity_before_smoothing, velocity, acceleration_before_smoothing, acceleration, torque;
+    ErrorBound position_bound, velocity_before_bound, velocity_bound, acceleration_before_bound, acceleration_bound,
+        torque_bound;
+    SmoothReference(raw.position, window, position, position_bound);
+    if (!Reference(raw.time_seconds, position, velocity_before_smoothing, velocity_before_bound, &position_bound))
+        throw std::runtime_error("smoothed velocity oracle exceeded its intended finite range");
+    SmoothReference(velocity_before_smoothing, window, velocity, velocity_bound, &velocity_before_bound);
+    if (!Reference(raw.time_seconds, velocity, acceleration_before_smoothing, acceleration_before_bound,
+                   &velocity_bound))
+        throw std::runtime_error("smoothed acceleration oracle exceeded its intended finite range");
+    SmoothReference(acceleration_before_smoothing, window, acceleration, acceleration_bound,
+                    &acceleration_before_bound);
+    SmoothReference(raw.torque, torque_window, torque, torque_bound);
+    try {
+        const auto result =
+            robot_identification::PreprocessPositionAndTorque(raw, {window, trim_front, trim_back, torque_window});
+        if (result.joint_names != raw.joint_names || result.samples.size() != static_cast<std::size_t>(retained_rows))
+            throw std::runtime_error("smoothing changed joint names or retained sample count");
+        Eigen::MatrixXd actual_position(retained_rows, dof), actual_velocity(retained_rows, dof),
+            actual_acceleration(retained_rows, dof), actual_torque(retained_rows, dof);
+        for (Eigen::Index row = 0; row < retained_rows; ++row) {
+            const auto& sample = result.samples[static_cast<std::size_t>(row)];
+            if (sample.time_seconds != raw.time_seconds[row + trim_front])
+                throw std::runtime_error("smoothing or trimming changed a retained timestamp");
+            actual_position.row(row) = sample.position.transpose();
+            actual_velocity.row(row) = sample.velocity.transpose();
+            actual_acceleration.row(row) = sample.acceleration.transpose();
+            actual_torque.row(row) = sample.torque.transpose();
+        }
+        Compare(actual_position, position.middleRows(trim_front, retained_rows),
+                position_bound.middleRows(trim_front, retained_rows), "smoothed_position");
+        Compare(actual_velocity, velocity.middleRows(trim_front, retained_rows),
+                velocity_bound.middleRows(trim_front, retained_rows), "smoothed_velocity");
+        Compare(actual_acceleration, acceleration.middleRows(trim_front, retained_rows),
+                acceleration_bound.middleRows(trim_front, retained_rows), "smoothed_acceleration");
+        Compare(actual_torque, torque.middleRows(trim_front, retained_rows),
+                torque_bound.middleRows(trim_front, retained_rows), "smoothed_torque");
+    } catch (const std::exception& error) {
+        std::ostringstream message;
+        message << "smoothing case=" << index << " window=" << window << " torque_window=" << torque_window
+                << " rows=" << rows << " dof=" << dof << " trim=" << trim_front << ',' << trim_back
+                << " extreme=" << extreme << ": " << error.what();
+        throw std::runtime_error(message.str());
+    }
+    ++coverage.cases;
+    ++coverage.windows[window_index];
+    ++coverage.dofs[dof_index];
+    if (extreme) ++coverage.extreme_cases;
+    if (trim_front || trim_back) ++coverage.trimmed_cases;
+    if (window > 65 && rows > 33) ++coverage.long_window_cases;
+}
+
+void PrintSmoothingCoverage(const SmoothingCoverage& coverage) {
+    std::cout << " smoothing_cases=" << coverage.cases << " smoothing_extreme_cases=" << coverage.extreme_cases
+              << " smoothing_trimmed_cases=" << coverage.trimmed_cases
+              << " smoothing_long_window_cases=" << coverage.long_window_cases << " smoothing_windows=";
+    for (std::size_t index = 0; index < coverage.windows.size(); ++index)
+        std::cout << (index == 0 ? "" : ",") << coverage.windows[index];
+    std::cout << " smoothing_dofs=";
+    for (std::size_t index = 0; index < coverage.dofs.size(); ++index)
+        std::cout << (index == 0 ? "" : ",") << coverage.dofs[index];
 }
 }  // namespace
 
@@ -89,7 +255,12 @@ int main(int argc, char** argv) {
     const auto started = std::chrono::steady_clock::now();
     unsigned long long cases = 0, accepted = 0, rejected = 0, extreme_cases = 0, unequal_spacing_cases = 0;
     double next_progress = 0;
+    SmoothingCoverage smoothing_coverage;
     try {
+        // Always recheck the impulse that exposed the weighted-secant error scale.
+        // Keep this fixed fixture separate from replay RNG and campaign counters.
+        SmoothingCoverage fixed_coverage;
+        ValidateSmoothedCase(231959, fixed_coverage);
         while (std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() < seconds) {
             robot_identification::RawDataset raw;
             if ((first_case + cases) % 32 == 0) {
@@ -160,12 +331,15 @@ int main(int argc, char** argv) {
                 }
                 ++accepted;
             }
+            ValidateSmoothedCase(first_case + cases, smoothing_coverage);
             ++cases;
             const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             if (elapsed >= next_progress) {
                 std::cout << "elapsed_s=" << elapsed << " cases=" << cases << " accepted=" << accepted
                           << " rejected=" << rejected << " extreme_cases=" << extreme_cases
-                          << " unequal_spacing_cases=" << unequal_spacing_cases << std::endl;
+                          << " unequal_spacing_cases=" << unequal_spacing_cases;
+                PrintSmoothingCoverage(smoothing_coverage);
+                std::cout << std::endl;
                 next_progress = elapsed + 60;
             }
         }
@@ -175,5 +349,7 @@ int main(int argc, char** argv) {
     }
     std::cout << "PASSED first_case=" << first_case << " cases=" << cases << " accepted=" << accepted
               << " rejected=" << rejected << " extreme_cases=" << extreme_cases
-              << " unequal_spacing_cases=" << unequal_spacing_cases << std::endl;
+              << " unequal_spacing_cases=" << unequal_spacing_cases;
+    PrintSmoothingCoverage(smoothing_coverage);
+    std::cout << std::endl;
 }

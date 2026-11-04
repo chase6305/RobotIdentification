@@ -42,7 +42,9 @@ Examples use synthetic data and do not supply hardware parameters.
 | File | Responsibility / 职责 |
 |---|---|
 | `data_validation.cpp` | Dataset and regression contracts / 数据与回归问题的校验 |
-| `identification.cpp` | Preprocessing, trajectories and actuator composition / 信号处理与模型接口 |
+| `identification.cpp` | Regression assembly, actuator composition and mass-matrix validation / 模型接口与物理验证 |
+| `preprocessing.cpp` | Centered smoothing and nonuniform differentiation / 中心平滑与非均匀差分 |
+| `trajectory.cpp` | Harmonic evaluation, conservative bounds and limit checks / 谐波轨迹与限值校验 |
 | `dataset_csv.cpp` | Raw/processed CSV parsing and writing / 原始与处理后数据的 CSV 读写 |
 | `solver.cpp` | WLS, ridge, Huber iteration, rank diagnostics, covariance and residual metrics / 求解与不确定性 |
 | `base_parameters.cpp` | QR basis, dependency reconstruction and parameter coordinates / 基参数与坐标映射 |
@@ -84,7 +86,9 @@ contracts; result status remains `candidate`.
   matrices and SVD storage. Reported rank and conditioning describe measured
   data, including with ridge. Returned weights belong to the last completed solve.
 - Covariance uses the solve's retained singular directions, including augmented
-  ridge rows. Scaled root errors preserve representable uncertainty at extreme
+  ridge rows. Ridge solves release the augmented decomposition workspace before
+  final measured-data diagnostics, keeping only the covariance directions and
+  singular values. Scaled root errors preserve representable uncertainty at extreme
   scales. Rank-deficient nullspace zeros follow the minimum-norm pseudoinverse
   convention and do not imply certainty; nonfinite covariance fails.
 - Residual metrics use scaled magnitudes. Normalized RMSE is dimensionless;

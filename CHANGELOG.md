@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Separate preprocessing and harmonic trajectories into focused source files;
+  name numerical quantities and recorder state explicitly, and correct smoothing,
+  Coulomb-deadband, numerical-rank and CSV-underflow comments. Reuse shared
+  backend-name checks.
+- Compute ridge observability diagnostics once at the final IRLS weights, and
+  traverse short smoothing windows by contiguous joint columns. Keep public APIs
+  and numerical policies compatible. Extend independent preprocessing and Huber
+  campaigns to cover smoothing, trimming and ridge; add a preprocessing benchmark.
+- Initialize every synthetic torque row before preprocessing in the generic
+  example. Its full raw input is validated before trimming; uninitialized edge
+  rows could previously cause an intermittent failure. Check the fitted values
+  against the known synthetic parameters, and initialize Eigen storage with NaNs
+  in standalone CI to catch this class of regression.
+- Retain only the ridge directions needed for covariance before releasing the
+  augmented decomposition workspace ahead of final measured-data diagnostics.
+  Preserve its initial allocation order and rank policies; add analytic tests
+  for different measured/augmented ranks, tiny ridge and zero retained rank.
+
 - Core 0.2.14 separates weighted/robust solving, diagnostics and covariance into
   `solver.cpp`, and CSV parsing/writing into `dataset_csv.cpp`. Put shared data
   contracts in `data_validation.cpp` so I/O and solvers avoid unrelated trajectory

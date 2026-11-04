@@ -47,6 +47,7 @@ and default benchmarks require neither ROS nor Pinocchio.
 | Program | Timed operation | Reporting |
 |---|---|---|
 | `core_bench` | Huber/ridge solves on 1,500 rows and 12 parameters; seven-axis/20-harmonic trajectories | Warmed median of five repetitions; allocations per call |
+| `preprocessing_bench [SAMPLES] [DOF] [WINDOW] [REPETITIONS]` | Smooth, differentiate, materialize and destroy a synthetic dataset | JSON wall/process CPU microseconds per call and checksum |
 | `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Median milliseconds, allocations per read, process peak RSS |
 | `design_bench CASE [ITERATIONS]` | One API batch; fixture construction excluded | JSON wall/process CPU microseconds per call and checksum |
 | `parameter_bench CASE [ITERATIONS]` | Warmed `ToBaseParameters`; construction excluded | JSON wall/process CPU time, allocations and checksum |
@@ -55,7 +56,7 @@ and default benchmarks require neither ROS nor Pinocchio.
 GNU linker wrappers count executable/static-library `malloc` and `calloc`;
 C++ overrides count ordinary, array and aligned `new`. These disjoint counters
 apply to the benchmark thread; direct C allocation inside shared libraries can
-escape instrumentation. `design_bench` has no allocation instrumentation.
+escape instrumentation. `design_bench` and `preprocessing_bench` have no allocation instrumentation.
 
 For comparisons, use identical harness sources, matched installed headers and
 libraries, alternating fresh processes and an allowed CPU (`taskset -c CPU` if
@@ -104,6 +105,7 @@ build/benchmarks/design_bench basis-batch 1
 build/benchmarks/design_bench trajectory-reused 100000
 build/benchmarks/design_bench trajectory-validation 1000
 build/benchmarks/design_bench optimize-scaled 20
+build/benchmarks/preprocessing_bench 10000 7 5 20
 ```
 
 ### CSV comparisons
@@ -154,9 +156,9 @@ and scheduling determine counts. Programs stop on a mismatch and report counts.
 | `solver_stress` | Orthogonal analytic systems; dimensions, rank, conditioning, weights and ridge |
 | `solver_scale_stress` | Common weights through `1e±300`, design scales through `1e±130`, extended-range covariance |
 | `csv_stress` | Bitwise raw round trips across chunk boundaries, signed zero, finite extremes, LF/CRLF/CR, late-error rejection and retained owning results |
-| `preprocessing_stress` | Independent long-double Lagrange derivatives, nonuniform intervals, extreme scales, unusable-result rejection |
+| `preprocessing_stress` | Independent window means and Lagrange derivatives, smoothing, trimming, nonuniform intervals, extreme scales and range rejection |
 | `metrics_stress` | Independent extended-range RMS/absolute errors and normalized ratios, sparse subnormals, zero references, residual overflow |
-| `robust_stress` | Scalar Huber score roots by bisection, weighted covariance, outliers, weight/design exponents ±1000/±450, one/two-iteration stops |
+| `robust_stress` | Scalar Huber/ridge score roots by bisection, weighted covariance, outliers, weight/design exponents ±1000/±450, one/two-iteration stops |
 | `trajectory_stress` | Closed-form position through jerk and envelopes; phase/product underflow, cancellation, overflow, inactive harmonics |
 | `design_stress` | Known-rank cosine bases, column units at binary exponents -300..300, weighted fits, independent holdout, analytic Gram eigenvalues and constrained search |
 | `pinocchio_stress` | Four workers, shared backends, model-owner churn, scalar/translation joints, actuator composition and native RNEA |
@@ -174,8 +176,12 @@ error uses stable Frobenius norms and denominator `max(1e-300, norm(reference))`
 Pinocchio uses the parameter-error convention, requires scalar named batches to
 match generic assembly exactly, and rejects named multi-coordinate batches.
 
-Preprocessing allowance is
-`64 * epsilon(double) * sum(abs(w * input)) + sum(abs(w) * input_error) + 32 * denorm_min(double)`.
+For preprocessing, let `L = sum(abs(w_i * y_i))` and
+`S = abs(w_0 * (y_1 - y_0)) + abs(w_2 * (y_2 - y_1))`.
+The derivative allowance is
+`64 * epsilon(double) * max(L, S) + sum(abs(w) * input_error) + 32 * denorm_min(double)`.
+The weighted secant scale `S` includes cancellation that the Lagrange contribution
+sum alone can miss, without dropping tiny weights on highly unequal intervals.
 Acceleration propagates velocity allowances through the second derivative; this
 handles nearly linear inputs and double quantization without a relative-only
 acceleration test. Trajectory sample allowance is
@@ -184,9 +190,17 @@ envelopes use `8 * epsilon(double)` times their magnitude plus the same subnorma
 allowance. Ordinary phases use the API's double phase; subnormal phases use the
 extended product. Nonfinite active phases and unrepresentable final samples reject.
 
+Smoothed preprocessing cases independently sum each window in long double and
+propagate allowances through every smoothing/differentiation stage. The smoothing
+allowance is the mean input allowance plus
+`8 * (sample_count + 1) * epsilon(double) * column_maximum + 32 * denorm_min(double)`.
+These conservative absolute bounds check the pipeline; bitwise before/after
+comparisons provide the finer regression check.
+
 Metrics form normalized RMS ratios before rounding the individual RMS values.
-Huber fits must solve their reported weight set and retain/reduce the initial WLS
-objective; only converged fits are compared with the Huber root. Fits consuming
+Huber fits must solve their reported weight set and retain/reduce the initial
+weighted-fit objective, including ridge when enabled. Only converged fits are
+compared with the Huber/ridge score root. Fits consuming
 the 200-iteration cap without convergence are counted separately. Design holdout
 checks must reject a newly excited zero calibration column.
 

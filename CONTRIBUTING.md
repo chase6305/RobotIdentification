@@ -7,4 +7,6 @@
 - Never commit build outputs, private robot recordings, credentials, or hardware configuration.
 - Run `./scripts/test.sh`, `./check_style.sh`, and `git diff --check`; use `--with-pinocchio` for backend changes.
 - Formatting uses clang-format 18.1.8 and YAPF 0.43.0, pinned in `requirements-dev.txt`.
+- Standalone CI initializes Eigen storage with NaNs to expose unfilled inputs;
+  reproduce with `CXXFLAGS=-DEIGEN_INITIALIZE_MATRICES_BY_NAN ./scripts/test.sh <fresh-build-root>`.
 - Maintain both root READMEs. Algorithm changes must describe equations, units, saturation, and invalid-input behavior.
