@@ -1,7 +1,4 @@
-# ----------------------------------------------------------------------------
-# Copyright (c) 2026 RobotServer contributors.
 # SPDX-License-Identifier: MIT
-# ----------------------------------------------------------------------------
 """Check or apply the repository's C++ and Python formatting."""
 
 import argparse

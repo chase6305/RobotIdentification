@@ -12,6 +12,10 @@ identification_artifact --help
 在 ROS 2 工作区安装后，也可用 `ros2 run robot_identification_tools dataset_inspect` 和 `ros2 run robot_identification_tools identification_artifact` 调用。
 The same console scripts are available through `ros2 run` after a colcon installation.
 
+工件 Schema 使用 `urn:robot-identification:schema:<artifact>:v1` 标识；打包文件名、工件字段及 `schema_version: 1` 保持不变。
+Artifact schemas use `urn:robot-identification:schema:<artifact>:v1` identifiers.
+Packaged filenames, artifact fields, and `schema_version: 1` remain unchanged.
+
 `dataset_inspect` works without a ROS graph and strictly validates raw or
 processed identification CSV headers, finite values, monotonic timestamps,
 sample rate, timing spread, and peak absolute torque.

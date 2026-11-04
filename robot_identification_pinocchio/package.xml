@@ -3,7 +3,7 @@
   <name>robot_identification_pinocchio</name>
   <version>0.2.2</version>
   <description>Optional Pinocchio rigid-body regressor backend for robot identification</description>
-  <maintainer email="maintainers@example.com">RobotServer maintainers</maintainer>
+  <maintainer email="maintainers@example.com">RobotIdentification contributors</maintainer>
   <license>MIT</license>
   <buildtool_depend>cmake</buildtool_depend>
   <depend>pinocchio</depend>

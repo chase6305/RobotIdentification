@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Core 0.2.15 uses project-specific schema identifiers and package metadata.
+  Remove obsolete migration text and tracked process notes. Artifact fields
+  and schema version 1 remain unchanged.
 - Separate preprocessing and harmonic trajectories into focused source files;
   name numerical quantities and recorder state explicitly, and correct smoothing,
   Coulomb-deadband, numerical-rank and CSV-underflow comments. Reuse shared
@@ -301,15 +304,15 @@
   final weights, and covariance contracts unchanged. Avoid dynamic per-harmonic
   temporaries when evaluating excitation trajectories.
 
-- Extract the core, optional Pinocchio regressor, ROS 2 recorder, schemas, tests,
-  and offline artifact tools from RobotServer `a6c70ec`, retaining relevant Git history.
+- Provide the standalone core, optional Pinocchio regressor, ROS 2 recorder,
+  schemas, tests, and offline artifact tools.
 - Preserve the existing public C++ targets, dataset formats, and artifact schemas.
   Core remains at 0.1.0. Recorder 0.1.1 explicitly declares
   string-array joint names so ROS Humble accepts configured joint ordering, and
   closes its context idempotently after SIGINT.
 - Publish offline inspection and artifact commands under the new
-  `robot_identification_tools` 0.1.0 package. Python imports and `ros2 run` package
-  selection move from `robot_server_tools`; console-script names are unchanged.
+  `robot_identification_tools` 0.1.0 package with stable Python imports,
+  `ros2 run` package selection, and console-script names.
 - Add independent validation, Python packaging, formatting, schema checks, and
   standalone/ROS 2 CI definitions, including an installed-recorder integration
   check with synthetic standard JointState messages.

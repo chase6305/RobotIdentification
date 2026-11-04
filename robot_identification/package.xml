@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>robot_identification</name>
-  <version>0.2.14</version>
+  <version>0.2.15</version>
   <description>Middleware-independent regression, preprocessing, and validation for robot parameter identification</description>
-  <maintainer email="maintainers@example.com">RobotServer maintainers</maintainer>
+  <maintainer email="maintainers@example.com">RobotIdentification contributors</maintainer>
   <license>MIT</license>
   <buildtool_depend>cmake</buildtool_depend>
   <depend>eigen</depend>
