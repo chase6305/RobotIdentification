@@ -9,6 +9,8 @@ find_package(Eigen3 3.3.1 REQUIRED NO_MODULE)
 
 add_library(robot_identification
   src/identification.cpp
+  src/preprocessing.cpp
+  src/trajectory.cpp
   src/data_validation.cpp
   src/dataset_csv.cpp
   src/solver.cpp

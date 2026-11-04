@@ -18,6 +18,9 @@ jobs:
           ./check_style.sh
           bash -n scripts/*.sh
       - name: Test core, installed C++ consumers, Python tools, recorder, and schemas
+        env:
+          # Make reads of unfilled Eigen storage fail finite-input checks.
+          CXXFLAGS: -DEIGEN_INITIALIZE_MATRICES_BY_NAN
         run: ./scripts/test.sh /tmp/robot-identification-ci
       - name: Verify Python packaging and console scripts
         run: |

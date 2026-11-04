@@ -43,7 +43,7 @@ void WriteRawDatasetCsv(const RawDataset& dataset, const std::string& path);
 [[nodiscard]] RawDataset ReadRawDatasetCsv(const std::string& path);
 
 struct PreprocessOptions {
-    // Odd window length for a symmetric, zero-phase moving-average smoother.
+    // Odd sample window for a centered moving average, truncated at data edges.
     // One disables smoothing. Derivatives are recomputed from position with
     // a three-point formula that supports nonuniform timestamps.
     std::size_t smoothing_window{5};
@@ -139,6 +139,7 @@ struct JointActuatorRegressorOptions {
     bool viscous_friction{true};
     bool coulomb_friction{true};
     bool torque_bias{true};
+    // The Coulomb column is zero when abs(velocity) <= this threshold.
     double coulomb_velocity_deadband{0.0};
 };
 

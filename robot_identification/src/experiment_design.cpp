@@ -10,8 +10,8 @@
 
 namespace robot_identification {
 namespace {
-double ValidateOptions(const ExcitationDesignOptions& options, std::size_t dof, std::size_t parameters) {
-    if (parameters == 0 || dof == 0 || options.sample_count < 3 || options.sample_count > 10000000 ||
+double ValidateOptions(const ExcitationDesignOptions& options, std::size_t dof, std::size_t parameter_count) {
+    if (parameter_count == 0 || dof == 0 || options.sample_count < 3 || options.sample_count > 10000000 ||
         !std::isfinite(options.duration_seconds) || options.duration_seconds <= 0. || options.max_evaluations == 0 ||
         !std::isfinite(options.initial_step_fraction) || options.initial_step_fraction <= 0. ||
         options.initial_step_fraction > 1. || !std::isfinite(options.minimum_step_fraction) ||
@@ -25,12 +25,13 @@ double ValidateOptions(const ExcitationDesignOptions& options, std::size_t dof, 
         return scales.size() == 0 ||
                (static_cast<std::size_t>(scales.size()) == count && scales.allFinite() && (scales.array() > 0.).all());
     };
-    if (!validate_scales(options.parameter_scales, parameters) ||
+    if (!validate_scales(options.parameter_scales, parameter_count) ||
         !validate_scales(options.torque_noise_standard_deviation, dof))
         throw std::invalid_argument("excitation design scales must be finite, positive and match the backend");
-    const auto maximum = std::min(static_cast<std::size_t>(std::numeric_limits<Eigen::Index>::max()),
-                                  std::numeric_limits<std::size_t>::max() / sizeof(double));
-    if (dof > maximum / options.sample_count || parameters > maximum / (dof * options.sample_count))
+    const auto maximum_coefficients = std::min(static_cast<std::size_t>(std::numeric_limits<Eigen::Index>::max()),
+                                               std::numeric_limits<std::size_t>::max() / sizeof(double));
+    if (dof > maximum_coefficients / options.sample_count ||
+        parameter_count > maximum_coefficients / (dof * options.sample_count))
         throw std::overflow_error("excitation design matrix dimensions overflowed");
     const double period = options.duration_seconds / static_cast<double>(options.sample_count - 1);
     if (!std::isfinite(period) || period <= 0.)
@@ -53,79 +54,81 @@ HarmonicTrajectory HarmonicDesign::trajectory() const {
 ExcitationDesignQuality EvaluateExcitationDesign(const HarmonicTrajectory& trajectory,
                                                  const RegressorBackend& backend,
                                                  const ExcitationDesignOptions& options) {
-    const std::size_t dof = trajectory.dof(), parameters = backend.parameter_count();
-    (void)ValidateOptions(options, dof, parameters);
-    const Eigen::Index rows = static_cast<Eigen::Index>(dof * options.sample_count);
-    Eigen::MatrixXd regressor(rows, static_cast<Eigen::Index>(parameters));
+    const std::size_t dof = trajectory.dof(), parameter_count = backend.parameter_count();
+    (void)ValidateOptions(options, dof, parameter_count);
+    const Eigen::Index row_count = static_cast<Eigen::Index>(dof * options.sample_count);
+    Eigen::MatrixXd regressor(row_count, static_cast<Eigen::Index>(parameter_count));
     Sample sample;
     sample.torque = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(dof));
-    ExcitationSample values;
-    double previous = -1.;
+    ExcitationSample trajectory_sample;
+    double previous_time_seconds = -1.;
     for (std::size_t index = 0; index < options.sample_count; ++index) {
         sample.time_seconds =
             options.duration_seconds * (static_cast<double>(index) / static_cast<double>(options.sample_count - 1));
-        if (sample.time_seconds <= previous)
+        if (sample.time_seconds <= previous_time_seconds)
             throw std::invalid_argument("excitation design duration cannot represent distinct sample times");
-        previous = sample.time_seconds;
-        trajectory.EvaluateInto(sample.time_seconds, values);
+        previous_time_seconds = sample.time_seconds;
+        trajectory.EvaluateInto(sample.time_seconds, trajectory_sample);
         // Lend the owning buffers to the backend sample, then restore them
         // for the next evaluation without copies or additional vector storage.
-        sample.position.swap(values.position);
-        sample.velocity.swap(values.velocity);
-        sample.acceleration.swap(values.acceleration);
+        sample.position.swap(trajectory_sample.position);
+        sample.velocity.swap(trajectory_sample.velocity);
+        sample.acceleration.swap(trajectory_sample.acceleration);
         const auto block = backend.Compute(sample);
-        sample.position.swap(values.position);
-        sample.velocity.swap(values.velocity);
-        sample.acceleration.swap(values.acceleration);
-        if (block.rows() != static_cast<Eigen::Index>(dof) || block.cols() != static_cast<Eigen::Index>(parameters) ||
-            !block.allFinite())
+        sample.position.swap(trajectory_sample.position);
+        sample.velocity.swap(trajectory_sample.velocity);
+        sample.acceleration.swap(trajectory_sample.acceleration);
+        if (block.rows() != static_cast<Eigen::Index>(dof) ||
+            block.cols() != static_cast<Eigen::Index>(parameter_count) || !block.allFinite())
             throw std::runtime_error("excitation design backend returned an invalid regressor block");
         regressor.middleRows(static_cast<Eigen::Index>(index * dof), static_cast<Eigen::Index>(dof)) = block;
     }
     const bool unit_scales =
         (options.parameter_scales.size() == 0 || options.parameter_scales.isOnes(0.)) &&
         (options.torque_noise_standard_deviation.size() == 0 || options.torque_noise_standard_deviation.isOnes(0.));
-    const auto scaled = [&](Eigen::Index row, Eigen::Index column) {
+    const auto scaled_coefficient = [&](Eigen::Index row, Eigen::Index column) {
         const long double parameter_scale =
             options.parameter_scales.size() == 0 ? 1.L : options.parameter_scales[column];
-        const long double noise = options.torque_noise_standard_deviation.size() == 0
-                                      ? 1.L
-                                      : options.torque_noise_standard_deviation[row % static_cast<Eigen::Index>(dof)];
-        return static_cast<long double>(regressor(row, column)) * parameter_scale / noise;
+        const long double noise_scale =
+            options.torque_noise_standard_deviation.size() == 0
+                ? 1.L
+                : options.torque_noise_standard_deviation[row % static_cast<Eigen::Index>(dof)];
+        return static_cast<long double>(regressor(row, column)) * parameter_scale / noise_scale;
     };
-    long double maximum = 0.L;
+    long double maximum_magnitude = 0.L;
     if (unit_scales)
-        maximum = regressor.cwiseAbs().maxCoeff();
+        maximum_magnitude = regressor.cwiseAbs().maxCoeff();
     else
         for (Eigen::Index column = 0; column < regressor.cols(); ++column)
             for (Eigen::Index row = 0; row < regressor.rows(); ++row)
-                maximum = std::max(maximum, std::abs(scaled(row, column)));
-    if (!std::isfinite(maximum)) throw std::overflow_error("scaled excitation design matrix overflowed");
+                maximum_magnitude = std::max(maximum_magnitude, std::abs(scaled_coefficient(row, column)));
+    if (!std::isfinite(maximum_magnitude)) throw std::overflow_error("scaled excitation design matrix overflowed");
     ExcitationDesignQuality result;
-    result.parameter_count = parameters;
-    if (maximum == 0.L) return result;
+    result.parameter_count = parameter_count;
+    if (maximum_magnitude == 0.L) return result;
     if (unit_scales)
         // No weighted products are needed; direct division also handles a
         // subnormal maximum without forming an overflowing reciprocal.
         for (Eigen::Index column = 0; column < regressor.cols(); ++column)
             for (Eigen::Index row = 0; row < regressor.rows(); ++row)
-                regressor(row, column) /= static_cast<double>(maximum);
+                regressor(row, column) /= static_cast<double>(maximum_magnitude);
     else
         for (Eigen::Index column = 0; column < regressor.cols(); ++column)
             for (Eigen::Index row = 0; row < regressor.rows(); ++row)
-                regressor(row, column) = static_cast<double>(scaled(row, column) / maximum);
+                regressor(row, column) = static_cast<double>(scaled_coefficient(row, column) / maximum_magnitude);
     Eigen::JacobiSVD<Eigen::MatrixXd> svd(regressor);
     svd.setThreshold(options.relative_rank_tolerance);
     result.rank = static_cast<std::size_t>(svd.rank());
     if (result.rank == 0) return result;
-    const auto& singular = svd.singularValues();
+    const auto& singular_values = svd.singularValues();
     long double log_sum = 0.L;
     for (std::size_t index = 0; index < result.rank; ++index)
-        log_sum +=
-            2.L * (std::log(static_cast<long double>(singular[static_cast<Eigen::Index>(index)])) + std::log(maximum)) -
-            std::log(static_cast<long double>(options.sample_count));
+        log_sum += 2.L * (std::log(static_cast<long double>(singular_values[static_cast<Eigen::Index>(index)])) +
+                          std::log(maximum_magnitude)) -
+                   std::log(static_cast<long double>(options.sample_count));
     result.mean_log_information = static_cast<double>(log_sum / result.rank);
-    if (result.fully_identifiable()) result.condition_number = singular[0] / singular[singular.size() - 1];
+    if (result.fully_identifiable())
+        result.condition_number = singular_values[0] / singular_values[singular_values.size() - 1];
     return result;
 }
 

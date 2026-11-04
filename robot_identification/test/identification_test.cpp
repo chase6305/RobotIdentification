@@ -399,9 +399,45 @@ void TestMassMatrixBatchRecovery() {
     }
 }
 
+void TestActuatorColumnIsolation() {
+    using namespace robot_identification;
+    class TwoJointBackend final : public RegressorBackend {
+    public:
+        std::size_t parameter_count() const noexcept override { return 2; }
+        std::vector<std::string> parameter_names() const override { return {"position", "velocity"}; }
+        Eigen::MatrixXd Compute(const Sample& sample) const override {
+            Eigen::MatrixXd block(2, 2);
+            block.col(0) = sample.position;
+            block.col(1) = sample.velocity;
+            return block;
+        }
+    };
+    auto backend = std::make_shared<TwoJointBackend>();
+    Sample sample{0., Eigen::Vector2d(-0., -.3), Eigen::Vector2d(.05, -.5), Eigen::Vector2d(1.25, -2.),
+                  Eigen::Vector2d::Zero()};
+    JointActuatorRegressorOptions options;
+    options.coulomb_velocity_deadband = .1;
+    JointActuatorRegressor full(backend, {"first", "second"}, options);
+    Eigen::Matrix<double, 2, 10> expected;
+    expected << -0., .05, 1.25, .05, 0., 1., 0., 0., 0., 0., -.3, -.5, 0., 0., 0., 0., -2., -.5, -1., 1.;
+    const auto actual = full.Compute(sample);
+    if (actual != expected || !std::signbit(actual(0, 0)))
+        throw std::runtime_error("actuator columns changed the base block or leaked across joints");
+
+    options.drive_inertia = false;
+    options.viscous_friction = false;
+    options.torque_bias = false;
+    const JointActuatorRegressor friction(backend, {"first", "second"}, options);
+    Eigen::Matrix<double, 2, 4> expected_friction;
+    expected_friction << -0., .05, 0., 0., -.3, -.5, 0., -1.;
+    if (friction.Compute(sample) != expected_friction)
+        throw std::runtime_error("disabled actuator terms changed column ordering or zero entries");
+}
+
 }  // namespace
 
 int main() {
+    TestActuatorColumnIsolation();
     TestRobustWeightScales();
     TestHarmonicScaleRobustness();
     TestMultiharmonicDerivativesAtZero();

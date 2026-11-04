@@ -5,13 +5,55 @@
 
 namespace {
 void RequireNear(const Eigen::MatrixXd& actual, const Eigen::MatrixXd& expected) {
-    if (!actual.allFinite() || !actual.isApprox(expected, 2e-13)) {
+    if (actual.rows() != expected.rows() || actual.cols() != expected.cols() || !actual.allFinite() ||
+        !actual.isApprox(expected, 2e-13)) {
         throw std::runtime_error("covariance does not retain the analytically observable directions");
     }
+}
+
+void TestRidgeDirections() {
+    using namespace robot_identification;
+    RegressionProblem problem;
+    problem.sample_count = 4;
+    problem.dof = 1;
+    problem.regressor = Eigen::MatrixXd::Zero(4, 3);
+    problem.regressor.col(0).setOnes();
+    problem.observation = Eigen::Vector4d(1., 1., 3., 3.);
+    problem.row_weights = Eigen::Vector4d::Ones();
+    SolverOptions options;
+    options.ridge = 1.;
+    const auto check = [&](std::size_t measured_rank, const Eigen::Vector3d& parameters,
+                           const Eigen::Matrix3d& covariance) {
+        const auto result = Solve(problem, options);
+        if (result.rank != measured_rank || !result.parameters.isApprox(parameters, 5e-13))
+            throw std::runtime_error("ridge hid the measured rank or changed the fit");
+        RequireNear(result.covariance, covariance);
+    };
+    // A' A + ridge I is diagonal (5, 1, 1). The residual variance uses
+    // four measurements minus the measured rank, giving 116/75.
+    Eigen::Matrix3d expected = Eigen::Matrix3d::Zero();
+    expected.diagonal() << 116. / 375., 116. / 75., 116. / 75.;
+    check(1, Eigen::Vector3d(1.6, 0., 0.), expected);
+
+    // Positive ridge need not retain every direction at the chosen threshold.
+    options.ridge = 1e-24;
+    expected.setZero();
+    expected(0, 0) = 1. / 3.;
+    check(1, Eigen::Vector3d(2., 0., 0.), expected);
+
+    options.ridge = 1.;
+    options.relative_rank_tolerance = 2.;
+    check(0, Eigen::Vector3d::Zero(), Eigen::Matrix3d::Zero());
+
+    // No measured direction is observable, while ridge retains three modes.
+    options.relative_rank_tolerance = 1e-10;
+    problem.regressor.setZero();
+    check(0, Eigen::Vector3d::Zero(), 5. * Eigen::Matrix3d::Identity());
 }
 }  // namespace
 
 int main() {
+    TestRidgeDirections();
     robot_identification::RegressionProblem problem;
     problem.sample_count = 4;
     problem.dof = 1;

@@ -23,9 +23,9 @@ _HEX_NUMBER = re.compile(
     r"(?:[pP][+-]?[0-9]+)?")
 _NONZERO_DECIMAL = re.compile(r"[^eE]*[1-9]")
 _NONZERO_HEX = re.compile(r"[^pP]*[1-9a-fA-F]")
-# A fixed decimal shorter than this cannot reach even the smallest normal
-# magnitude. This conservative bound lets ordinary zero rows avoid rescanning.
-_MIN_FIXED_RANGE_LENGTH = -sys.float_info.min_10_exp
+# Without an exponent, a nonzero decimal this short cannot underflow to zero.
+# The conservative row-length screen lets ordinary zero fields avoid rescanning.
+_MIN_FIXED_UNDERFLOW_LENGTH = -sys.float_info.min_10_exp
 
 
 def _parse_number(field: str, line_number: int, column: int) -> float:
@@ -66,7 +66,7 @@ def _parse_numeric_row(line: str, fields: list[str],
                             f"line {line_number}, column {column} contains a non-finite value"
                         )
             if ("e" in line or "E" in line or
-                    len(line) >= _MIN_FIXED_RANGE_LENGTH) and 0.0 in values:
+                    len(line) >= _MIN_FIXED_UNDERFLOW_LENGTH) and 0.0 in values:
                 for column, (field, value) in enumerate(zip(fields, values),
                                                         start=1):
                     if value == 0.0 and _NONZERO_DECIMAL.match(field):
@@ -81,7 +81,7 @@ def _parse_numeric_row(line: str, fields: list[str],
 
 
 class _HashingReader(io.RawIOBase):
-    """Hash the bytes consumed by the text decoder without retaining the file."""
+    """Hash source bytes, including the header, without retaining the file."""
 
     def __init__(self, source: BinaryIO) -> None:
         super().__init__()
@@ -146,10 +146,10 @@ def _inspect_stream(stream: TextIO, header: list[str],
                     separator: str) -> dict[str, object]:
     if not header or header[0] != "time_s":
         raise ValueError("first column must be time_s")
-    q_columns = [name for name in header if name.startswith("q/")]
-    if not q_columns:
+    position_columns = [name for name in header if name.startswith("q/")]
+    if not position_columns:
         raise ValueError("dataset has no position columns")
-    joint_names = [name[2:] for name in q_columns]
+    joint_names = [name[2:] for name in position_columns]
     if (any(not name or any(character in name
                             for character in ",\r\n")
             for name in joint_names) or
@@ -159,7 +159,7 @@ def _inspect_stream(stream: TextIO, header: list[str],
     is_raw_dataset = len(header) == 1 + 2 * len(joint_names)
     prefixes = ("tau/",) if is_raw_dataset else ("dq/", "ddq/", "tau/")
     expected_header = (
-        ["time_s"] + q_columns +
+        ["time_s"] + position_columns +
         [prefix + name for prefix in prefixes for name in joint_names])
     if header != expected_header:
         raise ValueError("columns do not match the identification CSV contract")
@@ -168,8 +168,8 @@ def _inspect_stream(stream: TextIO, header: list[str],
     previous_time = 0.0
     minimum_interval = math.inf
     maximum_interval = 0.0
-    maximum_torque = [0.0] * len(joint_names)
-    torque_offset = 1 + len(joint_names) * (1 if is_raw_dataset else 3)
+    maximum_abs_torque = [0.0] * len(joint_names)
+    torque_start_column = 1 + len(joint_names) * (1 if is_raw_dataset else 3)
     for line_number, line in enumerate(stream, start=2):
         line = line.removesuffix(separator)
         if separator == "\n":
@@ -197,10 +197,10 @@ def _inspect_stream(stream: TextIO, header: list[str],
             first_time = current_time
         previous_time = current_time
         sample_count += 1
-        for joint, value in enumerate(values[torque_offset:]):
+        for joint, value in enumerate(values[torque_start_column:]):
             magnitude = abs(value)
-            if magnitude > maximum_torque[joint]:
-                maximum_torque[joint] = magnitude
+            if magnitude > maximum_abs_torque[joint]:
+                maximum_abs_torque[joint] = magnitude
     if sample_count < 3:
         raise ValueError("dataset needs at least three samples")
     duration = previous_time - first_time
@@ -217,7 +217,7 @@ def _inspect_stream(stream: TextIO, header: list[str],
         "mean_rate_hz": mean_rate,
         "minimum_interval_s": minimum_interval,
         "maximum_interval_s": maximum_interval,
-        "maximum_absolute_torque": dict(zip(joint_names, maximum_torque)),
+        "maximum_absolute_torque": dict(zip(joint_names, maximum_abs_torque)),
     }
 
 

@@ -120,18 +120,14 @@ public:
             !weighted_observation_.head(data_rows_).allFinite()) {
             throw std::overflow_error("weighted regression values are non-finite");
         }
-        // Diagnose measured data before ridge rows: regularization must not
-        // disguise an unobservable parameter. Reuse each decomposition's
-        // scratch across IRLS iterations without changing its input shape.
+        // Without ridge, the solve and diagnostics share one decomposition.
+        // Ridge solves need only the augmented decomposition during IRLS;
+        // SetDiagnostics measures observability once with the final weights.
         if (ridge_rows_ == 0) {
             diagnostic_svd_->compute(weighted_regressor_);
-        } else {
-            diagnostic_svd_->compute(weighted_regressor_.topRows(data_rows_));
-        }
-        if (!diagnostic_svd_->singularValues().allFinite()) {
-            throw std::runtime_error("regression diagnostic decomposition failed");
-        }
-        if (ridge_rows_ == 0) {
+            if (!diagnostic_svd_->singularValues().allFinite()) {
+                throw std::runtime_error("regression diagnostic decomposition failed");
+            }
             result.parameters = diagnostic_svd_->solve(weighted_observation_);
         } else {
             regularized_svd_->compute(weighted_regressor_);
@@ -142,7 +138,21 @@ public:
         }
     }
 
-    void SetDiagnostics(IdentificationResult& result) const {
+    void SetDiagnostics(IdentificationResult& result) {
+        if (ridge_rows_ > 0) {
+            // Retain only the directions needed for covariance before releasing
+            // the augmented decomposition and computing measured diagnostics.
+            const Eigen::Index regularized_rank = regularized_svd_->rank();
+            retained_basis_ = regularized_svd_->matrixV().leftCols(regularized_rank);
+            retained_singular_values_ = regularized_svd_->singularValues().head(regularized_rank);
+            regularized_svd_.reset();
+            // Exclude the ridge rows so regularization cannot hide a direction
+            // that remains unobservable in the final weighted measurements.
+            diagnostic_svd_->compute(weighted_regressor_.topRows(data_rows_));
+            if (!diagnostic_svd_->singularValues().allFinite()) {
+                throw std::runtime_error("regression diagnostic decomposition failed");
+            }
+        }
         result.rank = static_cast<std::size_t>(diagnostic_svd_->rank());
         const auto& singular_values = diagnostic_svd_->singularValues();
         result.condition_number = result.rank < static_cast<std::size_t>(weighted_regressor_.cols())
@@ -150,7 +160,7 @@ public:
                                       : singular_values[0] / singular_values[singular_values.size() - 1];
     }
 
-    Eigen::MatrixXd Covariance(const Eigen::VectorXd& residual, std::size_t measured_rank) const {
+    Eigen::MatrixXd Covariance(const Eigen::VectorXd& residual, std::size_t measured_rank) {
         const auto degrees_of_freedom =
             std::max<Eigen::Index>(1, data_rows_ - static_cast<Eigen::Index>(measured_rank));
         const double variance =
@@ -181,16 +191,21 @@ public:
         // Use the same retained singular directions as the parameter solve.
         // Forming A'WA squares its condition number and a second decomposition
         // can incorrectly erase observable, weakly excited directions.
-        const auto& decomposition = ridge_rows_ == 0 ? *diagnostic_svd_ : *regularized_svd_;
-        const Eigen::Index rank = ridge_rows_ == 0 ? static_cast<Eigen::Index>(measured_rank) : decomposition.rank();
-        Eigen::MatrixXd scaled_basis = decomposition.matrixV().leftCols(rank);
+        Eigen::MatrixXd scaled_basis;
+        if (ridge_rows_ == 0) {
+            scaled_basis = diagnostic_svd_->matrixV().leftCols(static_cast<Eigen::Index>(measured_rank));
+        } else {
+            scaled_basis.swap(retained_basis_);
+        }
+        const Eigen::Index rank = scaled_basis.cols();
+        const auto& singular_values = ridge_rows_ == 0 ? diagnostic_svd_->singularValues() : retained_singular_values_;
         for (Eigen::Index column = 0; column < rank; ++column) {
             double uncertainty;
             if (scale_exponent == 0) {
-                uncertainty = residual_scale / decomposition.singularValues()[column];
+                uncertainty = residual_scale / singular_values[column];
             } else {
                 int singular_exponent;
-                const double fraction = std::frexp(decomposition.singularValues()[column], &singular_exponent);
+                const double fraction = std::frexp(singular_values[column], &singular_exponent);
                 uncertainty = std::ldexp(residual_scale / fraction, scale_exponent - singular_exponent);
             }
             scaled_basis.col(column) *= uncertainty;
@@ -206,6 +221,8 @@ private:
     Eigen::MatrixXd weighted_regressor_;
     Eigen::VectorXd weighted_observation_, sqrt_weights_;
     std::optional<Svd> diagnostic_svd_, regularized_svd_;
+    Eigen::MatrixXd retained_basis_;
+    Eigen::VectorXd retained_singular_values_;
 };
 
 }  // namespace

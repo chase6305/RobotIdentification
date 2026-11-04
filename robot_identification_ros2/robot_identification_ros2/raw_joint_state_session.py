@@ -81,12 +81,12 @@ class RawJointStateSession:
         self._torque_source = torque_source
         self._joint_names = tuple(joint_names)
         self._incoming_names = ()
-        self._order = ()
+        self._joint_order = ()
         self.sample_count = 0
         self.rejected_count = 0
         self._start_ns = time.monotonic_ns()
         self._last_sample_ns = self._start_ns - 1
-        self._last_elapsed = -1.0
+        self._last_elapsed_seconds = -1.0
         self._digest = hashlib.sha256()
         self._failed = False
         self._closed = False
@@ -134,7 +134,7 @@ class RawJointStateSession:
                 "name/position/effort dimensions are inconsistent")
 
         if names == self._incoming_names:
-            joint_order = self._order
+            joint_order = self._joint_order
         else:
             index = _name_index(names)
             if index is None:
@@ -160,7 +160,7 @@ class RawJointStateSession:
         sample_time_ns = time.monotonic_ns()
         elapsed_seconds = (sample_time_ns - self._start_ns) * 1e-9
         if (sample_time_ns <= self._last_sample_ns or
-                elapsed_seconds <= self._last_elapsed):
+                elapsed_seconds <= self._last_elapsed_seconds):
             return self._reject("monotonic timestamp did not advance")
 
         payload = self._encode_csv_sample(names, position, effort, joint_order,
@@ -175,9 +175,9 @@ class RawJointStateSession:
             self._digest.update(payload)
             self._joint_names = self._joint_names or names
             self._incoming_names = names
-            self._order = joint_order
+            self._joint_order = joint_order
             self._last_sample_ns = sample_time_ns
-            self._last_elapsed = elapsed_seconds
+            self._last_elapsed_seconds = elapsed_seconds
             self.sample_count += 1
         except BaseException:
             # A failed or interrupted write may have persisted only part of a row.

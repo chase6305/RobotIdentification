@@ -55,20 +55,20 @@ class ParameterDotAccumulator {
         return result;
     }
 
-    static std::uint64_t Extract(const Words& words, int begin) {
-        const auto word = static_cast<std::size_t>(begin / 64);
-        const int offset = begin % 64;
+    static std::uint64_t Extract(const Words& words, int first_bit) {
+        const auto word = static_cast<std::size_t>(first_bit / 64);
+        const int offset = first_bit % 64;
         std::uint64_t value = words[word] >> offset;
         if (offset != 0 && word + 1 < words.size()) value |= words[word + 1] << (64 - offset);
         return value;
     }
 
-    static bool AnyBelow(const Words& words, int end) {
-        const auto whole = static_cast<std::size_t>(end / 64);
-        for (std::size_t index = 0; index < whole; ++index)
+    static bool AnyBelow(const Words& words, int end_bit) {
+        const auto complete_words = static_cast<std::size_t>(end_bit / 64);
+        for (std::size_t index = 0; index < complete_words; ++index)
             if (words[index] != 0) return true;
-        const int remaining = end % 64;
-        return remaining != 0 && (words[whole] & ((UINT64_C(1) << remaining) - 1)) != 0;
+        const int remaining_bits = end_bit % 64;
+        return remaining_bits != 0 && (words[complete_words] & ((UINT64_C(1) << remaining_bits) - 1)) != 0;
     }
 
 public:
@@ -125,23 +125,28 @@ public:
         }
         std::size_t highest_word = kWordCount - 1;
         while (magnitude[highest_word] == 0) --highest_word;
-        const int highest = static_cast<int>(highest_word * 64) + TopBit(magnitude[highest_word]);
+        const int highest_bit = static_cast<int>(highest_word * 64) + TopBit(magnitude[highest_word]);
         constexpr int maximum_bit = 1023 - kUnitExponent;
         constexpr std::uint64_t maximum_significand = (UINT64_C(1) << 53) - 1;
-        if (highest > maximum_bit ||
-            (highest == maximum_bit && Extract(magnitude, maximum_bit - 52) == maximum_significand &&
+        if (highest_bit > maximum_bit ||
+            (highest_bit == maximum_bit && Extract(magnitude, maximum_bit - 52) == maximum_significand &&
              AnyBelow(magnitude, maximum_bit - 52)))
             throw std::overflow_error("base parameter coordinates exceed the finite double range");
-        int shift = std::max(1074, highest - 52);
-        std::uint64_t significand = Extract(magnitude, shift);
-        const bool halfway = ((magnitude[static_cast<std::size_t>((shift - 1) / 64)] >> ((shift - 1) % 64)) & 1) != 0;
-        if (halfway && (AnyBelow(magnitude, shift - 1) || (significand & 1) != 0)) ++significand;
+        // Retain 53 bits for a normal result, or stop at the smallest double
+        // quantum (2^-1074) for a subnormal result.
+        constexpr int minimum_result_bit = -1074 - kUnitExponent;
+        int first_retained_bit = std::max(minimum_result_bit, highest_bit - 52);
+        std::uint64_t significand = Extract(magnitude, first_retained_bit);
+        const int round_bit = first_retained_bit - 1;
+        const bool round_bit_set = ((magnitude[static_cast<std::size_t>(round_bit / 64)] >> (round_bit % 64)) & 1) != 0;
+        // Round to nearest, breaking exact midpoint ties toward an even result.
+        if (round_bit_set && (AnyBelow(magnitude, round_bit) || (significand & 1) != 0)) ++significand;
         if (significand == 0) throw std::underflow_error("base parameter coordinates underflow the double range");
         if (significand == (UINT64_C(1) << 53)) {
             significand >>= 1;
-            ++shift;
+            ++first_retained_bit;
         }
-        const double result = std::ldexp(static_cast<double>(significand), shift + kUnitExponent);
+        const double result = std::ldexp(static_cast<double>(significand), first_retained_bit + kUnitExponent);
         return comparison > 0 ? result : -result;
     }
 };

@@ -23,27 +23,27 @@ public:
 }  // namespace
 
 int main() {
-    constexpr std::size_t sample_count = 240;
-    Eigen::VectorXd time(sample_count);
+    constexpr Eigen::Index sample_count = 240;
+    Eigen::VectorXd time_seconds(sample_count);
     Eigen::MatrixXd position(sample_count, 2);
     Eigen::MatrixXd torque(sample_count, 2);
-    const Eigen::Vector4d expected(2.0, 0.35, 1.4, -0.2);
-    for (std::size_t i = 0; i < sample_count; ++i) {
-        const double t = 0.01 * static_cast<double>(i);
-        time[static_cast<Eigen::Index>(i)] = t;
-        position(static_cast<Eigen::Index>(i), 0) = std::sin(2.0 * t);
-        position(static_cast<Eigen::Index>(i), 1) = std::cos(1.3 * t);
+    const Eigen::Vector4d expected_parameters(2.0, 0.35, 1.4, -0.2);
+    for (Eigen::Index row = 0; row < sample_count; ++row) {
+        time_seconds[row] = 0.01 * static_cast<double>(row);
+        position(row, 0) = std::sin(2.0 * time_seconds[row]);
+        position(row, 1) = std::cos(1.3 * time_seconds[row]);
     }
-    const auto provisional = robot_identification::PreprocessPositionAndTorque(
-        {"axis_a", "axis_b"}, time, position, Eigen::MatrixXd::Zero(sample_count, 2), {5, 3, 3});
-    for (std::size_t i = 0; i < provisional.samples.size(); ++i) {
-        const auto& sample = provisional.samples[i];
-        torque(static_cast<Eigen::Index>(i + 3), 0) =
-            expected[0] * sample.position[0] + expected[1] * sample.velocity[0];
-        torque(static_cast<Eigen::Index>(i + 3), 1) = expected[2] * sample.acceleration[1] + expected[3];
+    // Generate every raw torque row: preprocessing validates the complete input
+    // before trimming, including samples excluded from the fitted dataset.
+    const auto kinematics = robot_identification::PreprocessPositionAndTorque(
+        {"axis_a", "axis_b"}, time_seconds, position, Eigen::MatrixXd::Zero(sample_count, 2), {5, 0, 0});
+    for (Eigen::Index row = 0; row < sample_count; ++row) {
+        const auto& sample = kinematics.samples[static_cast<std::size_t>(row)];
+        torque(row, 0) = expected_parameters[0] * sample.position[0] + expected_parameters[1] * sample.velocity[0];
+        torque(row, 1) = expected_parameters[2] * sample.acceleration[1] + expected_parameters[3];
     }
-    const auto dataset =
-        robot_identification::PreprocessPositionAndTorque({"axis_a", "axis_b"}, time, position, torque, {5, 6, 6});
+    const auto dataset = robot_identification::PreprocessPositionAndTorque({"axis_a", "axis_b"}, time_seconds, position,
+                                                                           torque, {5, 6, 6});
     TwoJointBackend backend;
     const auto problem = robot_identification::BuildRegressionProblem(dataset, backend);
     robot_identification::SolverOptions options;
@@ -51,5 +51,5 @@ int main() {
     const auto result = robot_identification::Solve(problem, options);
     std::cout << std::fixed << std::setprecision(6) << "parameters=" << result.parameters.transpose()
               << " rmse=" << result.rmse << " rank=" << result.rank << " condition=" << result.condition_number << '\n';
-    return result.rank == 4 && result.parameters.allFinite() ? 0 : 1;
+    return result.rank == 4 && result.parameters.isApprox(expected_parameters, 1e-8) ? 0 : 1;
 }
