@@ -11,11 +11,11 @@
 | `robot_identification_ros2` | `JointState.position/effort` 原始数据采集和会话元数据 | ROS 2 |
 | `robot_identification_tools` | 流式 CSV 检查、候选、评审和回滚工件 | Python 标准库 |
 
-依赖由采集、模型后端指向辨识核心。库中不包含 RobotServer、控制器或厂商 SDK 依赖。
+依赖由采集、模型后端指向辨识核心。核心库独立于控制器和厂商 SDK。
 
 整批 Pinocchio 数据可用 `backend.BuildProblem(dataset)` 复用调用内工作区；单样本和通用后端组合继续使用 `Compute`。详见 [Pinocchio 后端](robot_identification_pinocchio/README.md)。
 
-核心 0.2.14 提供 QR 基参数约简、完整参数映射与受限 Fourier 激励优化，可与已有 Pinocchio 后端组合。[端到端示例](robot_identification/examples/identification_design_example.cpp)演示设计、拟合与独立验证；[算法说明与参考评估](docs/parameter-identification.md#参考项目评估与本次实现)记录公式、数值假设和限制。公开接口保持兼容，Pinocchio 后端为 0.2.2。
+核心 0.2.15 提供 QR 基参数约简、完整参数映射与受限 Fourier 激励优化，可与已有 Pinocchio 后端组合。[端到端示例](robot_identification/examples/identification_design_example.cpp)演示设计、拟合与独立验证；[算法说明与参考评估](docs/parameter-identification.md#参考项目评估与本次实现)记录公式、数值假设和限制。公开接口保持兼容，Pinocchio 后端为 0.2.2。
 
 [执行器动态网络方向](docs/parameter-identification.md#执行器动态网络方向)评估 `sunzhon/actuator_net`；[半隐式混合辨识](docs/parameter-identification.md#半隐式步进与物理学习混合辨识)提供可选合成原型，记录命令/反馈历史、标签单位和独立轨迹验证条件。
 
@@ -70,15 +70,12 @@ ros2 run robot_identification_ros2 joint_state_recorder --ros-args \
   -p input_topic:=/joint_states -p output_path:=/tmp/session-001.csv
 ```
 
-采集器消费标准 `sensor_msgs/JointState`，可用于 RobotServer 或其他机器人系统。采样契约与文件恢复语义见[采集器说明](robot_identification_ros2/README.md)。
+采集器消费标准 `sensor_msgs/JointState`。采样契约与文件恢复语义见[采集器说明](robot_identification_ros2/README.md)。
 
 `python3 utils/ros2_recording_smoke.py` 使用安装后的采集器录制合成消息，验证关节重排、文件摘要与退出清理。
 
-## 从 RobotServer 迁移
-
-本仓库从 RobotServer 的 `a6c70ec` 拆出，保留相关文件的 Git 历史和 MIT 许可。三个辨识包名、C++ 命名空间、CMake 目标和 JSON/CSV 契约保持不变。离线工具的 Python 导入由 `robot_server_tools` 改为 `robot_identification_tools`；`ros2 run` 的包名同样改为 `robot_identification_tools`。两个工具的命令名称保持不变。RobotServer 的运行时状态监测、控制和设备验收代码继续由原仓库维护。
+## 结果使用
 
 结果仅作为候选工件生成。实际参数应用仍需独立评审、验证和回滚流程；合成示例不提供硬件参数或时序保证。
 
-本地拆分后的数值修复、合成对照与持续采集证据见 [2026-10-28 优化记录](docs/optimization-2026-10-28.md)，复现程序见[基准说明](benchmarks/README.md)。
-工作区复用、CSV 峰值存储和后续验证见[第二轮记录](docs/optimization-2026-10-28-round-2.md)。
+采用 [MIT 许可证](LICENSE)。

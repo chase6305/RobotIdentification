@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://robotserver.local/schema/identification-result-v1.json",
-  "title": "RobotServer candidate identification result v1",
+  "$id": "urn:robot-identification:schema:result:v1",
+  "title": "Candidate identification result v1",
   "type": "object",
   "additionalProperties": false,
   "required": [

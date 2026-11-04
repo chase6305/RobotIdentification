@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://robotserver.local/schema/identification-rollback-v1.json",
-  "title": "RobotServer identification rollback manifest v1",
+  "$id": "urn:robot-identification:schema:rollback:v1",
+  "title": "Identification rollback manifest v1",
   "type": "object",
   "additionalProperties": false,
   "required": [

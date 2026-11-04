@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://robotserver.local/schema/identification-session-v1.json",
-  "title": "RobotServer identification recording session v1",
+  "$id": "urn:robot-identification:schema:session:v1",
+  "title": "Identification recording session v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
