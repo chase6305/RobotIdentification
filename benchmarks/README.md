@@ -145,6 +145,10 @@ and after with bounded memory. Dependencies must remain discoverable after copyi
 Add `--format processed` or `--cpu CPU` as needed. Reports must use new paths;
 positive `reduction_percent` describes this sample, not a general speedup guarantee.
 
+For numeric parser changes, compare long decimals and short tokens (including
+signed zero). Processed imports also allocate individual sample vectors, so their
+overall time may change less than raw imports even with the same parser.
+
 ## Correctness campaigns
 
 With stress targets enabled, `build/benchmarks/hybrid_rollout_demo` runs a scalar

@@ -16,6 +16,9 @@
   rounded-equal nonuniform intervals and other modes retain the generic stencil.
   Retain nonzero centered-interval residuals when reconstructing the span in
   extended range, improving precision on translated midpoint grids.
+- Parse ordinary CSV decimals without separately scanning for each delimiter.
+  Preserve hexadecimal exponent checks, numeric grammar, field counts and
+  error locations; cover incomplete exponents, signs and a final-field NUL.
 - Copy the validated actuator base block before zeroing only appended actuator
   columns; remove redundant stores and add a standalone composition benchmark.
 - Skip zero calibration columns during mixed base-parameter dependency
