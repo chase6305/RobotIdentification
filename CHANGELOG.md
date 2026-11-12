@@ -21,6 +21,9 @@
 - Parse ordinary CSV decimals without separately scanning for each delimiter.
   Preserve hexadecimal exponent checks, numeric grammar, field counts and
   error locations; cover incomplete exponents, signs and a final-field NUL.
+- Validate finite positive regression weights in one traversal, retaining
+  dimension checks and diagnostics. Cover subnormal, extreme and invalid weights
+  and add validation metrics to the existing core benchmark.
 - Copy the validated actuator base block before zeroing only appended actuator
   columns; remove redundant stores and add a standalone composition benchmark.
 - Skip zero calibration columns during mixed base-parameter dependency

@@ -64,6 +64,10 @@ int main() {
             return result.parameters.sum() + result.iterations;
         });
     }
+    Measure("validation_metrics", 1000, [&] {
+        const auto metrics = robot_identification::ValidateParameters(problem, truth);
+        return metrics.rmse + metrics.mean_absolute_error + metrics.max_absolute_error + metrics.normalized_rmse;
+    });
     Eigen::MatrixXd sine(7, 20), cosine(7, 20);
     for (Eigen::Index row = 0; row < 7; ++row)
         for (Eigen::Index col = 0; col < 20; ++col) {

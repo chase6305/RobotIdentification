@@ -18,6 +18,14 @@ bool Fail(std::string* reason, const char* message) {
     return false;
 }
 
+bool HasFinitePositiveWeights(const Eigen::VectorXd& weights) {
+    for (Eigen::Index row = 0; row < weights.size(); ++row) {
+        const double weight = weights[row];
+        if (!std::isfinite(weight) || weight <= 0.0) return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 namespace detail {
@@ -80,8 +88,7 @@ bool RegressionProblem::Validate(std::string* reason) const {
         regressor.rows() != static_cast<Eigen::Index>(sample_count * dof)) {
         return Fail(reason, "regression problem dimensions are inconsistent");
     }
-    if (!regressor.allFinite() || !observation.allFinite() || !row_weights.allFinite() ||
-        (row_weights.array() <= 0.0).any()) {
+    if (!regressor.allFinite() || !observation.allFinite() || !HasFinitePositiveWeights(row_weights)) {
         return Fail(reason, "regression values must be finite and row weights positive");
     }
     return true;
