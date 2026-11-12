@@ -98,7 +98,27 @@ Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time_seconds, const Eigen::
                                                                 : left_interval_seconds;
         const double blend_weight = blend_interval_seconds / interval_span_seconds;
         const bool tiny_blend_weight = std::abs(blend_weight) < std::numeric_limits<double>::min();
+        const bool centered_secant =
+            row != first_row && row != last_row && left_interval_seconds == right_interval_seconds;
         for (Eigen::Index column = 0; column < signal_values.cols(); ++column) {
+            if (centered_secant) {
+                // On equal interior steps the middle value cancels exactly.
+                // Remove it before subtraction so even an extreme middle
+                // sample cannot erase tiny changes between the endpoints.
+                derivative(row, column) =
+                    (signal_values(last_row, column) - signal_values(first_row, column)) / interval_span_seconds;
+                if (!std::isfinite(derivative(row, column))) {
+                    const long double wide_derivative =
+                        (static_cast<long double>(signal_values(last_row, column)) - signal_values(first_row, column)) /
+                        interval_span_seconds;
+                    if (!std::isfinite(wide_derivative) ||
+                        std::abs(wide_derivative) > std::numeric_limits<double>::max()) {
+                        throw std::overflow_error("differentiation produced non-finite values");
+                    }
+                    derivative(row, column) = static_cast<double>(wide_derivative);
+                }
+                continue;
+            }
             const double left_slope =
                 (signal_values(middle_row, column) - signal_values(first_row, column)) / left_interval_seconds;
             const double right_slope =

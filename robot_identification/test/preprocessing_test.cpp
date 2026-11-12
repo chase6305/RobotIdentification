@@ -346,6 +346,48 @@ void TestUnderflowingSecants() {
     }
 }
 
+void TestEqualStepCenterEliminatesMiddleSample() {
+    const double tiny = std::numeric_limits<double>::denorm_min();
+    for (int fixture = 0; fixture < 3; ++fixture) {
+        for (double sign : {-1., 1.}) {
+            robot_identification::RawDataset raw;
+            raw.joint_names = {"quadratic"};
+            double step, expected_velocity;
+            if (fixture == 0) {
+                step = 1.;
+                raw.position = Eigen::Vector3d(0., 0x1p-1016, 8. * tiny);
+                expected_velocity = 4. * tiny;
+            } else if (fixture == 1) {
+                step = 0x1p+32;
+                raw.position = Eigen::Vector3d(-0x1p-1007, -0x1.ffffffffffff9p-958, -0x1.2p-1007);
+                expected_velocity = -0x0.000008p-1022;
+            } else {
+                step = 2.;
+                raw.position = Eigen::Vector3d(4. * tiny, std::numeric_limits<double>::max(), 12. * tiny);
+                expected_velocity = 2. * tiny;
+            }
+            raw.position *= sign;
+            raw.time_seconds = Eigen::Vector3d(0., step, 2. * step);
+            raw.torque = Eigen::Vector3d::Zero();
+            const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+            // The middle q coefficient is exactly zero in the centered stencil.
+            // Even long-double adjacent secants lose these endpoint differences
+            // when the middle q sample is close to the double maximum.
+            if (result.samples[1].velocity[0] != sign * expected_velocity) {
+                throw std::runtime_error("equal-step differentiation retained the cancelled middle sample");
+            }
+            // The acceleration pass must center the already rounded velocities,
+            // including an endpoint difference that overflows in double.
+            const double expected_acceleration = static_cast<double>(
+                (static_cast<long double>(result.samples[2].velocity[0]) - result.samples[0].velocity[0]) /
+                (2.L * step));
+            if (result.samples[1].acceleration[0] != expected_acceleration) {
+                throw std::runtime_error("equal-step acceleration lost the rounded velocity endpoint difference");
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -358,4 +400,5 @@ int main() {
     TestRepresentableDerivativesAcrossOverflowingDifferences();
     TestHighlyUnequalSpacing();
     TestUnderflowingSecants();
+    TestEqualStepCenterEliminatesMiddleSample();
 }
