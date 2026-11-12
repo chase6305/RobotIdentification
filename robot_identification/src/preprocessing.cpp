@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cfenv>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -71,10 +72,21 @@ Eigen::MatrixXd SmoothSymmetric(const Eigen::MatrixXd& values, std::size_t windo
     return output;
 }
 
+double DifferenceResidual(double left, double right, double difference) {
+    // Knuth TwoDiff: recover the exact subtraction residual under rounding
+    // to nearest. The caller has already checked finite interval spans.
+    const double right_virtual = left - difference;
+    const double left_virtual = difference + right_virtual;
+    const double right_roundoff = right_virtual - right;
+    const double left_roundoff = left - left_virtual;
+    return left_roundoff + right_roundoff;
+}
+
 Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time_seconds, const Eigen::MatrixXd& signal_values) {
     // Internal preprocessing helper: dimensions and timestamps were checked by
     // ValidateRawInputs before smoothing. Keep arithmetic checks below.
     Eigen::MatrixXd derivative(signal_values.rows(), signal_values.cols());
+    const bool nearest_rounding = std::fegetround() == FE_TONEAREST;
     for (Eigen::Index row = 0; row < signal_values.rows(); ++row) {
         const Eigen::Index first_row = row == 0 ? 0 : row + 1 == signal_values.rows() ? row - 2 : row - 1;
         const Eigen::Index middle_row = first_row + 1;
@@ -98,8 +110,13 @@ Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time_seconds, const Eigen::
                                                                 : left_interval_seconds;
         const double blend_weight = blend_interval_seconds / interval_span_seconds;
         const bool tiny_blend_weight = std::abs(blend_weight) < std::numeric_limits<double>::min();
+        // Equal rounded intervals alone do not prove that the timestamps are
+        // centered. Compare their exact TwoDiff residuals before eliminating q.
         const bool centered_secant =
-            row != first_row && row != last_row && left_interval_seconds == right_interval_seconds;
+            nearest_rounding && row != first_row && row != last_row &&
+            left_interval_seconds == right_interval_seconds &&
+            DifferenceResidual(time_seconds[middle_row], time_seconds[first_row], left_interval_seconds) ==
+                DifferenceResidual(time_seconds[last_row], time_seconds[middle_row], right_interval_seconds);
         for (Eigen::Index column = 0; column < signal_values.cols(); ++column) {
             if (centered_secant) {
                 // On equal interior steps the middle value cancels exactly.

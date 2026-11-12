@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cfenv>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -388,6 +389,58 @@ void TestEqualStepCenterEliminatesMiddleSample() {
     }
 }
 
+void TestRoundedEqualIntervalsRetainNonuniformStencil() {
+    for (int fixture = 0; fixture < 3; ++fixture) {
+        robot_identification::RawDataset raw;
+        raw.joint_names = {"quadratic"};
+        if (fixture == 0) {
+            raw.time_seconds = Eigen::Vector3d(-1., 0x1p-54, 1.);
+            raw.position = Eigen::Vector3d(-0x1p+47, 0x1p+100, 0x1p+47);
+        } else if (fixture == 1) {
+            raw.time_seconds = Eigen::Vector3d(0x1p-54, 1., 2.);
+            raw.position = Eigen::Vector3d(0x1p+46, 0x1p+100, -0x1p+46);
+        } else {
+            // Even long-double interval comparison loses this midpoint offset.
+            raw.time_seconds = Eigen::Vector3d(-1., 0x1p-1000, 1.);
+            raw.position = Eigen::Vector3d(-1., 0x1p+999, 1.);
+        }
+        raw.torque = Eigen::Vector3d::Zero();
+        const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+        // Rounded-equal time differences must keep the established nonuniform
+        // secant evaluation. Its cancellation result here is zero; eliminating
+        // the middle coordinate would introduce a large unrelated derivative.
+        if (result.samples[1].velocity[0] != 0.) {
+            throw std::runtime_error("rounded-equal intervals incorrectly eliminated a nonmidpoint sample");
+        }
+    }
+}
+
+void TestDirectedRoundingRetainsNonuniformStencil() {
+    struct RestoreRounding {
+        int mode{std::fegetround()};
+        ~RestoreRounding() { std::fesetround(mode); }
+    } restore;
+    robot_identification::RawDataset raw;
+    raw.joint_names = {"quadratic"};
+    raw.time_seconds = Eigen::Vector3d(-1., 0., 1.);
+    raw.position = Eigen::Vector3d(0., 0x1p+100, 2.);
+    raw.torque = Eigen::Vector3d::Zero();
+    for (int mode : {FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO}) {
+        if (std::fesetround(mode) != 0) continue;
+        // Volatile secants preserve runtime operations in the caller's active
+        // rounding mode rather than constant-folding them to nearest.
+        volatile double left_slope = raw.position(1, 0) - raw.position(0, 0);
+        volatile double right_slope = raw.position(2, 0) - raw.position(1, 0);
+        volatile double change = right_slope - left_slope;
+        volatile double blend = .5 * change;
+        const double expected = left_slope + blend;
+        const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+        if (result.samples[1].velocity[0] != expected) {
+            throw std::runtime_error("directed rounding incorrectly enabled the exact-midpoint shortcut");
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -401,4 +454,6 @@ int main() {
     TestHighlyUnequalSpacing();
     TestUnderflowingSecants();
     TestEqualStepCenterEliminatesMiddleSample();
+    TestRoundedEqualIntervalsRetainNonuniformStencil();
+    TestDirectedRoundingRetainsNonuniformStencil();
 }
