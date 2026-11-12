@@ -16,6 +16,8 @@
   rounded-equal nonuniform intervals and other modes retain the generic stencil.
   Retain nonzero centered-interval residuals when reconstructing the span in
   extended range, improving precision on translated midpoint grids.
+  Dispatch centered rows before the column loop and compute generic blend
+  coefficients only for rows that need them, preserving each stencil's arithmetic.
 - Parse ordinary CSV decimals without separately scanning for each delimiter.
   Preserve hexadecimal exponent checks, numeric grammar, field counts and
   error locations; cover incomplete exponents, signs and a final-field NUL.

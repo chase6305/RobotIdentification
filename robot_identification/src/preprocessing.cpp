@@ -97,19 +97,6 @@ Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time_seconds, const Eigen::
         if (!std::isfinite(interval_span_seconds)) {
             throw std::overflow_error("timestamp spacing is numerically unusable for differentiation");
         }
-        // Differentiate the same three-point quadratic through its secant
-        // slopes, so a constant position offset cancels before division.
-        // At an interior point, start from the slope with the larger weight.
-        // Otherwise a weight rounded to one can cancel the base slope and
-        // erase the smaller contribution entirely on strongly unequal steps.
-        const bool use_right_slope =
-            row == last_row || (row != first_row && left_interval_seconds > right_interval_seconds);
-        const double blend_interval_seconds = row == first_row  ? -left_interval_seconds
-                                              : row == last_row ? right_interval_seconds
-                                              : use_right_slope ? -right_interval_seconds
-                                                                : left_interval_seconds;
-        const double blend_weight = blend_interval_seconds / interval_span_seconds;
-        const bool tiny_blend_weight = std::abs(blend_weight) < std::numeric_limits<double>::min();
         // Equal rounded intervals alone do not prove that the timestamps are
         // centered. Compare their exact TwoDiff residuals before eliminating q.
         double centered_interval_residual = 0.;
@@ -122,8 +109,8 @@ Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time_seconds, const Eigen::
                 centered_interval_residual ==
                 DifferenceResidual(time_seconds[last_row], time_seconds[middle_row], right_interval_seconds);
         }
-        for (Eigen::Index column = 0; column < signal_values.cols(); ++column) {
-            if (centered_secant) {
+        if (centered_secant) {
+            for (Eigen::Index column = 0; column < signal_values.cols(); ++column) {
                 // On equal interior steps the middle value cancels exactly.
                 // Remove it before subtraction so even an extreme middle
                 // sample cannot erase tiny changes between the endpoints.
@@ -143,8 +130,23 @@ Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time_seconds, const Eigen::
                     }
                     derivative(row, column) = static_cast<double>(wide_derivative);
                 }
-                continue;
             }
+            continue;
+        }
+        // Differentiate the same three-point quadratic through its secant
+        // slopes, so a constant position offset cancels before division.
+        // At an interior point, start from the slope with the larger weight.
+        // Otherwise a weight rounded to one can cancel the base slope and
+        // erase the smaller contribution entirely on strongly unequal steps.
+        const bool use_right_slope =
+            row == last_row || (row != first_row && left_interval_seconds > right_interval_seconds);
+        const double blend_interval_seconds = row == first_row  ? -left_interval_seconds
+                                              : row == last_row ? right_interval_seconds
+                                              : use_right_slope ? -right_interval_seconds
+                                                                : left_interval_seconds;
+        const double blend_weight = blend_interval_seconds / interval_span_seconds;
+        const bool tiny_blend_weight = std::abs(blend_weight) < std::numeric_limits<double>::min();
+        for (Eigen::Index column = 0; column < signal_values.cols(); ++column) {
             const double left_slope =
                 (signal_values(middle_row, column) - signal_values(first_row, column)) / left_interval_seconds;
             const double right_slope =
