@@ -389,6 +389,37 @@ void TestEqualStepCenterEliminatesMiddleSample() {
     }
 }
 
+void TestNonrepresentableEqualIntervalRetainsResidual() {
+    for (int exponent : {-1000, -500, 0, 500, 1000}) {
+        for (int odd : {1, 3}) {
+            for (double sign : {-1., 1.}) {
+                robot_identification::RawDataset raw;
+                raw.joint_names = {"quadratic"};
+                raw.time_seconds = Eigen::Vector3d(std::ldexp(-1.5, exponent), std::ldexp(odd, exponent - 53),
+                                                   std::ldexp(1.5 + odd * 0x1p-52, exponent));
+                raw.position = Eigen::Vector3d(std::ldexp(-1.5 * sign, exponent), 0.,
+                                               std::ldexp((1.5 - 9. * 0x1p-52) * sign, exponent));
+                raw.torque = Eigen::Vector3d::Zero();
+                const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+                // The exact interval is 1.5 + odd*2^-53 before scaling.
+                // Its residual is +2^-53 for odd=1 and -2^-53 for odd=3.
+                // Fraction arithmetic gives these rounded reference ratios;
+                // scaling both time and q leaves the velocity unchanged.
+                const double expected_velocity = sign * (odd == 1 ? 0x1.ffffffffffff9p-1 : 0x1.ffffffffffff8p-1);
+                if (result.samples[1].velocity[0] != expected_velocity) {
+                    throw std::runtime_error("centered differentiation discarded a nonrepresentable interval residual");
+                }
+                const long double span = static_cast<long double>(raw.time_seconds[2]) - raw.time_seconds[0];
+                const double expected_acceleration = static_cast<double>(
+                    (static_cast<long double>(result.samples[2].velocity[0]) - result.samples[0].velocity[0]) / span);
+                if (result.samples[1].acceleration[0] != expected_acceleration) {
+                    throw std::runtime_error("centered acceleration discarded a nonrepresentable interval residual");
+                }
+            }
+        }
+    }
+}
+
 void TestRoundedEqualIntervalsRetainNonuniformStencil() {
     for (int fixture = 0; fixture < 3; ++fixture) {
         robot_identification::RawDataset raw;
@@ -454,6 +485,7 @@ int main() {
     TestHighlyUnequalSpacing();
     TestUnderflowingSecants();
     TestEqualStepCenterEliminatesMiddleSample();
+    TestNonrepresentableEqualIntervalRetainsResidual();
     TestRoundedEqualIntervalsRetainNonuniformStencil();
     TestDirectedRoundingRetainsNonuniformStencil();
 }

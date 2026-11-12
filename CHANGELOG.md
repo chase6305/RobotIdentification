@@ -14,6 +14,8 @@
   preserving tiny endpoint changes even beside extreme middle samples. Check
   exact interval equality through subtraction residuals under nearest rounding;
   rounded-equal nonuniform intervals and other modes retain the generic stencil.
+  Retain nonzero centered-interval residuals when reconstructing the span in
+  extended range, improving precision on translated midpoint grids.
 - Copy the validated actuator base block before zeroing only appended actuator
   columns; remove redundant stores and add a standalone composition benchmark.
 - Skip zero calibration columns during mixed base-parameter dependency
