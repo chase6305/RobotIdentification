@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep the runner's preinstalled Firefox package during ROS CI setup to avoid
+  an unrelated Snapcraft download failure before project tests.
 - Core 0.2.16 preserves representable preprocessing derivatives when individual secants
   underflow or round at the normal/subnormal boundary; retry only exceptional
   arithmetic in extended range and test both differentiation passes. Exact-midpoint
@@ -9,6 +11,8 @@
   preserving tiny endpoint changes even beside extreme middle samples. Check
   exact interval equality through subtraction residuals under nearest rounding;
   rounded-equal nonuniform intervals and other modes retain the generic stencil.
+- Copy the validated actuator base block before zeroing only appended actuator
+  columns; remove redundant stores and add a standalone composition benchmark.
 - Skip zero calibration columns during mixed base-parameter dependency
   reconstruction, preserving newly excited zero-column rejection and errors
   larger than one from actual dependencies.

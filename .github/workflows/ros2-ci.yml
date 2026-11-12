@@ -10,6 +10,10 @@ jobs:
       MAKEFLAGS: -j2
     steps:
       - uses: actions/checkout@v4
+      # setup-ros upgrades preinstalled packages; upgrading the Firefox stub
+      # invokes snap downloads that are unrelated to this headless ROS job.
+      - name: Keep the preinstalled Firefox package during ROS setup
+        run: sudo apt-mark hold firefox
       - uses: ros-tooling/setup-ros@v0.7
         with:
           required-ros-distributions: humble

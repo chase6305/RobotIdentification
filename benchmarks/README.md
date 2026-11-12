@@ -46,6 +46,7 @@ and default benchmarks require neither ROS nor Pinocchio.
 
 | Program | Timed operation | Reporting |
 |---|---|---|
+| `actuator_bench DOF BASE_COLUMNS full\|friction\|bias ITERATIONS` | Compose a stored base block with joint actuator columns | Warmed CPU/wall microseconds and complete output signature |
 | `core_bench` | Huber/ridge solves on 1,500 rows and 12 parameters; seven-axis/20-harmonic trajectories | Warmed median of five repetitions; allocations per call |
 | `preprocessing_bench [SAMPLES] [DOF] [WINDOW] [REPETITIONS]` | Smooth, differentiate, materialize and destroy a synthetic dataset | JSON wall/process CPU microseconds per call and checksum |
 | `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Median milliseconds, allocations per read, process peak RSS |
@@ -77,6 +78,16 @@ Use `parameter_bench` for mapping and `design_bench` for the other groups.
 | Envelopes | `bounds-dense`, `bounds-sine`, `bounds-exact` |
 | Sampling | `trajectory-owning`, `trajectory-reused`, `trajectory-validation` |
 | Information/search | `quality-unit`, `quality-scaled`, `optimize`, `optimize-scaled` |
+
+Actuator cases include the base backend's owning return and the composed output.
+All coefficients (including signed zero and off-joint zeros) are checked before
+and after timing; the reported signature covers the full output. Compare the same
+harness against matched Release libraries, using alternating fresh processes:
+
+```bash
+build/benchmarks/actuator_bench 14 140 full 1000000
+build/benchmarks/actuator_bench 7 70 friction 1000000
+```
 
 The mapping cases include one owning result-vector allocation. `map-unit` has
 80 independent columns; `map-sparse` adds 80 zero columns. Dense shapes are
