@@ -60,7 +60,7 @@ def _positive_jobs(value):
 
 
 def _worker_count(file_count, jobs=None):
-    limit = jobs if jobs is not None else min(multiprocessing.cpu_count(), 16)
+    limit = jobs if jobs is not None else min(multiprocessing.cpu_count(), 2)
     return max(1, min(file_count, limit))
 
 
@@ -124,7 +124,7 @@ def main():
     parser.add_argument(
         "--jobs",
         type=_positive_jobs,
-        help="Maximum parallel checks (default: min(CPU count, 16)).")
+        help="Maximum parallel checks (default: min(CPU count, 2)).")
     args = parser.parse_args()
     _require_yapf()
     binary = _find_clang_format()

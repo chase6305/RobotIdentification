@@ -6,6 +6,10 @@ BUILD_ROOT="${1:-$ROOT_DIR/build/validation}"
 WITH_PINOCCHIO="${2:-}"
 WORKERS="${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
 PYTHON_BIN="${PYTHON:-python3}"
+if [[ ! "$WORKERS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer" >&2
+  exit 2
+fi
 if (($# > 2)) || [[ -n "$WITH_PINOCCHIO" && "$WITH_PINOCCHIO" != "--with-pinocchio" ]]; then
   echo "Usage: $0 [BUILD_ROOT] [--with-pinocchio]" >&2
   exit 2

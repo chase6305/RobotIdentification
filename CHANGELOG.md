@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Run ROS validation packages sequentially, cap default style checks at two
+  workers, and reject invalid core build worker counts, including zero, to
+  avoid unbounded or nested process pools.
 - Keep the runner's preinstalled Firefox package during ROS CI setup to avoid
   an unrelated Snapcraft download failure before project tests.
 - Core 0.2.16 preserves representable preprocessing derivatives when individual secants
