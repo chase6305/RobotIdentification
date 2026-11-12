@@ -15,9 +15,11 @@ Recorders and model adapters depend on the identification core. The core builds 
 
 For complete Pinocchio datasets, `backend.BuildProblem(dataset)` reuses call-local scratch. Individual samples and generic backend composition retain `Compute`; see the [Pinocchio backend](robot_identification_pinocchio/README.md).
 
-Core 0.2.15 provides QR base parameters, a full-to-base mapping and constrained Fourier excitation design that compose with the Pinocchio backend. The [end-to-end example](robot_identification/examples/identification_design_example.cpp) covers design, fitting and independent validation; [algorithm and reference notes](docs/parameter-identification.md#参考项目评估与本次实现) describe equations, numerical assumptions and limits. Public interfaces remain compatible; the Pinocchio backend is 0.2.2.
+Core 0.2.16 provides QR base parameters, a full-to-base mapping and constrained Fourier excitation design that compose with the Pinocchio backend. The [end-to-end example](robot_identification/examples/identification_design_example.cpp) covers design, fitting and independent validation; [algorithm and reference notes](docs/parameter-identification.md#参考项目评估与本次实现) describe equations, numerical assumptions and limits. Public interfaces remain compatible; the Pinocchio backend is 0.2.2.
 
 The [actuator-network assessment](docs/parameter-identification.md#执行器动态网络方向) evaluates `sunzhon/actuator_net`; [semi-implicit hybrid identification](docs/parameter-identification.md#半隐式步进与物理学习混合辨识) adds an optional synthetic prototype and documents command/state histories, label units and independent trajectory validation.
+
+Preprocessing preserves representable endpoint derivatives with subnormal secants; base-parameter reconstruction skips mixed zero dependencies; artifact creation rejects occupied outputs before scanning inputs.
 
 ## Standalone build
 

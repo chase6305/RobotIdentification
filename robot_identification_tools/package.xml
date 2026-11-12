@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>robot_identification_tools</name>
-  <version>0.1.1</version>
+  <version>0.1.2</version>
   <description>Offline identification dataset inspection and immutable artifacts</description>
   <maintainer email="maintainers@example.com">RobotIdentification contributors</maintainer>
   <license>MIT</license>

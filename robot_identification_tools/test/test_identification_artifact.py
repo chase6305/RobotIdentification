@@ -68,6 +68,79 @@ class IdentificationArtifactTest(unittest.TestCase):
                 candidate["dataset_sha256"],
                 hashlib.sha256(dataset.read_bytes()).hexdigest())
 
+    def test_existing_outputs_fail_before_reading_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "artifact.json"
+            partial = Path(str(output) + ".partial")
+            missing = root / "absent-input"
+            operations = (
+                lambda: create_candidate(missing, "model", ["a"], missing,
+                                         missing, output),
+                lambda: create_review(missing, "approved", "reviewer",
+                                      "checked", output, missing),
+                lambda: create_rollback(missing, "default", output),
+            )
+            for blocker in (output, partial):
+                for kind in ("file", "directory", "dangling symlink"):
+                    if kind == "file":
+                        blocker.write_bytes(b"existing artifact")
+                    elif kind == "directory":
+                        blocker.mkdir()
+                    else:
+                        blocker.symlink_to(missing)
+                    for operation in operations:
+                        with self.subTest(blocker=blocker.name,
+                                          kind=kind,
+                                          operation=operation):
+                            # Every input is absent: an attempted read would
+                            # raise FileNotFoundError rather than this conflict.
+                            with self.assertRaisesRegex(
+                                    FileExistsError, "refusing to overwrite"):
+                                operation()
+                            if kind == "file":
+                                self.assertEqual(blocker.read_bytes(),
+                                                 b"existing artifact")
+                            elif kind == "directory":
+                                self.assertTrue(blocker.is_dir())
+                            else:
+                                self.assertEqual(blocker.readlink(), missing)
+                                self.assertFalse(missing.exists())
+                    if kind == "directory":
+                        blocker.rmdir()
+                    else:
+                        blocker.unlink()
+
+    def test_blockers_published_during_validation_are_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset, parameters, diagnostics = self.candidate_inputs(root)
+            output = root / "artifact.json"
+            partial = Path(str(output) + ".partial")
+            inspect = artifact.inspect_dataset_with_digest
+            for blocker in (output, partial):
+                with self.subTest(blocker=blocker.name):
+
+                    def publish_after_inspection(path):
+                        summary = inspect(path)
+                        blocker.write_bytes(b"another publisher")
+                        return summary
+
+                    with mock.patch.object(
+                            artifact,
+                            "inspect_dataset_with_digest",
+                            side_effect=publish_after_inspection):
+                        with self.assertRaisesRegex(FileExistsError,
+                                                    "refusing to overwrite"):
+                            create_candidate(dataset, "model", ["a"],
+                                             parameters, diagnostics, output)
+                    self.assertEqual(blocker.read_bytes(), b"another publisher")
+                    if blocker == output:
+                        self.assertFalse(partial.exists())
+                    else:
+                        self.assertFalse(output.exists())
+                    blocker.unlink()
+
     def test_invalid_metadata_fails_before_scanning_dataset(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

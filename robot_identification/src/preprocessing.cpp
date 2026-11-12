@@ -105,10 +105,15 @@ Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time_seconds, const Eigen::
                 (signal_values(last_row, column) - signal_values(middle_row, column)) / right_interval_seconds;
             const double base_slope = use_right_slope ? right_slope : left_slope;
             derivative(row, column) = base_slope + blend_weight * (right_slope - left_slope);
-            if (tiny_blend_weight || !std::isfinite(derivative(row, column))) {
+            // An exact subnormal secant can round onto the normal boundary.
+            const bool tiny_secant = (std::abs(left_slope) <= std::numeric_limits<double>::min() &&
+                                      signal_values(middle_row, column) != signal_values(first_row, column)) ||
+                                     (std::abs(right_slope) <= std::numeric_limits<double>::min() &&
+                                      signal_values(last_row, column) != signal_values(middle_row, column));
+            if (tiny_blend_weight || tiny_secant || !std::isfinite(derivative(row, column))) {
                 // Finite final derivatives can have overflowing differences or
-                // individual secants, or an underflowed weight whose product
-                // is representable. Retry this derivative in extended range.
+                // individual secants, or underflowed secants/weights whose
+                // combined contribution is representable. Retry in extended range.
                 const long double wide_left_slope =
                     (static_cast<long double>(signal_values(middle_row, column)) - signal_values(first_row, column)) /
                     left_interval_seconds;

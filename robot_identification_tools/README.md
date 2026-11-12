@@ -87,4 +87,8 @@ error and exit status 2. The Python API continues to raise the underlying except
 
 离线 artifact 在同一目录写入并同步临时文件后，通过不覆盖目标的原子硬链接发布；即使其他进程抢先创建目标，本次写入也会失败并保留对方文件。失败时仅清理本次独占创建的临时文件，已有 `.partial` 文件仍会阻止重试。输出位置的悬空符号链接会被拒绝。评审摘要直接绑定实际校验的 candidate/rollback 字节；文件随后变化时，摘要不再匹配该文件。
 
+目标工件或 `.partial` 已存在时，三个创建命令均会在读取输入前失败，避免重试时重新扫描长录制或配置文件；发布前仍会再次检查并使用原子操作处理竞争。
+
+All three creation commands check for an existing output or `.partial` before reading inputs, avoiding repeated recording/configuration scans on blocked retries. Publication still repeats the check and uses an atomic operation to handle concurrent writers.
+
 Offline artifacts publish a flushed temporary file through an atomic, non-overwriting hard link in the same directory. A concurrent destination is preserved and causes publication to fail. Failed attempts clean up their own exclusively created temporary files; existing `.partial` files still block retries. Dangling output symlinks are rejected. Review digests bind the exact candidate/rollback bytes that were validated, so subsequent file changes no longer match the recorded digest.

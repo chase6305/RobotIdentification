@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Core 0.2.16 preserves representable preprocessing derivatives when individual secants
+  underflow or round at the normal/subnormal boundary; retry only exceptional
+  arithmetic in extended range and test both differentiation passes.
+- Skip zero calibration columns during mixed base-parameter dependency
+  reconstruction, preserving newly excited zero-column rejection and errors
+  larger than one from actual dependencies.
+- Tools 0.1.2 rejects occupied artifact destinations before scanning input recordings or
+  configurations, while retaining the publication-time check and atomic
+  no-overwrite semantics.
+
 - Core 0.2.15 uses project-specific schema identifiers and package metadata.
   Remove obsolete migration text and tracked process notes. Artifact fields
   and schema version 1 remain unchanged.

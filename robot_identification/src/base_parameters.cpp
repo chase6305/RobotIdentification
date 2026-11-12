@@ -94,16 +94,24 @@ double BaseParameterBasis::ReconstructionError(const Eigen::MatrixXd& regressor)
         return 0.;
     }
 
+    long double maximum_relative_error = 0.L;
     Eigen::VectorXd column_divisors = column_scales_;
-    constexpr double kSelectedColumnMarker = -1.;
-    // Divisors are nonnegative. Reuse negative entries to mark selected
-    // identities instead of allocating a separate per-call bitmap.
+    constexpr double kSkippedColumnMarker = -1.;
+    // Divisors are nonnegative. Reuse negative entries to skip selected
+    // identities and zero dependencies without a separate per-call bitmap.
     for (const auto column : selected_columns_)
-        column_divisors[static_cast<Eigen::Index>(column)] = kSelectedColumnMarker;
+        column_divisors[static_cast<Eigen::Index>(column)] = kSkippedColumnMarker;
     for (Eigen::Index column = 0; column < regressor.cols(); ++column) {
         if (column_divisors[column] < 0.) continue;
+        if (column_scales_[column] == 0.) {
+            // A zero calibration column has an exact zero mapping, even
+            // alongside nonzero dependencies. Its relative error is 0 or 1.
+            // Keep checking other columns: their errors can exceed one.
+            if ((regressor.col(column).array() != 0.).any()) maximum_relative_error = 1.L;
+            column_divisors[column] = kSkippedColumnMarker;
+            continue;
+        }
         column_divisors[column] = std::max(column_divisors[column], regressor.col(column).cwiseAbs().maxCoeff());
-        if (column_divisors[column] == 0.) column_divisors[column] = 1.;
     }
 
     // Bound extended-precision scratch independently of calibration size.
@@ -112,7 +120,6 @@ double BaseParameterBasis::ReconstructionError(const Eigen::MatrixXd& regressor)
     const Eigen::Index rows_per_block = std::min<Eigen::Index>(regressor.rows(), 255);
     Eigen::Matrix<long double, Eigen::Dynamic, Eigen::Dynamic> normalized_basis(rows_per_block, full_to_base_.rows());
 
-    long double maximum_relative_error = 0.L;
     for (Eigen::Index block_start = 0; block_start < regressor.rows();) {
         const Eigen::Index block_row_count = std::min(rows_per_block, regressor.rows() - block_start);
         for (Eigen::Index base_column = 0; base_column < full_to_base_.rows(); ++base_column) {

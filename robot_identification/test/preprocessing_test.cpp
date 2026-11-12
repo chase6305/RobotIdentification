@@ -280,6 +280,72 @@ void TestHighlyUnequalSpacing() {
     }
 }
 
+void TestUnderflowingSecants() {
+    const double tiny = std::numeric_limits<double>::denorm_min();
+    for (int exponent : {1, 500, 1000}) {
+        for (double sign : {-1., 1.}) {
+            const double step = std::ldexp(1., exponent);
+            const double amplitude = sign * std::ldexp(tiny, exponent - 1);
+            robot_identification::RawDataset raw;
+            raw.joint_names = {"quadratic", "linear", "stationary"};
+            raw.time_seconds = Eigen::Vector3d(0., step, 2. * step);
+            raw.position.resize(3, 3);
+            raw.position.col(0) = Eigen::Vector3d(0., amplitude, 0.);
+            raw.position.col(1) = Eigen::Vector3d(0., amplitude, 2. * amplitude);
+            raw.position.col(2).setConstant(amplitude);
+            raw.torque = Eigen::MatrixXd::Zero(3, 3);
+            const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+            for (Eigen::Index row = 0; row < 3; ++row) {
+                const auto& sample = result.samples[static_cast<std::size_t>(row)];
+                // q(t) = amplitude*t*(2*step-t)/(step*step) has endpoint
+                // derivatives +/-sign*tiny, though its secants round to zero.
+                const double expected = row == 0 ? sign * tiny : row == 2 ? -sign * tiny : 0.;
+                if (sample.velocity[0] != expected || !sample.velocity.tail(2).isZero(0.) ||
+                    !sample.acceleration.isZero(0.)) {
+                    throw std::runtime_error("individually underflowing secants erased a representable derivative");
+                }
+            }
+        }
+    }
+    // Neighboring subnormal slopes can round into the normal range before
+    // endpoint extrapolation, losing one ulp even in a normal final derivative.
+    for (double amplitude :
+         {std::numeric_limits<double>::min() - tiny, 2. * std::numeric_limits<double>::min() - tiny}) {
+        for (double final_time : {4., 6.}) {
+            robot_identification::RawDataset raw;
+            raw.joint_names = {"quadratic"};
+            raw.time_seconds = Eigen::Vector3d(0., 2., final_time);
+            raw.position = Eigen::Vector3d(0., amplitude, 0.);
+            raw.torque = Eigen::Vector3d::Zero();
+            const auto differentiate = [&](const Eigen::Vector3d& values) {
+                Eigen::Vector3d derivative;
+                for (Eigen::Index row = 0; row < 3; ++row) {
+                    long double sum = 0.;
+                    for (Eigen::Index term = 0; term < 3; ++term) {
+                        const auto a = (term + 1) % 3, b = (term + 2) % 3;
+                        const long double weight =
+                            (2.L * raw.time_seconds[row] - raw.time_seconds[a] - raw.time_seconds[b]) /
+                            ((static_cast<long double>(raw.time_seconds[term]) - raw.time_seconds[a]) *
+                             (static_cast<long double>(raw.time_seconds[term]) - raw.time_seconds[b]));
+                        sum += weight * values[term];
+                    }
+                    derivative[row] = static_cast<double>(sum);
+                }
+                return derivative;
+            };
+            const auto velocity = differentiate(raw.position);
+            const auto acceleration = differentiate(velocity);
+            const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+            for (Eigen::Index row = 0; row < 3; ++row) {
+                const auto& sample = result.samples[static_cast<std::size_t>(row)];
+                if (sample.velocity[0] != velocity[row] || sample.acceleration[0] != acceleration[row]) {
+                    throw std::runtime_error("subnormal secant rounding changed a normal endpoint derivative");
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -291,4 +357,5 @@ int main() {
     TestPreprocessingEntryValidation();
     TestRepresentableDerivativesAcrossOverflowingDifferences();
     TestHighlyUnequalSpacing();
+    TestUnderflowingSecants();
 }

@@ -202,6 +202,41 @@ void TestExactIndependentColumns() {
     Reject([&] { (void)with_zero_column.ReduceRegressor(holdout, 0.); });
 }
 
+void TestMixedZeroAndNonzeroDependencies() {
+    Eigen::MatrixXd calibration(1, 4);
+    calibration << 1., 1., 0., 0.;
+    const BaseParameterBasis basis(calibration);
+    const auto selected = static_cast<Eigen::Index>(basis.selected_columns().front());
+    const Eigen::Index dependent = 1 - selected;
+    struct RoundingGuard {
+        int previous{std::fegetround()};
+        ~RoundingGuard() { (void)std::fesetround(previous); }
+    } guard;
+    for (const int mode : {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO}) {
+        Require(std::fesetround(mode) == 0, "cannot configure mixed-dependency rounding test");
+        for (const Eigen::Index rows : {1, 2, 254, 255, 256, 511, 512, 766}) {
+            Eigen::MatrixXd held = Eigen::MatrixXd::Zero(rows, 4);
+            held(rows - 1, 2) = std::numeric_limits<double>::denorm_min();
+            Require(basis.ReconstructionError(held) == 1., "a mixed zero dependency erased a subnormal new direction");
+            Reject([&] { (void)basis.ReduceRegressor(held); });
+            held(rows / 2, selected) = -1.;
+            held(rows / 2, dependent) = 1.;
+            Require(basis.ReconstructionError(held) == 2., "a zero dependency hid a larger nonzero dependency error");
+            held(rows / 2, selected) = 1.;
+            held(rows / 2, dependent) = .5;
+            Require(basis.ReconstructionError(held) == 1.,
+                    "a smaller nonzero dependency replaced a new zero-column direction");
+            held(rows - 1, 2) = -0.;
+            Require(basis.ReconstructionError(held) == .5,
+                    "an inactive zero column changed a nonzero dependency error");
+            Require(basis.ReduceRegressor(held, .5).rows() == rows,
+                    "mixed dependencies rejected their inclusive tolerance");
+            Reject([&] { (void)basis.ReduceRegressor(held, std::nextafter(.5, 0.)); });
+        }
+        Require(std::fegetround() == mode, "mixed dependencies changed the caller rounding mode");
+    }
+}
+
 void TestReconstructionErrorRoundsOutward() {
     if (std::numeric_limits<long double>::digits > std::numeric_limits<double>::digits) {
         const BaseParameterBasis basis(Eigen::MatrixXd::Constant(1, 2, 3.));
@@ -454,6 +489,7 @@ int main() {
         TestPairedReconstructionRows();
         TestColumnErrorMaxima();
         TestExactIndependentColumns();
+        TestMixedZeroAndNonzeroDependencies();
         TestReconstructionErrorRoundsOutward();
         TestZeroColumnsWithIndependentStates();
         TestBackend();
