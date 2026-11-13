@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- Run ROS validation packages sequentially, cap default style checks at two
+  workers, and reject invalid core build worker counts, including zero, to
+  avoid unbounded or nested process pools.
+- Keep the runner's preinstalled Firefox package during ROS CI setup to avoid
+  an unrelated Snapcraft download failure before project tests.
+- Core 0.2.16 preserves representable preprocessing derivatives when individual secants
+  underflow or round at the normal/subnormal boundary; retry only exceptional
+  arithmetic in extended range and test both differentiation passes. Exact-midpoint
+  interior differences eliminate the middle coordinate before arithmetic,
+  preserving tiny endpoint changes even beside extreme middle samples. Check
+  exact interval equality through subtraction residuals under nearest rounding;
+  rounded-equal nonuniform intervals and other modes retain the generic stencil.
+  Retain nonzero centered-interval residuals when reconstructing the span in
+  extended range, improving precision on translated midpoint grids.
+  Dispatch centered rows before the column loop and compute generic blend
+  coefficients only for rows that need them, preserving each stencil's arithmetic.
+- Parse ordinary CSV decimals without separately scanning for each delimiter.
+  Preserve hexadecimal exponent checks, numeric grammar, field counts and
+  error locations; cover incomplete exponents, signs and a final-field NUL.
+- Validate finite positive regression weights in one traversal, retaining
+  dimension checks and diagnostics. Cover subnormal, extreme and invalid weights
+  and add validation metrics to the existing core benchmark.
+- Copy the validated actuator base block before zeroing only appended actuator
+  columns; remove redundant stores and add a standalone composition benchmark.
+- Skip zero calibration columns during mixed base-parameter dependency
+  reconstruction, preserving newly excited zero-column rejection and errors
+  larger than one from actual dependencies.
+- Tools 0.1.2 rejects occupied artifact destinations before scanning input recordings or
+  configurations, while retaining the publication-time check and atomic
+  no-overwrite semantics.
+
 - Core 0.2.15 uses project-specific schema identifiers and package metadata.
   Remove obsolete migration text and tracked process notes. Artifact fields
   and schema version 1 remain unchanged.

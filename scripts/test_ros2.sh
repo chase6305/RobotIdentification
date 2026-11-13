@@ -35,14 +35,14 @@ export CMAKE_BUILD_PARALLEL_LEVEL="$WORKERS"
 export MAKEFLAGS="${MAKEFLAGS:+$MAKEFLAGS }-j$WORKERS"
 colcon --log-base "$BUILD_ROOT/log" build --paths "${PACKAGE_PATHS[@]}" \
   --build-base "$BUILD_ROOT/build" --install-base "$BUILD_ROOT/install" \
-  --parallel-workers "$WORKERS" \
+  --executor sequential \
   --cmake-args -DBUILD_TESTING=ON -DROBOT_IDENTIFICATION_BUILD_EXAMPLES=ON
 set +u
 source "$BUILD_ROOT/install/setup.bash"
 set -u
 colcon --log-base "$BUILD_ROOT/test-log" test --paths "${PACKAGE_PATHS[@]}" \
   --build-base "$BUILD_ROOT/build" --install-base "$BUILD_ROOT/install" \
-  --return-code-on-test-failure
+  --executor sequential --return-code-on-test-failure
 colcon test-result --test-result-base "$BUILD_ROOT/build" --verbose
 "$PYTHON_BIN" utils/ros2_recording_smoke.py
 if [[ -e "$ROOT_DIR/.git" ]]; then

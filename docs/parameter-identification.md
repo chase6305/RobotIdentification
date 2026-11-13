@@ -79,6 +79,8 @@ FastTwoSum 的依据与舍入假设见
 
 原实现中的 DH 转换、激励轨迹优化、完整刚体参数 LMI 和符号代码生成具有较强模型假设，将在回归器/激励器扩展层迁移，不能重新引入具体机器人名称、左右臂或固定自由度。
 
+三点差分先计算相邻割线斜率，使位置常量偏移在除以时间间隔前抵消；在就近舍入模式下，通过减法残差确认给定 binary64 时间戳的内点恰好位于端点中点时，直接用 `(q_next - q_previous) / (2 * step)` 消去中间位置项，避免大中间值抵消后丢失微小端点变化。实际相等的间隔若无法用 double 精确表示，则保留减法残差，在扩展范围中恢复时间跨度并计算端点差值；可精确表示的间隔继续使用原有 double 路径。仅舍入后相等的时间间隔和其他舍入模式仍使用通用非均匀差分，不承诺任意抵消下的正确舍入。次正规割线斜率可能分别舍入为零，再组合时却有可表示的端点导数；此时（包括舍入到最小正规数边界的斜率）以 `long double` 重算，恢复能力取决于平台的扩展范围。速度先舍入为 double，再进行加速度差分。时间单位为秒，导数单位依次为关节坐标单位/s 和 /s²；不钳位输出，无效原始输入在运算前拒绝，最终导数超出有限 double 范围时抛出溢出异常。
+
 ### 数据契约
 
 处理后 CSV 表头固定为：
@@ -311,9 +313,11 @@ Boost大整数只用于可选的独立参考程序，以相邻double的精确中
 已选择的独立列按精确恒等关系处理，误差贡献为零，满列秩也不跳过输入校验。
 若所有非零校准列均已选中，剩余依赖只有零列：新数据中这些列全零时误差为 0，
 否则为 1 并拒绝约简。直接比较元素，避免范数平方下溢，并省去除数向量和重构缓存；
-输出坐标的范围检查仍保留。含非零依赖时不能使用此捷径，基准分别覆盖这两类情形。
+输出坐标的范围检查仍保留。混合非零依赖和零列时，逐个零列直接检查得到精确的 0/1
+误差贡献，跳过这些列的重构乘加，其他依赖仍正常检查；最终误差可以大于 1。
+基准分别覆盖纯零列、混合依赖和稠密依赖情形。
 
-一般依赖检查复用除数向量的负标记识别独立列，无需额外位图；有效尺度非负，
+一般依赖检查复用除数向量的负标记跳过独立列和已检查的零列，无需额外位图；有效尺度非负，
 数值计算仍读取原始尺度。有界扩展精度临时工作区最多缓存 255 行，不随总样本行数
 增长。相邻两行共用系数读取，各自按基参数索引递增累计，并按原行顺序检查误差；
 奇数尾行单独处理，不增加公开对象成员或核心依赖。
@@ -472,6 +476,8 @@ reconstruction difference, rather than certifying every QR and multiply-add erro
 When every nonzero calibration column is independent, remaining zero columns are
 checked directly for exact zero. Any new direction, including a subnormal entry,
 has error one; input validation still precedes the shortcut.
+Mixed zero/nonzero dependencies also check zero columns directly, avoiding their
+reconstruction products while retaining any larger error from nonzero dependencies.
 Core 0.2.4 adds reusable `EvaluateInto` outputs and uses them inside sampled
 validation and design scoring. Successful calls with matching output dimensions
 need no new vector storage. Owning `Evaluate` calls remain available.
@@ -500,6 +506,6 @@ Candidate creation validates and hashes the CSV in a single read so its digest a
 
 Every accepted result needs full numerical rank, reviewed conditioning, uncertainty, per-joint training and holdout errors, robust-weight diagnostics, and physical validation such as symmetric positive-definite mass matrices over the intended workspace. Ridge and robust regression improve numerical behavior but do not repair insufficient excitation or a wrong model.
 
-Large preprocessing windows use compensated rolling sums with periodic recomputation, preserving symmetric windows and boundary means with linear work in sample count. Nonuniform three-point derivatives are evaluated using adjacent secant slopes so constant position offsets cancel before time division.
+Large preprocessing windows use compensated rolling sums with periodic recomputation, preserving symmetric windows and boundary means with linear work in sample count. Nonuniform three-point derivatives are evaluated using adjacent secant slopes so constant position offsets cancel before time division. Under nearest rounding, interior points whose supplied binary64 timestamps have exactly equal intervals (verified by subtraction residuals) use `(q_next - q_previous) / (2 * step)`, eliminating the middle coordinate before arithmetic so an extreme middle sample cannot erase tiny endpoint changes; an overflowing endpoint difference is retried in extended range. When an exact equal interval is not representable in double, retain its subtraction residual and reconstruct the span together with the endpoint difference in extended range; exactly representable intervals keep the existing double path. Rounded-equal nonuniform intervals and other rounding modes retain the general secant stencil; arbitrary cancellation is not guaranteed to be correctly rounded. Exceptional subnormal secants (including a tiny value rounded onto the normal boundary) are recomputed in extended range before combining the stencil, preserving representable endpoint derivatives; this recovery depends on the platform’s `long double` range. Velocities are rounded to double before the acceleration pass. Time remains in seconds; velocity and acceleration use the recorded joint coordinate unit per second and per second², respectively (for example, rad/s and rad/s² for a revolute joint). Invalid raw inputs are rejected before arithmetic; derivatives outside the finite double range raise an overflow error.
 
 The `robot_identification_ros2` recorder consumes named `JointState.position/effort`, reorders a stable joint set, uses process-monotonic callback timestamps, and atomically finalizes the raw CSV without commanding motion. ROS 2 remains an orchestration layer and must never apply an identified model automatically. Produce a candidate artifact, review it offline, retain rollback parameters, and perform staged low-speed hardware validation before changing a runtime profile or URDF.

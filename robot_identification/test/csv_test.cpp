@@ -96,22 +96,33 @@ void TestNumericGrammar() {
                 }
             }
         }
-        for (const std::string& token :
-             std::vector<std::string>{"",        " ",          "1 ",        "1junk",
-                                      "1e",      "nan",        "inf",       "-infinity",
-                                      "1e9999",  "1e-9999",    "\"1\"",     "1,2",
-                                      "--1",     "+-1",        "-+1",       "++1",
-                                      "0x-1",    "0x+1",       "-0x-1",     "0x",
-                                      "0x1p",    "0x1e+2",     "0x1p+1024", "0x1p-1075",
-                                      "0x1p+-2", "-0X0P+-999", "0x1p--2",   "0x1p-+2",
-                                      "0x1p++2", "1_000",      "１２",      std::string("1\0junk", 6)}) {
+        for (const std::string& token : std::vector<std::string>{"",          " ",
+                                                                 "1 ",        "1junk",
+                                                                 "1e",        "1e+",
+                                                                 "1e-",       "1\t",
+                                                                 "+",         "-",
+                                                                 " \t-",      "nan",
+                                                                 "inf",       "-infinity",
+                                                                 "1e9999",    "1e-9999",
+                                                                 "\"1\"",     "1,2",
+                                                                 "--1",       "+-1",
+                                                                 "-+1",       "++1",
+                                                                 "0x-1",      "0x+1",
+                                                                 "-0x-1",     "0x",
+                                                                 "0x1p",      "0x1e+2",
+                                                                 "0x1p+1024", "0x1p-1075",
+                                                                 "0x1p+-2",   "-0X0P+-999",
+                                                                 "0x1p--2",   "0x1p-+2",
+                                                                 "0x1p++2",   "1_000",
+                                                                 "１２",      std::string("1\0junk", 6)}) {
             ExpectRejected(raw, fixture,
                            Header(raw) + "\n" + Row(raw, "0", token) + "\n" + Row(raw, "1", "2") + "\n" +
                                Row(raw, "2", "3") + "\n");
         }
         const std::string valid_prefix = Header(raw) + "\n" + Row(raw, "0", "1") + "\n" + Row(raw, "1", "2") + "\n";
         for (const std::string& malformed :
-             std::vector<std::string>{Row(raw, "2", "3") + ",", Row(raw, "2", "3") + ",4", "2,3"}) {
+             std::vector<std::string>{Row(raw, "2", "3") + ",", Row(raw, "2", "3") + ",4", "2,3",
+                                      Row(raw, "2", "3") + std::string(1, '\0')}) {
             ExpectRejected(raw, fixture, valid_prefix + malformed);
         }
         ExpectRejected(raw, fixture, valid_prefix + Row(raw, "1", "3"));

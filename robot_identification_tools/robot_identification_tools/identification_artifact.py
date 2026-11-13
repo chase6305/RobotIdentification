@@ -72,13 +72,20 @@ def _parse_object(payload: bytes, path: Path) -> dict[str, object]:
     return value
 
 
-def _atomic_create(path: Path, value: dict[str, object]) -> None:
+def _check_output_available(path: Path) -> tuple[Path, Path]:
     # Resolve the directory without following a possibly dangling final link.
     path = path.parent.resolve() / path.name
     temporary = Path(str(path) + ".partial")
     if (path.exists() or path.is_symlink() or temporary.exists() or
             temporary.is_symlink()):
         raise FileExistsError(f"refusing to overwrite artifact: {path}")
+    return path, temporary
+
+
+def _atomic_create(path: Path, value: dict[str, object]) -> None:
+    # Repeat the preflight immediately before publication; callers may have
+    # spent minutes validating an input since their initial availability check.
+    path, temporary = _check_output_available(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(value, indent=2, sort_keys=True,
                          allow_nan=False) + "\n"
@@ -250,6 +257,7 @@ def create_candidate(dataset: Path,
                      diagnostics_file: Path,
                      output: Path,
                      software_revision: str = "") -> None:
+    output, _ = _check_output_available(output)
     parameters = _read_object(parameters_file)
     diagnostics = _read_object(diagnostics_file)
     if not dataset.is_file() or not isinstance(model_digest,
@@ -293,6 +301,7 @@ def create_review(candidate_path: Path,
                   reason: str,
                   output: Path,
                   rollback_path: Path | None = None) -> None:
+    output, _ = _check_output_available(output)
     candidate, candidate_digest = _read_object_with_digest(candidate_path)
     if candidate.get("kind") != "robot_identification_result" or candidate.get(
             "status") != "candidate":
@@ -335,6 +344,7 @@ def create_review(candidate_path: Path,
 
 
 def create_rollback(configuration: Path, profile: str, output: Path) -> None:
+    output, _ = _check_output_available(output)
     if not configuration.is_file() or not isinstance(profile,
                                                      str) or not profile:
         raise ValueError("existing configuration and profile are required")

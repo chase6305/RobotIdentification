@@ -134,6 +134,43 @@ void TestWeightedSolves() {
         }
     }
 
+    const auto valid_weights = problem.row_weights;
+    for (Eigen::Index row : {0, 3}) {
+        for (double weight : {std::numeric_limits<double>::denorm_min(), std::numeric_limits<double>::min(),
+                              std::numeric_limits<double>::max()}) {
+            problem.row_weights = valid_weights;
+            problem.row_weights[row] = weight;
+            std::string reason;
+            if (!problem.Validate() || !problem.Validate(&reason))
+                throw std::runtime_error("finite positive row weight was rejected");
+        }
+        for (double weight :
+             {0.0, -0.0, -1.0, -std::numeric_limits<double>::denorm_min(), std::numeric_limits<double>::infinity(),
+              -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+            problem.row_weights = valid_weights;
+            problem.row_weights[row] = weight;
+            std::string reason;
+            if (problem.Validate() || problem.Validate(&reason) ||
+                reason != "regression values must be finite and row weights positive")
+                throw std::runtime_error("invalid row weight changed its rejection contract");
+        }
+    }
+    for (double later : {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+        problem.row_weights = valid_weights;
+        problem.row_weights[0] = -1.0;
+        problem.row_weights[3] = later;
+        std::string reason;
+        if (problem.Validate() || problem.Validate(&reason) ||
+            reason != "regression values must be finite and row weights positive")
+            throw std::runtime_error("mixed invalid row weights changed their rejection contract");
+    }
+    problem.row_weights.resize(0);
+    std::string weight_reason;
+    if (problem.Validate() || problem.Validate(&weight_reason) ||
+        weight_reason != "regression problem dimensions are inconsistent")
+        throw std::runtime_error("empty row weights bypassed dimension validation");
+    problem.row_weights = valid_weights;
+
     // An underdetermined solve must retain the minimum-norm solution and
     // diagnose unobservable parameters even when ridge is enabled.
     problem.sample_count = 2;

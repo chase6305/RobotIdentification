@@ -69,8 +69,9 @@ Eigen::MatrixXd JointActuatorRegressor::Compute(const Sample& sample) const {
         !base_block.allFinite()) {
         throw std::runtime_error("base regressor returned an invalid block");
     }
-    Eigen::MatrixXd output = Eigen::MatrixXd::Zero(dof, static_cast<Eigen::Index>(parameter_count()));
+    Eigen::MatrixXd output(dof, static_cast<Eigen::Index>(parameter_count()));
     output.leftCols(base_block.cols()) = base_block;
+    output.rightCols(output.cols() - base_block.cols()).setZero();
     Eigen::Index column = base_block.cols();
     for (Eigen::Index joint = 0; joint < dof; ++joint) {
         if (options_.drive_inertia) output(joint, column++) = sample.acceleration[joint];

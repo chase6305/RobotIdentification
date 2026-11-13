@@ -15,9 +15,11 @@
 
 整批 Pinocchio 数据可用 `backend.BuildProblem(dataset)` 复用调用内工作区；单样本和通用后端组合继续使用 `Compute`。详见 [Pinocchio 后端](robot_identification_pinocchio/README.md)。
 
-核心 0.2.15 提供 QR 基参数约简、完整参数映射与受限 Fourier 激励优化，可与已有 Pinocchio 后端组合。[端到端示例](robot_identification/examples/identification_design_example.cpp)演示设计、拟合与独立验证；[算法说明与参考评估](docs/parameter-identification.md#参考项目评估与本次实现)记录公式、数值假设和限制。公开接口保持兼容，Pinocchio 后端为 0.2.2。
+核心 0.2.16 提供 QR 基参数约简、完整参数映射与受限 Fourier 激励优化，可与已有 Pinocchio 后端组合。[端到端示例](robot_identification/examples/identification_design_example.cpp)演示设计、拟合与独立验证；[算法说明与参考评估](docs/parameter-identification.md#参考项目评估与本次实现)记录公式、数值假设和限制。公开接口保持兼容，Pinocchio 后端为 0.2.2。
 
 [执行器动态网络方向](docs/parameter-identification.md#执行器动态网络方向)评估 `sunzhon/actuator_net`；[半隐式混合辨识](docs/parameter-identification.md#半隐式步进与物理学习混合辨识)提供可选合成原型，记录命令/反馈历史、标签单位和独立轨迹验证条件。
+
+预处理保留极小割线斜率下可表示的端点导数；基参数重构跳过混合依赖中的零列；工件目标已存在时在扫描输入前失败。
 
 ## 独立构建
 

@@ -98,28 +98,30 @@ bool ParseCsvRow(std::string& line, std::vector<double>& values, std::size_t lin
     const char* end = cursor + line.size();
     if (cursor == end) return false;
 
-    // from_chars bounds conversion to each field without changing the buffer
-    // or consulting the process locale. Preserve leading ASCII whitespace,
-    // an explicit plus sign, and the existing 0x-prefixed hexadecimal syntax.
+    // Ordinary decimals stop at the next comma directly in from_chars,
+    // avoiding a separate delimiter scan without changing the buffer or locale.
+    // Keep hexadecimal conversion bounded to preserve its exponent checks.
+    // Preserve leading ASCII whitespace, explicit signs and 0x hexadecimal syntax.
     std::size_t column = 0;
     while (true) {
         if (column == values.size()) {
             throw std::runtime_error("dataset row has the wrong field count at line " + std::to_string(line_number));
         }
-        const char* field_end = std::find(cursor, end, ',');
         const char* number = cursor;
-        while (number != field_end && (*number == ' ' || (*number >= '\t' && *number <= '\r'))) ++number;
-        const bool negative = number != field_end && *number == '-';
-        if (number != field_end && (*number == '+' || *number == '-')) ++number;
+        while (number != end && (*number == ' ' || (*number >= '\t' && *number <= '\r'))) ++number;
+        const bool negative = number != end && *number == '-';
+        if (number != end && (*number == '+' || *number == '-')) ++number;
+        const char* field_end = end;
         auto format = std::chars_format::general;
-        if (field_end - number >= 2 && number[0] == '0' && (number[1] == 'x' || number[1] == 'X')) {
+        if (end - number >= 2 && number[0] == '0' && (number[1] == 'x' || number[1] == 'X')) {
+            field_end = std::find(cursor, end, ',');
             number += 2;
             format = std::chars_format::hex;
         }
         const auto location = [&]() {
             return " at line " + std::to_string(line_number) + ", column " + std::to_string(column + 1);
         };
-        if (number == field_end || *number == '+' || *number == '-') {
+        if (number == field_end || *number == ',' || *number == '+' || *number == '-') {
             throw std::invalid_argument("CSV numeric field is empty or invalid" + location());
         }
         if (format == std::chars_format::hex) {
@@ -135,13 +137,14 @@ bool ParseCsvRow(std::string& line, std::vector<double>& values, std::size_t lin
         }
         double value = 0.0;
         const auto conversion = std::from_chars(number, field_end, value, format);
+        if (format == std::chars_format::general) field_end = conversion.ptr;
         if (conversion.ec == std::errc::invalid_argument) {
             throw std::invalid_argument("CSV numeric field is empty or invalid" + location());
         }
         if (conversion.ec == std::errc::result_out_of_range) {
             throw std::out_of_range("CSV numeric field is out of range" + location());
         }
-        if (conversion.ptr != field_end || !std::isfinite(value)) {
+        if (conversion.ptr != field_end || (field_end != end && *field_end != ',') || !std::isfinite(value)) {
             throw std::runtime_error("CSV numeric field is invalid" + location());
         }
         values[column++] = negative ? -value : value;

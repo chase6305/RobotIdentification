@@ -82,6 +82,8 @@ class Ros2RunnerTest(unittest.TestCase):
             self.assertEqual(
                 args[args.index("--paths") + 1:args.index("--build-base")],
                 expected)
+        for call in calls[:2]:
+            self.assertEqual(call[call.index("--executor") + 1], "sequential")
         self.assertIn("--return-code-on-test-failure", calls[1])
         self.assertTrue((self.root / "smoke-ran").exists())
 

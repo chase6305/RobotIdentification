@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cfenv>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -280,6 +281,197 @@ void TestHighlyUnequalSpacing() {
     }
 }
 
+void TestUnderflowingSecants() {
+    const double tiny = std::numeric_limits<double>::denorm_min();
+    for (int exponent : {1, 500, 1000}) {
+        for (double sign : {-1., 1.}) {
+            const double step = std::ldexp(1., exponent);
+            const double amplitude = sign * std::ldexp(tiny, exponent - 1);
+            robot_identification::RawDataset raw;
+            raw.joint_names = {"quadratic", "linear", "stationary"};
+            raw.time_seconds = Eigen::Vector3d(0., step, 2. * step);
+            raw.position.resize(3, 3);
+            raw.position.col(0) = Eigen::Vector3d(0., amplitude, 0.);
+            raw.position.col(1) = Eigen::Vector3d(0., amplitude, 2. * amplitude);
+            raw.position.col(2).setConstant(amplitude);
+            raw.torque = Eigen::MatrixXd::Zero(3, 3);
+            const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+            for (Eigen::Index row = 0; row < 3; ++row) {
+                const auto& sample = result.samples[static_cast<std::size_t>(row)];
+                // q(t) = amplitude*t*(2*step-t)/(step*step) has endpoint
+                // derivatives +/-sign*tiny, though its secants round to zero.
+                const double expected = row == 0 ? sign * tiny : row == 2 ? -sign * tiny : 0.;
+                if (sample.velocity[0] != expected || !sample.velocity.tail(2).isZero(0.) ||
+                    !sample.acceleration.isZero(0.)) {
+                    throw std::runtime_error("individually underflowing secants erased a representable derivative");
+                }
+            }
+        }
+    }
+    // Neighboring subnormal slopes can round into the normal range before
+    // endpoint extrapolation, losing one ulp even in a normal final derivative.
+    for (double amplitude :
+         {std::numeric_limits<double>::min() - tiny, 2. * std::numeric_limits<double>::min() - tiny}) {
+        for (double final_time : {4., 6.}) {
+            robot_identification::RawDataset raw;
+            raw.joint_names = {"quadratic"};
+            raw.time_seconds = Eigen::Vector3d(0., 2., final_time);
+            raw.position = Eigen::Vector3d(0., amplitude, 0.);
+            raw.torque = Eigen::Vector3d::Zero();
+            const auto differentiate = [&](const Eigen::Vector3d& values) {
+                Eigen::Vector3d derivative;
+                for (Eigen::Index row = 0; row < 3; ++row) {
+                    long double sum = 0.;
+                    for (Eigen::Index term = 0; term < 3; ++term) {
+                        const auto a = (term + 1) % 3, b = (term + 2) % 3;
+                        const long double weight =
+                            (2.L * raw.time_seconds[row] - raw.time_seconds[a] - raw.time_seconds[b]) /
+                            ((static_cast<long double>(raw.time_seconds[term]) - raw.time_seconds[a]) *
+                             (static_cast<long double>(raw.time_seconds[term]) - raw.time_seconds[b]));
+                        sum += weight * values[term];
+                    }
+                    derivative[row] = static_cast<double>(sum);
+                }
+                return derivative;
+            };
+            const auto velocity = differentiate(raw.position);
+            const auto acceleration = differentiate(velocity);
+            const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+            for (Eigen::Index row = 0; row < 3; ++row) {
+                const auto& sample = result.samples[static_cast<std::size_t>(row)];
+                if (sample.velocity[0] != velocity[row] || sample.acceleration[0] != acceleration[row]) {
+                    throw std::runtime_error("subnormal secant rounding changed a normal endpoint derivative");
+                }
+            }
+        }
+    }
+}
+
+void TestEqualStepCenterEliminatesMiddleSample() {
+    const double tiny = std::numeric_limits<double>::denorm_min();
+    for (int fixture = 0; fixture < 3; ++fixture) {
+        for (double sign : {-1., 1.}) {
+            robot_identification::RawDataset raw;
+            raw.joint_names = {"quadratic"};
+            double step, expected_velocity;
+            if (fixture == 0) {
+                step = 1.;
+                raw.position = Eigen::Vector3d(0., 0x1p-1016, 8. * tiny);
+                expected_velocity = 4. * tiny;
+            } else if (fixture == 1) {
+                step = 0x1p+32;
+                raw.position = Eigen::Vector3d(-0x1p-1007, -0x1.ffffffffffff9p-958, -0x1.2p-1007);
+                expected_velocity = -0x0.000008p-1022;
+            } else {
+                step = 2.;
+                raw.position = Eigen::Vector3d(4. * tiny, std::numeric_limits<double>::max(), 12. * tiny);
+                expected_velocity = 2. * tiny;
+            }
+            raw.position *= sign;
+            raw.time_seconds = Eigen::Vector3d(0., step, 2. * step);
+            raw.torque = Eigen::Vector3d::Zero();
+            const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+            // The middle q coefficient is exactly zero in the centered stencil.
+            // Even long-double adjacent secants lose these endpoint differences
+            // when the middle q sample is close to the double maximum.
+            if (result.samples[1].velocity[0] != sign * expected_velocity) {
+                throw std::runtime_error("equal-step differentiation retained the cancelled middle sample");
+            }
+            // The acceleration pass must center the already rounded velocities,
+            // including an endpoint difference that overflows in double.
+            const double expected_acceleration = static_cast<double>(
+                (static_cast<long double>(result.samples[2].velocity[0]) - result.samples[0].velocity[0]) /
+                (2.L * step));
+            if (result.samples[1].acceleration[0] != expected_acceleration) {
+                throw std::runtime_error("equal-step acceleration lost the rounded velocity endpoint difference");
+            }
+        }
+    }
+}
+
+void TestNonrepresentableEqualIntervalRetainsResidual() {
+    for (int exponent : {-1000, -500, 0, 500, 1000}) {
+        for (int odd : {1, 3}) {
+            for (double sign : {-1., 1.}) {
+                robot_identification::RawDataset raw;
+                raw.joint_names = {"quadratic"};
+                raw.time_seconds = Eigen::Vector3d(std::ldexp(-1.5, exponent), std::ldexp(odd, exponent - 53),
+                                                   std::ldexp(1.5 + odd * 0x1p-52, exponent));
+                raw.position = Eigen::Vector3d(std::ldexp(-1.5 * sign, exponent), 0.,
+                                               std::ldexp((1.5 - 9. * 0x1p-52) * sign, exponent));
+                raw.torque = Eigen::Vector3d::Zero();
+                const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+                // The exact interval is 1.5 + odd*2^-53 before scaling.
+                // Its residual is +2^-53 for odd=1 and -2^-53 for odd=3.
+                // Fraction arithmetic gives these rounded reference ratios;
+                // scaling both time and q leaves the velocity unchanged.
+                const double expected_velocity = sign * (odd == 1 ? 0x1.ffffffffffff9p-1 : 0x1.ffffffffffff8p-1);
+                if (result.samples[1].velocity[0] != expected_velocity) {
+                    throw std::runtime_error("centered differentiation discarded a nonrepresentable interval residual");
+                }
+                const long double span = static_cast<long double>(raw.time_seconds[2]) - raw.time_seconds[0];
+                const double expected_acceleration = static_cast<double>(
+                    (static_cast<long double>(result.samples[2].velocity[0]) - result.samples[0].velocity[0]) / span);
+                if (result.samples[1].acceleration[0] != expected_acceleration) {
+                    throw std::runtime_error("centered acceleration discarded a nonrepresentable interval residual");
+                }
+            }
+        }
+    }
+}
+
+void TestRoundedEqualIntervalsRetainNonuniformStencil() {
+    for (int fixture = 0; fixture < 3; ++fixture) {
+        robot_identification::RawDataset raw;
+        raw.joint_names = {"quadratic"};
+        if (fixture == 0) {
+            raw.time_seconds = Eigen::Vector3d(-1., 0x1p-54, 1.);
+            raw.position = Eigen::Vector3d(-0x1p+47, 0x1p+100, 0x1p+47);
+        } else if (fixture == 1) {
+            raw.time_seconds = Eigen::Vector3d(0x1p-54, 1., 2.);
+            raw.position = Eigen::Vector3d(0x1p+46, 0x1p+100, -0x1p+46);
+        } else {
+            // Even long-double interval comparison loses this midpoint offset.
+            raw.time_seconds = Eigen::Vector3d(-1., 0x1p-1000, 1.);
+            raw.position = Eigen::Vector3d(-1., 0x1p+999, 1.);
+        }
+        raw.torque = Eigen::Vector3d::Zero();
+        const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+        // Rounded-equal time differences must keep the established nonuniform
+        // secant evaluation. Its cancellation result here is zero; eliminating
+        // the middle coordinate would introduce a large unrelated derivative.
+        if (result.samples[1].velocity[0] != 0.) {
+            throw std::runtime_error("rounded-equal intervals incorrectly eliminated a nonmidpoint sample");
+        }
+    }
+}
+
+void TestDirectedRoundingRetainsNonuniformStencil() {
+    struct RestoreRounding {
+        int mode{std::fegetround()};
+        ~RestoreRounding() { std::fesetround(mode); }
+    } restore;
+    robot_identification::RawDataset raw;
+    raw.joint_names = {"quadratic"};
+    raw.time_seconds = Eigen::Vector3d(-1., 0., 1.);
+    raw.position = Eigen::Vector3d(0., 0x1p+100, 2.);
+    raw.torque = Eigen::Vector3d::Zero();
+    for (int mode : {FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO}) {
+        if (std::fesetround(mode) != 0) continue;
+        // Volatile secants preserve runtime operations in the caller's active
+        // rounding mode rather than constant-folding them to nearest.
+        volatile double left_slope = raw.position(1, 0) - raw.position(0, 0);
+        volatile double right_slope = raw.position(2, 0) - raw.position(1, 0);
+        volatile double change = right_slope - left_slope;
+        volatile double blend = .5 * change;
+        const double expected = left_slope + blend;
+        const auto result = robot_identification::PreprocessPositionAndTorque(raw, {1, 0, 0});
+        if (result.samples[1].velocity[0] != expected) {
+            throw std::runtime_error("directed rounding incorrectly enabled the exact-midpoint shortcut");
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -291,4 +483,9 @@ int main() {
     TestPreprocessingEntryValidation();
     TestRepresentableDerivativesAcrossOverflowingDifferences();
     TestHighlyUnequalSpacing();
+    TestUnderflowingSecants();
+    TestEqualStepCenterEliminatesMiddleSample();
+    TestNonrepresentableEqualIntervalRetainsResidual();
+    TestRoundedEqualIntervalsRetainNonuniformStencil();
+    TestDirectedRoundingRetainsNonuniformStencil();
 }

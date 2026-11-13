@@ -46,7 +46,8 @@ and default benchmarks require neither ROS nor Pinocchio.
 
 | Program | Timed operation | Reporting |
 |---|---|---|
-| `core_bench` | Huber/ridge solves on 1,500 rows and 12 parameters; seven-axis/20-harmonic trajectories | Warmed median of five repetitions; allocations per call |
+| `actuator_bench DOF BASE_COLUMNS full\|friction\|bias ITERATIONS` | Compose a stored base block with joint actuator columns | Warmed CPU/wall microseconds and complete output signature |
+| `core_bench` | Huber/ridge solves and validation metrics on 1,500 rows and 12 parameters; seven-axis/20-harmonic trajectories | Warmed median of five repetitions; allocations per call |
 | `preprocessing_bench [SAMPLES] [DOF] [WINDOW] [REPETITIONS]` | Smooth, differentiate, materialize and destroy a synthetic dataset | JSON wall/process CPU microseconds per call and checksum |
 | `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Median milliseconds, allocations per read, process peak RSS |
 | `design_bench CASE [ITERATIONS]` | One API batch; fixture construction excluded | JSON wall/process CPU microseconds per call and checksum |
@@ -72,11 +73,21 @@ Use `parameter_bench` for mapping and `design_bench` for the other groups.
 | Program/group | Cases |
 |---|---|
 | Parameter mapping | `map-scalar`, `map-unit`, `map-sparse`, `map-dense`, `map-dense-small`, `map-dense-wide`, `map-dense-large`, `map-dense-signed` |
-| Basis reduction | `basis-scalar`, `basis-small`, `basis-batch`, `basis-full-rank`, `basis-zero-scalar`, `basis-zero-small`, `basis-zero-batch` |
-| Dependency error | `reconstruction-scalar`, `reconstruction-pair`, `reconstruction-small`, `reconstruction-wide`, `reconstruction-large`, `reconstruction-254`, `reconstruction-255`, `reconstruction-256`, `reconstruction-511`, `reconstruction-batch` |
+| Basis reduction | `basis-scalar`, `basis-small`, `basis-batch`, `basis-full-rank`, `basis-zero-scalar`, `basis-zero-small`, `basis-zero-batch`, `basis-mixed-small`, `basis-mixed-batch` |
+| Dependency error | `reconstruction-scalar`, `reconstruction-pair`, `reconstruction-small`, `reconstruction-wide`, `reconstruction-large`, `reconstruction-254`, `reconstruction-255`, `reconstruction-256`, `reconstruction-511`, `reconstruction-batch`, `reconstruction-mixed-255`, `reconstruction-mixed-256`, `reconstruction-mixed-batch` |
 | Envelopes | `bounds-dense`, `bounds-sine`, `bounds-exact` |
 | Sampling | `trajectory-owning`, `trajectory-reused`, `trajectory-validation` |
 | Information/search | `quality-unit`, `quality-scaled`, `optimize`, `optimize-scaled` |
+
+Actuator cases include the base backend's owning return and the composed output.
+All coefficients (including signed zero and off-joint zeros) are checked before
+and after timing; the reported signature covers the full output. Compare the same
+harness against matched Release libraries, using alternating fresh processes:
+
+```bash
+build/benchmarks/actuator_bench 14 140 full 1000000
+build/benchmarks/actuator_bench 7 70 friction 1000000
+```
 
 The mapping cases include one owning result-vector allocation. `map-unit` has
 80 independent columns; `map-sparse` adds 80 zero columns. Dense shapes are
@@ -86,8 +97,9 @@ rank/columns 8/16 (small), 24/192 (wide), 80/160 (default), 160/320 (large) and
 Basis cases check dependencies and construct reduced output; reconstruction
 cases time `ReconstructionError` alone. The usual basis has 80 directions and
 140 columns, with 14 rows (small) or 65,537 (batch); the full-rank case has 80
-independent columns. Zero cases retain only zero-column dependencies. Scalar
-cases isolate one-row/two-column inputs; pair and 254/255/256/511-row cases
+independent columns. Zero cases retain only zero-column dependencies. Mixed cases
+retain 10 nonzero dependencies and 50 zero columns alongside 80 independent columns.
+Scalar cases isolate one-row/two-column inputs; pair and 254/255/256/511-row cases
 exercise reconstruction block tails.
 
 Envelope cases use both coefficient families, only sine, or exact dyadic 3-4-5
@@ -133,6 +145,10 @@ and after with bounded memory. Dependencies must remain discoverable after copyi
 Add `--format processed` or `--cpu CPU` as needed. Reports must use new paths;
 positive `reduction_percent` describes this sample, not a general speedup guarantee.
 
+For numeric parser changes, compare long decimals and short tokens (including
+signed zero). Processed imports also allocate individual sample vectors, so their
+overall time may change less than raw imports even with the same parser.
+
 ## Correctness campaigns
 
 With stress targets enabled, `build/benchmarks/hybrid_rollout_demo` runs a scalar
@@ -160,7 +176,7 @@ and scheduling determine counts. Programs stop on a mismatch and report counts.
 | `metrics_stress` | Independent extended-range RMS/absolute errors and normalized ratios, sparse subnormals, zero references, residual overflow |
 | `robust_stress` | Scalar Huber/ridge score roots by bisection, weighted covariance, outliers, weight/design exponents ±1000/±450, one/two-iteration stops |
 | `trajectory_stress` | Closed-form position through jerk and envelopes; phase/product underflow, cancellation, overflow, inactive harmonics |
-| `design_stress` | Known-rank cosine bases, column units at binary exponents -300..300, weighted fits, independent holdout, analytic Gram eigenvalues and constrained search |
+| `design_stress` | Known-rank cosine bases, column units at binary exponents -300..300, weighted fits, independent holdout, exact mixed zero/nonzero dependency checks across block tails, analytic Gram eigenvalues and constrained search |
 | `pinocchio_stress` | Four workers, shared backends, model-owner churn, scalar/translation joints, actuator composition and native RNEA |
 
 ```bash
@@ -203,6 +219,10 @@ weighted-fit objective, including ridge when enabled. Only converged fits are
 compared with the Huber/ridge score root. Fits consuming
 the 200-iteration cap without convergence are counted separately. Design holdout
 checks must reject a newly excited zero calibration column.
+The mixed-dependency oracle uses duplicated coordinate axes with dyadic scales
+and states. It checks exact zero error, a subnormal new zero-column direction
+(error one), and a nonzero dependency error of two across 1–766 rows. Its separate
+RNG stream preserves the existing basis and information replay cases.
 
 For replay, append a case index: `PROGRAM 10 INDEX`. Preprocessing accepts up to
 100000000 and generates the RNG prefix before starting the timed campaign.

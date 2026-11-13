@@ -53,14 +53,16 @@ void Measure(const std::string& name, std::size_t iterations, Function function)
 void Basis(const std::string& name, std::size_t iterations) {
     const bool scalar = name == "basis-scalar" || name == "basis-zero-scalar";
     const bool zero = name.rfind("basis-zero", 0) == 0;
-    const Eigen::Index rows = scalar ? 1 : (name == "basis-batch" || name == "basis-zero-batch" ? 65537 : 14);
+    const bool mixed = name.rfind("basis-mixed", 0) == 0;
+    const Eigen::Index rows =
+        scalar ? 1 : (name == "basis-batch" || name == "basis-zero-batch" || name == "basis-mixed-batch" ? 65537 : 14);
     const Eigen::Index rank = scalar ? 1 : 80, columns = scalar ? 2 : (name == "basis-full-rank" ? rank : 140);
     Eigen::MatrixXd calibration(256, rank), holdout(rows, rank), combination(rank, columns);
     combination.setZero();
     combination.leftCols(rank).setIdentity();
     if (!zero)
         for (Eigen::Index row = 0; row < rank; ++row)
-            for (Eigen::Index column = rank; column < columns; ++column)
+            for (Eigen::Index column = rank; column < (mixed ? rank + rank / 8 : columns); ++column)
                 combination(row, column) = std::sin(.03 * (row + 1) * (column + 1));
     for (Eigen::Index column = 0; column < rank; ++column) {
         for (Eigen::Index row = 0; row < calibration.rows(); ++row)
@@ -74,24 +76,25 @@ void Basis(const std::string& name, std::size_t iterations) {
 }
 
 void Reconstruction(const std::string& name, std::size_t iterations) {
+    const bool mixed = name.rfind("reconstruction-mixed", 0) == 0;
     const Eigen::Index rank = name == "reconstruction-scalar" || name == "reconstruction-pair" ? 1
                               : name == "reconstruction-small"                                 ? 8
                               : name == "reconstruction-wide"                                  ? 24
                               : name == "reconstruction-large"                                 ? 160
                                                                                                : 80;
-    const Eigen::Index rows = name == "reconstruction-scalar"  ? 1
-                              : name == "reconstruction-pair"  ? 2
-                              : name == "reconstruction-small" ? 14
-                              : name == "reconstruction-254"   ? 254
-                              : name == "reconstruction-256"   ? 256
-                              : name == "reconstruction-511"   ? 511
-                              : name == "reconstruction-batch" ? 65537
-                                                               : 255;
+    const Eigen::Index rows = name == "reconstruction-scalar"                                          ? 1
+                              : name == "reconstruction-pair"                                          ? 2
+                              : name == "reconstruction-small"                                         ? 14
+                              : name == "reconstruction-254"                                           ? 254
+                              : name == "reconstruction-256" || name == "reconstruction-mixed-256"     ? 256
+                              : name == "reconstruction-511"                                           ? 511
+                              : name == "reconstruction-batch" || name == "reconstruction-mixed-batch" ? 65537
+                                                                                                       : 255;
     const Eigen::Index columns = rank == 1 ? 2 : name == "reconstruction-wide" ? 72 : rank + 3 * rank / 4;
     Eigen::MatrixXd calibration(2 * rank + 4, rank), holdout(rows, rank), combination(rank, columns);
     combination.setZero();
     combination.leftCols(rank).setIdentity();
-    for (Eigen::Index column = rank; column < columns; ++column)
+    for (Eigen::Index column = rank; column < (mixed ? rank + rank / 8 : columns); ++column)
         for (Eigen::Index row = 0; row < rank; ++row)
             combination(row, column) = std::sin(.03 * (row + 1) * (column + 1));
     for (Eigen::Index column = 0; column < rank; ++column) {
@@ -198,12 +201,14 @@ int main(int argc, char** argv) {
         }
         if (iterations == 0 || iterations > 1000000) throw std::invalid_argument("iteration count out of range");
         if (name == "basis-small" || name == "basis-batch" || name == "basis-full-rank" || name == "basis-scalar" ||
-            name == "basis-zero-scalar" || name == "basis-zero-small" || name == "basis-zero-batch")
+            name == "basis-mixed-small" || name == "basis-mixed-batch" || name == "basis-zero-scalar" ||
+            name == "basis-zero-small" || name == "basis-zero-batch")
             Basis(name, iterations);
         else if (name == "reconstruction-scalar" || name == "reconstruction-pair" || name == "reconstruction-small" ||
                  name == "reconstruction-wide" || name == "reconstruction-large" || name == "reconstruction-254" ||
                  name == "reconstruction-255" || name == "reconstruction-256" || name == "reconstruction-511" ||
-                 name == "reconstruction-batch")
+                 name == "reconstruction-batch" || name == "reconstruction-mixed-255" ||
+                 name == "reconstruction-mixed-256" || name == "reconstruction-mixed-batch")
             Reconstruction(name, iterations);
         else if (name == "bounds-dense" || name == "bounds-sine" || name == "bounds-exact")
             Bounds(name, iterations);

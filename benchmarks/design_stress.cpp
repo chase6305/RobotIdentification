@@ -3,6 +3,7 @@
 #include <robot_identification/experiment_design.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <iostream>
@@ -91,6 +92,47 @@ void CheckBasis(unsigned long long index) {
         }
         Require(rejected, "new excitation in a zero calibration column was silently discarded");
     }
+}
+
+void CheckMixedDependencies(unsigned long long index) {
+    // A separate stream keeps all existing CheckBasis/CheckInformation cases
+    // replayable with their original seeds. Duplicated coordinate axes give
+    // an exact dependency oracle without evaluating the learned mapping.
+    std::mt19937_64 random(0x20261112ba515ULL ^ (index * 0x9e3779b97f4a7c15ULL));
+    const Eigen::Index rank = 1 + random() % 8;
+    const std::array<Eigen::Index, 8> row_counts{{1, 2, 254, 255, 256, 511, 512, 766}};
+    const Eigen::Index rows = row_counts[index % row_counts.size()];
+    Eigen::VectorXd scales(2 * rank);
+    Eigen::MatrixXd calibration = Eigen::MatrixXd::Zero(rank, 2 * rank + 2);
+    for (Eigen::Index column = 0; column < scales.size(); ++column) {
+        scales[column] = std::ldexp(1., static_cast<int>(random() % 601) - 300);
+        calibration(column % rank, column) = scales[column];
+    }
+    const BaseParameterBasis basis(calibration);
+    Require(basis.parameter_count() == static_cast<std::size_t>(rank), "mixed oracle lost an independent axis");
+    Eigen::MatrixXd held = Eigen::MatrixXd::Zero(rows, calibration.cols());
+    for (Eigen::Index row = 0; row < rows; ++row)
+        for (Eigen::Index axis = 0; axis < rank; ++axis) {
+            const double coordinate = static_cast<double>(static_cast<int>(random() % 9) - 4) / 4.;
+            held(row, axis) = scales[axis] * coordinate;
+            held(row, axis + rank) = scales[axis + rank] * coordinate;
+        }
+    Require(basis.ReconstructionError(held) == 0., "exact mixed dependencies acquired a reconstruction error");
+    Require(basis.ReduceRegressor(held, 0.).cols() == rank, "exact mixed dependencies rejected zero tolerance");
+    held(rows - 1, 2 * rank) = std::numeric_limits<double>::denorm_min();
+    Require(basis.ReconstructionError(held) == 1., "a mixed zero column hid a subnormal new direction");
+    bool rejected = false;
+    try {
+        (void)basis.ReduceRegressor(held);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    Require(rejected, "a mixed new zero-column direction was accepted");
+    const auto selected = static_cast<Eigen::Index>(basis.selected_columns()[random() % basis.parameter_count()]);
+    const Eigen::Index dependent = selected < rank ? selected + rank : selected - rank;
+    held(rows / 2, selected) = -scales[selected];
+    held(rows / 2, dependent) = scales[dependent];
+    Require(basis.ReconstructionError(held) == 2., "a mixed zero column concealed a dependency error above one");
 }
 
 class IndependentActuators final : public RegressorBackend {
@@ -183,6 +225,7 @@ int main(int argc, char** argv) {
     try {
         while (std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() < seconds) {
             CheckBasis(first + cases);
+            CheckMixedDependencies(first + cases);
             if (CheckInformation(first + cases)) ++optimized;
             ++cases;
             const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();

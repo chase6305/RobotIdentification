@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cfenv>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -71,10 +72,21 @@ Eigen::MatrixXd SmoothSymmetric(const Eigen::MatrixXd& values, std::size_t windo
     return output;
 }
 
+double DifferenceResidual(double left, double right, double difference) {
+    // Knuth TwoDiff: recover the exact subtraction residual under rounding
+    // to nearest. The caller has already checked finite interval spans.
+    const double right_virtual = left - difference;
+    const double left_virtual = difference + right_virtual;
+    const double right_roundoff = right_virtual - right;
+    const double left_roundoff = left - left_virtual;
+    return left_roundoff + right_roundoff;
+}
+
 Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time_seconds, const Eigen::MatrixXd& signal_values) {
     // Internal preprocessing helper: dimensions and timestamps were checked by
     // ValidateRawInputs before smoothing. Keep arithmetic checks below.
     Eigen::MatrixXd derivative(signal_values.rows(), signal_values.cols());
+    const bool nearest_rounding = std::fegetround() == FE_TONEAREST;
     for (Eigen::Index row = 0; row < signal_values.rows(); ++row) {
         const Eigen::Index first_row = row == 0 ? 0 : row + 1 == signal_values.rows() ? row - 2 : row - 1;
         const Eigen::Index middle_row = first_row + 1;
@@ -84,6 +96,42 @@ Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time_seconds, const Eigen::
         const double interval_span_seconds = left_interval_seconds + right_interval_seconds;
         if (!std::isfinite(interval_span_seconds)) {
             throw std::overflow_error("timestamp spacing is numerically unusable for differentiation");
+        }
+        // Equal rounded intervals alone do not prove that the timestamps are
+        // centered. Compare their exact TwoDiff residuals before eliminating q.
+        double centered_interval_residual = 0.;
+        bool centered_secant = false;
+        if (nearest_rounding && row != first_row && row != last_row &&
+            left_interval_seconds == right_interval_seconds) {
+            centered_interval_residual =
+                DifferenceResidual(time_seconds[middle_row], time_seconds[first_row], left_interval_seconds);
+            centered_secant =
+                centered_interval_residual ==
+                DifferenceResidual(time_seconds[last_row], time_seconds[middle_row], right_interval_seconds);
+        }
+        if (centered_secant) {
+            for (Eigen::Index column = 0; column < signal_values.cols(); ++column) {
+                // On equal interior steps the middle value cancels exactly.
+                // Remove it before subtraction so even an extreme middle
+                // sample cannot erase tiny changes between the endpoints.
+                derivative(row, column) =
+                    (signal_values(last_row, column) - signal_values(first_row, column)) / interval_span_seconds;
+                if (centered_interval_residual != 0. || !std::isfinite(derivative(row, column))) {
+                    // Exact equal intervals need not be representable in double.
+                    // Restore their residual before forming the centered span.
+                    const long double wide_span =
+                        2.L * (static_cast<long double>(left_interval_seconds) + centered_interval_residual);
+                    const long double wide_derivative =
+                        (static_cast<long double>(signal_values(last_row, column)) - signal_values(first_row, column)) /
+                        wide_span;
+                    if (!std::isfinite(wide_derivative) ||
+                        std::abs(wide_derivative) > std::numeric_limits<double>::max()) {
+                        throw std::overflow_error("differentiation produced non-finite values");
+                    }
+                    derivative(row, column) = static_cast<double>(wide_derivative);
+                }
+            }
+            continue;
         }
         // Differentiate the same three-point quadratic through its secant
         // slopes, so a constant position offset cancels before division.
@@ -105,10 +153,15 @@ Eigen::MatrixXd Differentiate(const Eigen::VectorXd& time_seconds, const Eigen::
                 (signal_values(last_row, column) - signal_values(middle_row, column)) / right_interval_seconds;
             const double base_slope = use_right_slope ? right_slope : left_slope;
             derivative(row, column) = base_slope + blend_weight * (right_slope - left_slope);
-            if (tiny_blend_weight || !std::isfinite(derivative(row, column))) {
+            // An exact subnormal secant can round onto the normal boundary.
+            const bool tiny_secant = (std::abs(left_slope) <= std::numeric_limits<double>::min() &&
+                                      signal_values(middle_row, column) != signal_values(first_row, column)) ||
+                                     (std::abs(right_slope) <= std::numeric_limits<double>::min() &&
+                                      signal_values(last_row, column) != signal_values(middle_row, column));
+            if (tiny_blend_weight || tiny_secant || !std::isfinite(derivative(row, column))) {
                 // Finite final derivatives can have overflowing differences or
-                // individual secants, or an underflowed weight whose product
-                // is representable. Retry this derivative in extended range.
+                // individual secants, or underflowed secants/weights whose
+                // combined contribution is representable. Retry in extended range.
                 const long double wide_left_slope =
                     (static_cast<long double>(signal_values(middle_row, column)) - signal_values(first_row, column)) /
                     left_interval_seconds;
