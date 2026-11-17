@@ -41,6 +41,9 @@ cmake --install build/benchmark-pin
 
 `COLCON_IGNORE` excludes these consumers from ROS workspace discovery. The core
 and default benchmarks require neither ROS nor Pinocchio.
+Standalone CI builds the CSV programs against the installed Debug core with Eigen
+NaN initialization, then checks export readback, generated inputs and the comparison
+helper using three-sample fixtures.
 
 ## Timing and allocation measurements
 
