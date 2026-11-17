@@ -302,6 +302,17 @@ std::vector<double> FiniteValues() {
         if (!std::isfinite(value)) throw std::runtime_error("finite bit-pattern fixture is invalid");
         values.push_back(value);
     }
+    // Decimal notation changes and exactly represented integer boundaries
+    // complement the random significands at every binary exponent.
+    const auto append_neighbors = [&](double value) {
+        for (const double neighbor :
+             {std::nextafter(value, 0.), value, std::nextafter(value, std::numeric_limits<double>::infinity())}) {
+            values.push_back(neighbor);
+            values.push_back(-neighbor);
+        }
+    };
+    for (int exponent = -323; exponent <= 308; ++exponent) append_neighbors(std::pow(10., exponent));
+    for (const int exponent : {0, 20, 52, 53, 63, 64, 1023}) append_neighbors(std::ldexp(1., exponent));
     return values;
 }
 
