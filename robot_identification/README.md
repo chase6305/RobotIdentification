@@ -80,7 +80,8 @@ Both writers buffer numeric output in fixed 16 KiB scratch. Round-to-nearest
 exports use locale-independent conversion at 17 significant digits; other
 rounding modes retain stream formatting. Output bytes and caller rounding modes
 are preserved, including exact short fixed-point values selected from their bits.
-Buffered errors are checked when closing. Keep raw recordings immutable
+Failed block writes stop further numeric conversion; closing reports the existing
+write failure. Keep raw recordings immutable
 and create separate processed artifacts. Installed JSON Schemas under
 `share/robot_identification/schema` define session, candidate, review and rollback
 contracts; result status remains `candidate`.

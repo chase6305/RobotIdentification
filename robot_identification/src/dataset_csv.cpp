@@ -95,6 +95,8 @@ std::ofstream OpenCsvOutput(const std::string& path,
     return output;
 }
 
+struct CsvOutputFailure {};
+
 class CsvNumericOutput {
 public:
     explicit CsvNumericOutput(std::ostream& output)
@@ -168,6 +170,7 @@ public:
         if (cursor_ != buffer_.data()) {
             output_.write(buffer_.data(), cursor_ - buffer_.data());
             cursor_ = buffer_.data();
+            if (!output_) throw CsvOutputFailure{};
         }
     }
 
@@ -323,17 +326,21 @@ void WriteRawDatasetCsv(const RawDataset& dataset, const std::string& path) {
     std::string reason;
     if (!dataset.Validate(&reason)) throw std::invalid_argument("invalid raw dataset: " + reason);
     auto output = OpenCsvOutput(path, dataset.joint_names, {"q/", "tau/"}, "raw dataset");
-    CsvNumericOutput numeric(output);
-    for (Eigen::Index row = 0; row < dataset.time_seconds.size(); ++row) {
-        numeric.WriteNumber(dataset.time_seconds[row]);
-        for (const auto* values : {&dataset.position, &dataset.torque})
-            for (Eigen::Index joint = 0; joint < values->cols(); ++joint) {
-                numeric.WriteSeparator(',');
-                numeric.WriteNumber((*values)(row, joint));
-            }
-        numeric.WriteSeparator('\n');
+    try {
+        CsvNumericOutput numeric(output);
+        for (Eigen::Index row = 0; row < dataset.time_seconds.size(); ++row) {
+            numeric.WriteNumber(dataset.time_seconds[row]);
+            for (const auto* values : {&dataset.position, &dataset.torque})
+                for (Eigen::Index joint = 0; joint < values->cols(); ++joint) {
+                    numeric.WriteSeparator(',');
+                    numeric.WriteNumber((*values)(row, joint));
+                }
+            numeric.WriteSeparator('\n');
+        }
+        numeric.Flush();
+    } catch (const CsvOutputFailure&) {
+        // Report the failure through the existing close check below.
     }
-    numeric.Flush();
     output.close();
     if (!output) throw std::runtime_error("failed while writing raw dataset: " + path);
 }
@@ -404,18 +411,22 @@ void WriteDatasetCsv(const Dataset& dataset, const std::string& path) {
     std::string reason;
     if (!dataset.Validate(&reason)) throw std::invalid_argument("invalid dataset: " + reason);
     auto output = OpenCsvOutput(path, dataset.joint_names, {"q/", "dq/", "ddq/", "tau/"}, "dataset");
-    CsvNumericOutput numeric(output);
-    for (const auto& sample : dataset.samples) {
-        numeric.WriteNumber(sample.time_seconds);
-        for (const auto* values : {&sample.position, &sample.velocity, &sample.acceleration, &sample.torque}) {
-            for (Eigen::Index index = 0; index < values->size(); ++index) {
-                numeric.WriteSeparator(',');
-                numeric.WriteNumber((*values)[index]);
+    try {
+        CsvNumericOutput numeric(output);
+        for (const auto& sample : dataset.samples) {
+            numeric.WriteNumber(sample.time_seconds);
+            for (const auto* values : {&sample.position, &sample.velocity, &sample.acceleration, &sample.torque}) {
+                for (Eigen::Index index = 0; index < values->size(); ++index) {
+                    numeric.WriteSeparator(',');
+                    numeric.WriteNumber((*values)[index]);
+                }
             }
+            numeric.WriteSeparator('\n');
         }
-        numeric.WriteSeparator('\n');
+        numeric.Flush();
+    } catch (const CsvOutputFailure&) {
+        // Report the failure through the existing close check below.
     }
-    numeric.Flush();
     output.close();
     if (!output) throw std::runtime_error("failed while writing dataset: " + path);
 }

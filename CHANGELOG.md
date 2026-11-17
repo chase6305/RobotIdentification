@@ -6,6 +6,8 @@
   scratch, using locale-independent `to_chars` at 17 significant digits under
   round-to-nearest. Retain stream formatting in other rounding modes, final
   buffered-write checks, signed zero, finite extremes and existing output bytes.
+  Abort buffered numeric conversion after a failed block write, then close
+  and report the original write failure.
   Format binary64 signed zeros directly from their bits, retaining subnormal values.
   Screen coarse significands before formatting exact quarter steps up to 1e15
   through integer conversion, preserving the same precision-17 output bytes.
