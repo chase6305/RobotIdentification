@@ -20,6 +20,9 @@ Packaged filenames, artifact fields, and `schema_version: 1` remain unchanged.
 processed identification CSV headers, finite values, monotonic timestamps,
 sample rate, timing spread, and peak absolute torque.
 
+检查器的两种布局都至少需要三个有效样本。C++ 核心的处理后 CSV 读取器也支持一个或两个样本。
+Inspection requires at least three valid samples in either layout. The C++ processed CSV reader also accepts one or two samples.
+
 `dataset_inspect` 逐行累计统计，额外内存只随关节数增长，不随录制时长增长。即使各时间戳有限，溢出的采样间隔、总时长或平均采样率也会被拒绝。
 
 CSV summaries accumulate one row at a time, using additional memory proportional to joint count, independent of recording length. Non-finite intervals, duration, or mean sample rate are rejected even when the individual timestamps are finite.

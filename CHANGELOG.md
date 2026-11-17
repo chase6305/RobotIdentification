@@ -7,6 +7,8 @@
   round-to-nearest. Retain stream formatting in other rounding modes, final
   buffered-write checks, signed zero, finite extremes and existing output bytes.
   Format binary64 signed zeros directly from their bits, retaining subnormal values.
+  Screen coarse significands before formatting exact quarter steps up to 1e15
+  through integer conversion, preserving the same precision-17 output bytes.
   Add all-exponent stream-oracle comparisons in four rounding modes and a
   standalone export benchmark with full bitwise readback and output signatures.
   Skip the temporary name-sorting array for a single joint.

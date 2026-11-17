@@ -57,15 +57,18 @@ double Median(std::vector<double>& values) {
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--help") {
-        std::cout << "Usage: " << argv[0] << " raw|processed SAMPLES DOF REPETITIONS [long|short|zero]\n";
+        std::cout << "Usage: " << argv[0]
+                  << " raw|processed SAMPLES DOF REPETITIONS [long|short|zero|integer|quarter]\n";
         return 0;
     }
     try {
         if (argc < 5 || argc > 6)
-            throw std::invalid_argument("expected raw|processed SAMPLES DOF REPETITIONS [long|short|zero]");
+            throw std::invalid_argument(
+                "expected raw|processed SAMPLES DOF REPETITIONS [long|short|zero|integer|quarter]");
         const std::string format(argv[1]), distribution = argc == 6 ? argv[5] : "long";
         if ((format != "raw" && format != "processed") ||
-            (distribution != "long" && distribution != "short" && distribution != "zero"))
+            (distribution != "long" && distribution != "short" && distribution != "zero" && distribution != "integer" &&
+             distribution != "quarter"))
             throw std::invalid_argument("invalid format or numeric distribution");
         const auto rows = Count(argv[2], 1000000), dof = Count(argv[3], 256), repeats = Count(argv[4], 100);
         if (rows < 3 || rows * dof > 10000000)
@@ -86,9 +89,11 @@ int main(int argc, char** argv) {
             Eigen::VectorXd position(static_cast<Eigen::Index>(dof));
             for (std::size_t joint = 0; joint < dof; ++joint)
                 position[static_cast<Eigen::Index>(joint)] =
-                    distribution == "zero"    ? ((row + joint) % 2 ? -0. : 0.)
-                    : distribution == "short" ? ((row + joint) % 7 == 0 ? -0. : .25 * ((row + joint) % 5))
-                                              : std::sin(row * .003 + joint * .2);
+                    distribution == "zero"      ? ((row + joint) % 2 ? -0. : 0.)
+                    : distribution == "short"   ? ((row + joint) % 7 == 0 ? -0. : .25 * ((row + joint) % 5))
+                    : distribution == "integer" ? static_cast<double>(static_cast<int>((row + joint) % 8192) - 4096)
+                    : distribution == "quarter" ? .25 * (static_cast<int>((row + joint) % 8192) - 4096)
+                                                : std::sin(row * .003 + joint * .2);
             if (format == "raw") {
                 raw.time_seconds[static_cast<Eigen::Index>(row)] = time;
                 raw.position.row(static_cast<Eigen::Index>(row)) = position.transpose();

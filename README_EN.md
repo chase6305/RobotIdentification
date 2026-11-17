@@ -23,7 +23,7 @@ Preprocessing preserves representable endpoint derivatives with subnormal secant
 
 CSV export batches numeric conversion and writes while preserving 17 significant digits, existing output bytes and the caller's rounding mode. The [export benchmark](benchmarks/README.md#csv-export-comparisons) reproduces timing and complete-data verification.
 
-CSV import selects a short-integer conversion path by row length. Processed imports reuse header and row validation while preserving numeric grammar, error locations and minimum sample counts.
+C++ CSV import selects a short-integer conversion path by row length. Processed imports reuse header and row validation while preserving numeric grammar, error locations and minimum sample counts.
 
 Streaming inspection proves short decimal rows without exponents finite from their text length, avoiding redundant per-value checks. Single-joint name validation avoids a temporary sorting array.
 

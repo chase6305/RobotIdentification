@@ -117,10 +117,36 @@ public:
             // Inspect the representation so zero detection avoids subnormal arithmetic.
             std::uint64_t bits;
             std::memcpy(&bits, &value, sizeof(bits));
-            if ((bits << 1) == 0) {
-                if (bits >> 63) *cursor_++ = '-';
-                *cursor_++ = '0';
-                return;
+            // A single low-bit screen selects zeros and coarse significands.
+            if (static_cast<std::uint32_t>(bits) == 0) {
+                if ((bits << 1) == 0) {
+                    if (bits >> 63) *cursor_++ = '-';
+                    *cursor_++ = '0';
+                    return;
+                }
+                const unsigned exponent = static_cast<unsigned>((bits >> 52) & 0x7ff);
+                // Binary exponents -2..50 bound the shift for value * 4.
+                if (exponent - 1021 <= 52) {
+                    const unsigned shift = 1073 - exponent;
+                    if ((bits & ((std::uint64_t{1} << shift) - 1)) == 0) {
+                        const std::uint64_t significand = (bits & 0x000fffffffffffffULL) | (std::uint64_t{1} << 52);
+                        const std::uint64_t scaled = significand >> shift;
+                        // Exact quarter steps up to 1e15 fit precision-17 fixed notation.
+                        if (scaled <= 4000000000000000ULL) {
+                            if (bits >> 63) *cursor_++ = '-';
+                            const auto converted = std::to_chars(cursor_, buffer_.data() + buffer_.size(), scaled / 4);
+                            if (converted.ec != std::errc{}) throw std::runtime_error("CSV number conversion failed");
+                            cursor_ = converted.ptr;
+                            const unsigned fraction = static_cast<unsigned>(scaled & 3);
+                            if (fraction) {
+                                *cursor_++ = '.';
+                                if (fraction != 2) *cursor_++ = fraction == 1 ? '2' : '7';
+                                *cursor_++ = '5';
+                            }
+                            return;
+                        }
+                    }
+                }
             }
         }
         const auto converted =

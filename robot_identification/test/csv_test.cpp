@@ -322,6 +322,10 @@ std::vector<double> FiniteValues() {
         std::memcpy(&value, &pattern, sizeof(value));
         if (!std::isfinite(value)) throw std::runtime_error("finite bit-pattern fixture is invalid");
         values.push_back(value);
+        // Coarse significands complement full-width random fractions.
+        const std::uint64_t coarse = pattern & 0xffffffff00000000ULL;
+        std::memcpy(&value, &coarse, sizeof(value));
+        values.push_back(value);
     }
     // Decimal notation changes and exactly represented integer boundaries
     // complement the random significands at every binary exponent.
@@ -332,6 +336,15 @@ std::vector<double> FiniteValues() {
             values.push_back(-neighbor);
         }
     };
+    // Exact quarter steps and their adjacent representable fractions.
+    for (int index = 1; index <= 257; ++index) append_neighbors(index * .25);
+    for (const double value :
+         {8191.75, 8192., 65535.75, 65536., 999999999999999.75, 1e15, std::ldexp(1., 49), std::ldexp(1., 50)})
+        append_neighbors(value);
+    const double coarse_step = std::ldexp(1., 29);
+    const double coarse_boundary = std::floor(1e15 / coarse_step) * coarse_step;
+    append_neighbors(coarse_boundary);
+    append_neighbors(coarse_boundary + coarse_step);
     for (int exponent = -323; exponent <= 308; ++exponent) append_neighbors(std::pow(10., exponent));
     for (const int exponent : {0, 20, 52, 53, 63, 64, 1023}) append_neighbors(std::ldexp(1., exponent));
     return values;

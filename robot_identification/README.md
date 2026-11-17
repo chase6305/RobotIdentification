@@ -72,13 +72,15 @@ Short numeric rows try an exact single-digit conversion before the general parse
 row length only selects the strategy. Header and row checks establish validity
 without rescanning the completed dataset. Raw imports need at least three samples,
 and processed imports need at least one.
+The streaming `dataset_inspect` tool requires at least three samples in either format.
 
 Raw imports use growing column chunks and release each consumed field while
 assembling owning outputs. Final storage still scales with sample/joint count.
 Both writers buffer numeric output in fixed 16 KiB scratch. Round-to-nearest
 exports use locale-independent conversion at 17 significant digits; other
 rounding modes retain stream formatting. Output bytes and caller rounding modes
-are preserved, and buffered errors are checked when closing. Keep raw recordings immutable
+are preserved, including exact short fixed-point values selected from their bits.
+Buffered errors are checked when closing. Keep raw recordings immutable
 and create separate processed artifacts. Installed JSON Schemas under
 `share/robot_identification/schema` define session, candidate, review and rollback
 contracts; result status remains `candidate`.
