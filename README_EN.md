@@ -23,6 +23,8 @@ Preprocessing preserves representable endpoint derivatives with subnormal secant
 
 CSV export batches numeric conversion and writes while preserving 17 significant digits, existing output bytes and the caller's rounding mode. The [export benchmark](benchmarks/README.md#csv-export-comparisons) reproduces timing and complete-data verification.
 
+Streaming inspection proves short decimal rows without exponents finite from their text length, avoiding redundant per-value checks. Single-joint name validation avoids a temporary sorting array.
+
 ## Standalone build
 
 The Ubuntu venv recipe requires `python3-venv`.

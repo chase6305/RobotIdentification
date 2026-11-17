@@ -177,6 +177,30 @@ at most 10,000,000 joint samples. The full fixture stays resident; the
 and excludes the additional readback dataset. OS caching and filesystem behavior
 affect these measurements; the program does not synchronize data to stable storage.
 
+### Python inspection comparisons
+
+Use the generated fixture with the same Python interpreter for both revisions:
+
+```bash
+PYTHONPATH=robot_identification_tools python3 - <<'PY'
+from pathlib import Path
+import statistics
+import time
+import timeit
+from robot_identification_tools.dataset_inspect import inspect_dataset
+
+dataset = Path("build/raw-fixture.csv")
+timer = timeit.Timer(lambda: inspect_dataset(dataset), timer=time.process_time)
+print("median_cpu_ms", 1000 * statistics.median(timer.repeat(repeat=5, number=1)))
+PY
+```
+
+Imports are untimed. Alternate fresh invocations from matched baseline/candidate
+checkouts and retain the observations. Verify summaries and input file hashes
+outside timing; use `inspect_dataset_with_digest` to include hashing in the timed
+operation. Compare short fixed-point, longer decimal and scientific-notation rows,
+because the inspection fast path depends on their text length and exponent syntax.
+
 ## Correctness campaigns
 
 With stress targets enabled, `build/benchmarks/hybrid_rollout_demo` runs a scalar

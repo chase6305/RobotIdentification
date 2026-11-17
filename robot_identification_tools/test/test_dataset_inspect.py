@@ -42,6 +42,39 @@ class DatasetInspectTest(unittest.TestCase):
                     self.inspect_text(
                         f"time_s,q/a,tau/a\n0,{token},1\n1,0,2\n2,0,3\n")
 
+    def test_fixed_decimal_range_and_overflow_locations(self):
+        maximum = format(sys.float_info.max, ".0f")
+        for token in (maximum, "-" + maximum, "9" * 308, "0" * 400 + "1"):
+            with self.subTest(token=token):
+                summary = self.inspect_text("time_s,q/a,tau/a\n" + "\n".join(
+                    f"{index},{token},{token}" for index in range(3)))
+                self.assertEqual(summary["maximum_absolute_torque"]["a"],
+                                 abs(float(token)))
+        for header in ("time_s,q/a,tau/a", "time_s,q/a,dq/a,ddq/a,tau/a"):
+            count = len(header.split(","))
+            for token in ("1e309", "-1e309", "9" * 309, "-" + "9" * 309):
+                for column in range(count):
+                    with self.subTest(header=header, token=token,
+                                      column=column):
+                        fields = ["0"] * count
+                        fields[column] = token
+                        rows = [",".join(fields)] + [
+                            ",".join([str(index)] + ["0"] * (count - 1))
+                            for index in (1, 2)
+                        ]
+                        with self.assertRaisesRegex(
+                                ValueError,
+                                f"line 2, column {column + 1}.*non-finite"):
+                            self.inspect_text(header + "\n" + "\n".join(rows))
+        for row, error in (("0,1e-9999,1e309", "column 3.*non-finite"),
+                           ("0,-1e309,1e309", "column 2.*non-finite"),
+                           ("0,1e309,.", "column 2.*non-finite"),
+                           ("0,1e-9999,.", "column 2.*underflows")):
+            with self.subTest(row=row), self.assertRaisesRegex(
+                    ValueError, error):
+                self.inspect_text("time_s,q/a,tau/a\n" + row +
+                                  "\n1,0,0\n2,0,0\n")
+
     def test_rejects_nonzero_underflow_without_rejecting_zero_mantissas(self):
         for token in ("1e-9999", "-1e-9999", "0x1p-1075", "-0x1p-9999",
                       "0x0e0p-9999", "." + "0" * 323 + "1",

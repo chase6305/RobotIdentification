@@ -35,6 +35,14 @@ bytes still contribute to the digest. Diagnostics use physical file lines and
 columns. The `dataset_inspect` CLI reports validation/read failures with a concise
 error and exit status 2.
 
+无指数的十进制行若总字符数不超过 `sys.float_info.max_10_exp`，每个字段的绝对值都小于 `10**max_10_exp`，因此处于浮点有限范围；受限字符集也排除了 NaN。检查器直接保留这些已转换数值，较长或带指数的行仍逐值检查有限性；下溢判定和实际行列诊断保持原有规则。
+
+For decimal rows without exponents, total ASCII length at most
+`sys.float_info.max_10_exp` bounds every field's magnitude below `10**max_10_exp`
+and within the finite floating-point range; the restricted alphabet also excludes NaNs. Such rows need no
+additional finite-value scan. Longer or exponent rows retain individual checks;
+underflow rejection and physical line/column diagnostics follow the same rules.
+
 候选结果创建通过 `inspect_dataset_with_digest()` 在一次流式读取中同时校验 CSV 和计算 SHA-256，摘要保留原始换行与 UTF-8 字节，不会在校验后重新打开数据集。参数和诊断元数据无效时，会在扫描数据集前报错。
 
 Candidate creation uses `inspect_dataset_with_digest()` to validate the CSV and hash the same stream in one pass, preserving original newline and UTF-8 bytes without reopening the dataset after validation. Invalid parameters or diagnostic metadata are rejected before scanning the recording.

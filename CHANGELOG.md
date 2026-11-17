@@ -9,6 +9,10 @@
   Format binary64 signed zeros directly from their bits, retaining subnormal values.
   Add all-exponent stream-oracle comparisons in four rounding modes and a
   standalone export benchmark with full bitwise readback and output signatures.
+  Skip the temporary name-sorting array for a single joint.
+- Tools 0.1.3 proves short decimal rows without exponents finite from their
+  restricted alphabet and text length. Retain per-value checks for longer and
+  exponent rows, numeric diagnostics, underflow rejection and original-byte digests.
 
 - Run ROS validation packages sequentially, cap default style checks at two
   workers, and reject invalid core build worker counts, including zero, to

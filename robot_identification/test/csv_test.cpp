@@ -357,6 +357,7 @@ void TestWriterFormattingAndRounding() {
                                      Eigen::VectorXd::Constant(1, -value), Eigen::VectorXd::Constant(1, value),
                                      Eigen::VectorXd::Constant(1, -value)});
     }
+    raw.time_seconds[0] = processed.samples[0].time_seconds = -0.;
     for (const int mode : {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO}) {
         if (std::fesetround(mode) != 0) continue;
         for (const bool is_raw : {true, false}) {
