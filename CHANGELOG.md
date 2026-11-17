@@ -13,7 +13,8 @@
   through integer conversion, preserving the same precision-17 output bytes.
   Add all-exponent stream-oracle comparisons in four rounding modes and a
   standalone export benchmark with full bitwise readback and output signatures.
-  Dispatch short numeric rows to an exact single-digit conversion shortcut,
+  Dispatch short numeric rows to exact conversion of decimal integers with one
+  or two digits,
   retaining the original general parser for longer rows and final processed
   dataset validation. Preserve sample minimums and diagnostics, and report
   process CPU medians in reader comparisons.

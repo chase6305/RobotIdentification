@@ -182,7 +182,7 @@ private:
     char* cursor_{buffer_.data()};
 };
 
-template <bool CheckSingleDigit>
+template <bool CheckShortInteger>
 bool ParseCsvRow(std::string& line, std::vector<double>& values, std::size_t line_number, double& previous_time) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     const char* cursor = line.data();
@@ -229,9 +229,13 @@ bool ParseCsvRow(std::string& line, std::vector<double>& values, std::size_t lin
         double value = 0.0;
         const unsigned digit = static_cast<unsigned char>(*number) - '0';
         std::from_chars_result conversion;
-        if (CheckSingleDigit && digit <= 9 && (number + 1 == field_end || number[1] == ',')) {
+        if (CheckShortInteger && digit <= 9 && (number + 1 == field_end || number[1] == ',')) {
             value = static_cast<double>(digit);
             conversion = {number + 1, std::errc{}};
+        } else if (CheckShortInteger && format == std::chars_format::general && digit <= 9 && field_end - number >= 2 &&
+                   number[1] >= '0' && number[1] <= '9' && (number + 2 == field_end || number[2] == ',')) {
+            value = static_cast<double>(10 * digit + (number[1] - '0'));
+            conversion = {number + 2, std::errc{}};
         } else {
             conversion = std::from_chars(number, field_end, value, format);
         }
@@ -294,7 +298,7 @@ public:
     bool ReadRow() {
         while (std::getline(input_, line_, separator_)) {
             ++line_number_;
-            // Choose the digit shortcut once per row; both paths enforce the
+            // Choose integer shortcuts once per row; both paths enforce the
             // same grammar. Divide the byte count to avoid a column-count product.
             const bool parsed = line_.size() / 4 < values.size()
                                     ? ParseCsvRow<true>(line_, values, line_number_, previous_time_)

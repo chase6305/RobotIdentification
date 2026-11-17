@@ -84,7 +84,15 @@ void TestNumericGrammar() {
                                         "0x9",
                                         "-0X9",
                                         "10",
+                                        "99",
+                                        "-99",
+                                        " +10",
+                                        "00",
+                                        "09",
                                         "0x10",
+                                        "0x99",
+                                        "-0X99",
+                                        "0x99p+2",
                                         " +1.25",
                                         "\t-2.5e+2",
                                         "\r\f\v1.25",
@@ -120,25 +128,18 @@ void TestNumericGrammar() {
                 }
             }
         }
-        for (const std::string& token : std::vector<std::string>{"",          " ",
-                                                                 "1 ",        "1junk",
-                                                                 "1e",        "1e+",
-                                                                 "1e-",       "1\t",
-                                                                 "+",         "-",
-                                                                 " \t-",      "nan",
-                                                                 "inf",       "-infinity",
-                                                                 "1e9999",    "1e-9999",
-                                                                 "\"1\"",     "1,2",
-                                                                 "--1",       "+-1",
-                                                                 "-+1",       "++1",
-                                                                 "0x-1",      "0x+1",
-                                                                 "-0x-1",     "0x",
-                                                                 "0x1p",      "0x1e+2",
-                                                                 "0x1p+1024", "0x1p-1075",
-                                                                 "0x1p+-2",   "-0X0P+-999",
-                                                                 "0x1p--2",   "0x1p-+2",
-                                                                 "0x1p++2",   "1_000",
-                                                                 "１２",      std::string("1\0junk", 6)}) {
+        for (const std::string& token :
+             std::vector<std::string>{"",        " ",          "1 ",        "1junk",
+                                      "99junk",  "10 ",        "10x",       "00p0",
+                                      "09e",     "0x99junk",   "1e",        "1e+",
+                                      "1e-",     "1\t",        "+",         "-",
+                                      " \t-",    "nan",        "inf",       "-infinity",
+                                      "1e9999",  "1e-9999",    "\"1\"",     "1,2",
+                                      "--1",     "+-1",        "-+1",       "++1",
+                                      "0x-1",    "0x+1",       "-0x-1",     "0x",
+                                      "0x1p",    "0x1e+2",     "0x1p+1024", "0x1p-1075",
+                                      "0x1p+-2", "-0X0P+-999", "0x1p--2",   "0x1p-+2",
+                                      "0x1p++2", "1_000",      "１２",      std::string("1\0junk", 6)}) {
             ExpectRejected(raw, fixture,
                            Header(raw) + "\n" + Row(raw, "0", token) + "\n" + Row(raw, "1", "2") + "\n" +
                                Row(raw, "2", "3") + "\n");
@@ -254,6 +255,35 @@ void TestLongHeaders() {
 void RequireSameValue(double actual, double expected) {
     if (actual != expected || std::signbit(actual) != std::signbit(expected)) {
         throw std::runtime_error("CSV did not preserve a finite value exactly");
+    }
+}
+
+void TestSmallIntegers() {
+    const Fixture fixture;
+    for (const bool raw : {false, true}) {
+        for (int value = 0; value < 100; ++value) {
+            const std::string digits = (value < 10 ? "0" : "") + std::to_string(value);
+            for (const std::string sign : {"", "+", "-", " \t+"}) {
+                const std::string token = sign + digits;
+                std::string signals;
+                for (int group = 0; group < (raw ? 2 : 4); ++group) signals += "," + token;
+                fixture.Write(Header(raw) + "\n0" + signals + "\n11" + signals + "\n99" + signals);
+                const double expected = std::stod(token);
+                if (raw) {
+                    const auto data = robot_identification::ReadRawDatasetCsv(fixture.path);
+                    RequireSameValue(data.time_seconds[2], 99.);
+                    RequireSameValue(data.position(2, 0), expected);
+                    RequireSameValue(data.torque(2, 0), expected);
+                } else {
+                    const auto data = robot_identification::ReadDatasetCsv(fixture.path);
+                    const auto& sample = data.samples[2];
+                    RequireSameValue(sample.time_seconds, 99.);
+                    for (const auto* signal :
+                         {&sample.position, &sample.velocity, &sample.acceleration, &sample.torque})
+                        RequireSameValue((*signal)[0], expected);
+                }
+            }
+        }
     }
 }
 
@@ -648,6 +678,7 @@ int main() {
     TestTimestampDiagnostics();
     TestInvalidFieldsAcrossSignals();
     TestNumericGrammar();
+    TestSmallIntegers();
     TestFiniteRangeRoundTrip();
     TestWriterFormattingAndRounding();
     TestLocaleIndependence();

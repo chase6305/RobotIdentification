@@ -13,7 +13,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--format", choices=("raw", "processed"), default="raw")
     parser.add_argument("--distribution",
-                        choices=("long", "short", "zero"),
+                        choices=("long", "short", "zero", "integer"),
                         default="long")
     args = parser.parse_args()
     if args.samples < 3 or args.dof < 1:
@@ -36,9 +36,14 @@ def main():
                 for joint in range(args.dof)
             ]
             write(",".join(header) + "\n")
-            tokens = (("0", "-0", "1", "-1", "0.5", "-0.5",
-                       "2") if args.distribution == "short" else
-                      ("0", "-0") if args.distribution == "zero" else ())
+            if args.distribution == "short":
+                tokens = ("0", "-0", "1", "-1", "0.5", "-0.5", "2")
+            elif args.distribution == "zero":
+                tokens = ("0", "-0")
+            elif args.distribution == "integer":
+                tokens = tuple(map(str, range(100)))
+            else:
+                tokens = ()
             suffixes = [
                 "," + ",".join(tokens[(phase + group + joint) % len(tokens)]
                                for group in range(len(prefixes))
