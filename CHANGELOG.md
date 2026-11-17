@@ -10,6 +10,10 @@
   Add all-exponent stream-oracle comparisons in four rounding modes and a
   standalone export benchmark with full bitwise readback and output signatures.
   Skip the temporary name-sorting array for a single joint.
+  Dispatch short numeric rows to an exact single-digit conversion shortcut,
+  retaining the original general parser for longer rows. Derive processed CSV
+  validity from the checked header and rows, preserving its one-sample minimum
+  and diagnostics. Report process CPU medians in reader comparisons.
 - Tools 0.1.3 proves short decimal rows without exponents finite from their
   restricted alphabet and text length. Retain per-value checks for longer and
   exponent rows, numeric diagnostics, underflow rejection and original-byte digests.

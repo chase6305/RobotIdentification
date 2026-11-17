@@ -76,9 +76,30 @@ void TestNumericGrammar() {
                     throw std::runtime_error("short processed CSV changed its valid row contract");
             }
         }
-        for (const std::string token :
-             {"0", "-0", " +1.25", "\t-2.5e+2", "\r\f\v1.25", "0x1.8p+2", "-0x.8", " +0X1.8P+2", "0x1e2", "1.", ".5",
-              "0e-9999", "-0x0p-9999", "0x1p+2", "-0X1P-2", "1.7976931348623157e308", "2.2250738585072014e-308"}) {
+        for (const std::string token : {"0",
+                                        "-0",
+                                        "9",
+                                        "-9",
+                                        " +7",
+                                        "0x9",
+                                        "-0X9",
+                                        "10",
+                                        "0x10",
+                                        " +1.25",
+                                        "\t-2.5e+2",
+                                        "\r\f\v1.25",
+                                        "0x1.8p+2",
+                                        "-0x.8",
+                                        " +0X1.8P+2",
+                                        "0x1e2",
+                                        "1.",
+                                        ".5",
+                                        "0e-9999",
+                                        "-0x0p-9999",
+                                        "0x1p+2",
+                                        "-0X1P-2",
+                                        "1.7976931348623157e308",
+                                        "2.2250738585072014e-308"}) {
             const double expected = std::stod(token);
             for (const std::string newline : {"\n", "\r\n"}) {
                 // Blank rows and a final row without a newline remain valid.

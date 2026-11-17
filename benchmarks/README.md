@@ -49,7 +49,7 @@ and default benchmarks require neither ROS nor Pinocchio.
 | `actuator_bench DOF BASE_COLUMNS full\|friction\|bias ITERATIONS` | Compose a stored base block with joint actuator columns | Warmed CPU/wall microseconds and complete output signature |
 | `core_bench` | Huber/ridge solves and validation metrics on 1,500 rows and 12 parameters; seven-axis/20-harmonic trajectories | Warmed median of five repetitions; allocations per call |
 | `preprocessing_bench [SAMPLES] [DOF] [WINDOW] [REPETITIONS]` | Smooth, differentiate, materialize and destroy a synthetic dataset | JSON wall/process CPU microseconds per call and checksum |
-| `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Median milliseconds, allocations per read, process peak RSS |
+| `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Separate wall/process CPU medians, allocations per read, process peak RSS |
 | `csv_write_bench raw\|processed SAMPLES DOF REPETITIONS [long\|short\|zero]` | Export a resident synthetic dataset, including validation and close | JSON wall/process CPU medians, allocations per write, output size/signature and full bitwise readback |
 | `design_bench CASE [ITERATIONS]` | One API batch; fixture construction excluded | JSON wall/process CPU microseconds per call and checksum |
 | `parameter_bench CASE [ITERATIONS]` | Warmed `ToBaseParameters`; construction excluded | JSON wall/process CPU time, allocations and checksum |
@@ -145,6 +145,9 @@ in alternating order, checks dimensions/checksums, and hashes the fixture before
 and after with bounded memory. Dependencies must remain discoverable after copying.
 Add `--format processed` or `--cpu CPU` as needed. Reports must use new paths;
 positive `reduction_percent` describes this sample, not a general speedup guarantee.
+When both executables report process CPU time, the helper also includes
+`cpu_median_ms` and `cpu_reduction_percent`. Older benchmark output remains usable
+for wall-time comparisons. The two medians are independent statistics.
 
 For numeric parser changes, compare long decimals and short tokens (including
 signed zero). Processed imports also allocate individual sample vectors, so their

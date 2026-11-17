@@ -68,6 +68,10 @@ blank lines and a final row without a newline; writers use LF and the classic
 locale. Leading ASCII whitespace, explicit signs and `0x` numbers are accepted;
 trailing junk, overflow and nonzero values that underflow to zero are rejected.
 Representable subnormals and signed zero round-trip exactly.
+Short numeric rows try an exact single-digit conversion before the general parser;
+row length only selects the strategy. Header and row checks establish validity
+without rescanning the completed dataset. Raw imports need at least three samples,
+and processed imports need at least one.
 
 Raw imports use growing column chunks and release each consumed field while
 assembling owning outputs. Final storage still scales with sample/joint count.

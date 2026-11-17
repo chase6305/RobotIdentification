@@ -153,6 +153,7 @@ private:
     char* cursor_{buffer_.data()};
 };
 
+template <bool CheckSingleDigit>
 bool ParseCsvRow(std::string& line, std::vector<double>& values, std::size_t line_number, double& previous_time) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     const char* cursor = line.data();
@@ -197,7 +198,14 @@ bool ParseCsvRow(std::string& line, std::vector<double>& values, std::size_t lin
             }
         }
         double value = 0.0;
-        const auto conversion = std::from_chars(number, field_end, value, format);
+        const unsigned digit = static_cast<unsigned char>(*number) - '0';
+        std::from_chars_result conversion;
+        if (CheckSingleDigit && digit <= 9 && (number + 1 == field_end || number[1] == ',')) {
+            value = static_cast<double>(digit);
+            conversion = {number + 1, std::errc{}};
+        } else {
+            conversion = std::from_chars(number, field_end, value, format);
+        }
         if (format == std::chars_format::general) field_end = conversion.ptr;
         if (conversion.ec == std::errc::invalid_argument) {
             throw std::invalid_argument("CSV numeric field is empty or invalid" + location());
@@ -257,7 +265,12 @@ public:
     bool ReadRow() {
         while (std::getline(input_, line_, separator_)) {
             ++line_number_;
-            if (ParseCsvRow(line_, values, line_number_, previous_time_)) return true;
+            // Choose the digit shortcut once per row; both paths enforce the
+            // same grammar. Divide the byte count to avoid a column-count product.
+            const bool parsed = line_.size() / 4 < values.size()
+                                    ? ParseCsvRow<true>(line_, values, line_number_, previous_time_)
+                                    : ParseCsvRow<false>(line_, values, line_number_, previous_time_);
+            if (parsed) return true;
         }
         if (input_.bad() || !input_.eof())
             throw std::runtime_error("failed while reading " + std::string(kind_) + ": " + path_);
@@ -398,8 +411,9 @@ Dataset ReadDatasetCsv(const std::string& path) {
         }
         dataset.samples.push_back(std::move(sample));
     }
-    std::string reason;
-    if (!dataset.Validate(&reason)) throw std::runtime_error("dataset CSV is invalid: " + reason);
+    // Header and row parsing already enforce names, dimensions, finite values
+    // and strict timestamps. Processed datasets need at least one sample.
+    if (dataset.samples.empty()) throw std::runtime_error("dataset CSV is invalid: dataset must contain samples");
     return dataset;
 }
 
