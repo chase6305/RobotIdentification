@@ -4,6 +4,8 @@
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <initializer_list>
 #include <iomanip>
@@ -110,6 +112,17 @@ public:
         // A finite double at 17 significant digits needs at most 24 bytes.
         // Flush before conversion so every field fits without temporary strings.
         if (buffer_.data() + buffer_.size() - cursor_ < 32) Flush();
+        if constexpr (sizeof(double) == sizeof(std::uint64_t) && std::numeric_limits<double>::is_iec559 &&
+                      std::numeric_limits<double>::radix == 2 && std::numeric_limits<double>::digits == 53) {
+            // Inspect the representation so zero detection avoids subnormal arithmetic.
+            std::uint64_t bits;
+            std::memcpy(&bits, &value, sizeof(bits));
+            if ((bits << 1) == 0) {
+                if (bits >> 63) *cursor_++ = '-';
+                *cursor_++ = '0';
+                return;
+            }
+        }
         const auto converted =
             std::to_chars(cursor_, buffer_.data() + buffer_.size(), value, std::chars_format::general, 17);
         if (converted.ec != std::errc{}) throw std::runtime_error("CSV number conversion failed");

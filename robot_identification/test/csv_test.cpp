@@ -328,7 +328,9 @@ void TestWriterFormattingAndRounding() {
         }
     } restore_rounding;
     const Fixture fixture;
-    const auto values = FiniteValues();
+    auto values = FiniteValues();
+    // Dense zeros exercise repeated buffer flushes without losing their signs.
+    for (int index = 0; index < 8193; ++index) values.push_back(index % 2 ? -0. : 0.);
     robot_identification::RawDataset raw;
     robot_identification::Dataset processed;
     raw.joint_names = processed.joint_names = {"joint"};

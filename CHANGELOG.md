@@ -6,6 +6,7 @@
   scratch, using locale-independent `to_chars` at 17 significant digits under
   round-to-nearest. Retain stream formatting in other rounding modes, final
   buffered-write checks, signed zero, finite extremes and existing output bytes.
+  Format binary64 signed zeros directly from their bits, retaining subnormal values.
   Add all-exponent stream-oracle comparisons in four rounding modes and a
   standalone export benchmark with full bitwise readback and output signatures.
 

@@ -60,7 +60,7 @@ bool SameProcessed(const robot_identification::Dataset& left, const robot_identi
     for (std::size_t row = 0; row < left.samples.size(); ++row) {
         const auto& a = left.samples[row];
         const auto& b = right.samples[row];
-        if (a.time_seconds != b.time_seconds || !SameBits(a.position, b.position) ||
+        if (std::memcmp(&a.time_seconds, &b.time_seconds, sizeof(double)) != 0 || !SameBits(a.position, b.position) ||
             !SameBits(a.velocity, b.velocity) || !SameBits(a.acceleration, b.acceleration) ||
             !SameBits(a.torque, b.torque))
             return false;
@@ -123,11 +123,20 @@ int main(int argc, char** argv) {
             robot_identification::Dataset processed;
             processed.joint_names = original.joint_names;
             processed.samples.reserve(static_cast<std::size_t>(rows));
-            for (int row = 0; row < rows; ++row)
-                processed.samples.push_back({original.time_seconds[row], original.position.row(row).transpose(),
-                                             -original.position.row(row).transpose(),
-                                             original.torque.row(row).transpose(),
-                                             -original.torque.row(row).transpose()});
+            for (int row = 0; row < rows; ++row) {
+                if (cases % 5 == 0) {
+                    const double zero = row % 2 ? -0. : 0.;
+                    processed.samples.push_back({original.time_seconds[row], Eigen::VectorXd::Constant(dof, zero),
+                                                 Eigen::VectorXd::Constant(dof, -zero),
+                                                 Eigen::VectorXd::Constant(dof, zero),
+                                                 Eigen::VectorXd::Constant(dof, -zero)});
+                } else {
+                    processed.samples.push_back({original.time_seconds[row], original.position.row(row).transpose(),
+                                                 -original.position.row(row).transpose(),
+                                                 original.torque.row(row).transpose(),
+                                                 -original.torque.row(row).transpose()});
+                }
+            }
             robot_identification::WriteDatasetCsv(processed, processed_path.string());
             RewriteNewlines(processed_path, separator);
             const auto actual_processed = robot_identification::ReadDatasetCsv(processed_path.string());

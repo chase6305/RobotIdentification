@@ -57,14 +57,15 @@ double Median(std::vector<double>& values) {
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--help") {
-        std::cout << "Usage: " << argv[0] << " raw|processed SAMPLES DOF REPETITIONS [long|short]\n";
+        std::cout << "Usage: " << argv[0] << " raw|processed SAMPLES DOF REPETITIONS [long|short|zero]\n";
         return 0;
     }
     try {
         if (argc < 5 || argc > 6)
-            throw std::invalid_argument("expected raw|processed SAMPLES DOF REPETITIONS [long|short]");
+            throw std::invalid_argument("expected raw|processed SAMPLES DOF REPETITIONS [long|short|zero]");
         const std::string format(argv[1]), distribution = argc == 6 ? argv[5] : "long";
-        if ((format != "raw" && format != "processed") || (distribution != "long" && distribution != "short"))
+        if ((format != "raw" && format != "processed") ||
+            (distribution != "long" && distribution != "short" && distribution != "zero"))
             throw std::invalid_argument("invalid format or numeric distribution");
         const auto rows = Count(argv[2], 1000000), dof = Count(argv[3], 256), repeats = Count(argv[4], 100);
         if (rows < 3 || rows * dof > 10000000)
@@ -85,8 +86,9 @@ int main(int argc, char** argv) {
             Eigen::VectorXd position(static_cast<Eigen::Index>(dof));
             for (std::size_t joint = 0; joint < dof; ++joint)
                 position[static_cast<Eigen::Index>(joint)] =
-                    distribution == "short" ? ((row + joint) % 7 == 0 ? -0. : .25 * ((row + joint) % 5))
-                                            : std::sin(row * .003 + joint * .2);
+                    distribution == "zero"    ? ((row + joint) % 2 ? -0. : 0.)
+                    : distribution == "short" ? ((row + joint) % 7 == 0 ? -0. : .25 * ((row + joint) % 5))
+                                              : std::sin(row * .003 + joint * .2);
             if (format == "raw") {
                 raw.time_seconds[static_cast<Eigen::Index>(row)] = time;
                 raw.position.row(static_cast<Eigen::Index>(row)) = position.transpose();
@@ -138,8 +140,8 @@ int main(int argc, char** argv) {
             for (std::size_t row = 0; row < rows; ++row) {
                 const auto& actual = restored.samples[row];
                 const auto& expected = processed.samples[row];
-                if (actual.time_seconds != expected.time_seconds || !SameBits(actual.position, expected.position) ||
-                    !SameBits(actual.velocity, expected.velocity) ||
+                if (std::memcmp(&actual.time_seconds, &expected.time_seconds, sizeof(double)) != 0 ||
+                    !SameBits(actual.position, expected.position) || !SameBits(actual.velocity, expected.velocity) ||
                     !SameBits(actual.acceleration, expected.acceleration) || !SameBits(actual.torque, expected.torque))
                     throw std::runtime_error("processed CSV export did not preserve the complete fixture");
             }
