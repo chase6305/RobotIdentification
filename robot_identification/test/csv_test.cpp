@@ -553,35 +553,44 @@ private:
 void TestFinalWriteFailure() {
     const Fixture fixture;
     for (bool raw : {false, true}) {
-        std::string expected = Header(raw) + "\n";
-        // Cross both the filebuf and numeric-output buffer boundaries before
-        // failing, as well as failing the first buffered write at a zero limit.
-        for (int row = 0; row < 4099; ++row) expected += Row(raw, std::to_string(row), "1.2345678901234567") + "\n";
-        fixture.Write(expected);
-        const auto raw_data =
-            raw ? robot_identification::ReadRawDatasetCsv(fixture.path) : robot_identification::RawDataset{};
-        const auto processed =
-            raw ? robot_identification::Dataset{} : robot_identification::ReadDatasetCsv(fixture.path);
-        for (const rlim_t maximum_bytes : {0, 8191, 8192, 16383, 16384, 16385, 32768}) {
-            bool reported_write_failure = false;
-            {
-                const RejectFileWrites limit(maximum_bytes);
-                try {
-                    if (raw) {
-                        robot_identification::WriteRawDatasetCsv(raw_data, fixture.path);
-                    } else {
-                        robot_identification::WriteDatasetCsv(processed, fixture.path);
+        for (int row_count : {3, 4099}) {
+            std::string expected = Header(raw) + "\n";
+            for (int row = 0; row < row_count; ++row)
+                expected += Row(raw, std::to_string(row), "1.2345678901234567") + "\n";
+            fixture.Write(expected);
+            const auto raw_data =
+                raw ? robot_identification::ReadRawDatasetCsv(fixture.path) : robot_identification::RawDataset{};
+            const auto processed =
+                raw ? robot_identification::Dataset{} : robot_identification::ReadDatasetCsv(fixture.path);
+            // Small files can fail only at close; larger files also cross the
+            // filebuf and numeric-output buffer boundaries before failing.
+            const std::vector<rlim_t> limits = row_count == 3
+                                                   ? std::vector<rlim_t>{0, static_cast<rlim_t>(expected.size() - 1)}
+                                                   : std::vector<rlim_t>{0, 8191, 8192, 16383, 16384, 16385, 32768};
+            for (const rlim_t maximum_bytes : limits) {
+                bool reported_write_failure = false;
+                {
+                    const RejectFileWrites limit(maximum_bytes);
+                    try {
+                        if (raw) {
+                            robot_identification::WriteRawDatasetCsv(raw_data, fixture.path);
+                        } else {
+                            robot_identification::WriteDatasetCsv(processed, fixture.path);
+                        }
+                    } catch (const std::runtime_error& error) {
+                        reported_write_failure =
+                            std::string(error.what()) ==
+                            (raw ? "failed while writing raw dataset: " : "failed while writing dataset: ") +
+                                fixture.path;
                     }
-                } catch (const std::runtime_error& error) {
-                    reported_write_failure =
-                        std::string(error.what()).find("failed while writing") != std::string::npos;
                 }
+                if (!reported_write_failure)
+                    throw std::runtime_error("buffered CSV write failure was silently ignored");
+                std::ifstream input(fixture.path, std::ios::binary);
+                const std::string actual{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+                if (actual.size() > maximum_bytes || expected.compare(0, actual.size(), actual) != 0)
+                    throw std::runtime_error("failed CSV write did not retain a correctly ordered prefix");
             }
-            if (!reported_write_failure) throw std::runtime_error("buffered CSV write failure was silently ignored");
-            std::ifstream input(fixture.path, std::ios::binary);
-            const std::string actual{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-            if (actual.size() > maximum_bytes || expected.compare(0, actual.size(), actual) != 0)
-                throw std::runtime_error("failed CSV write did not retain a correctly ordered prefix");
         }
     }
 }
