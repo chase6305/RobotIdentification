@@ -174,7 +174,7 @@ public:
 private:
     std::ostream& output_;
     const bool nearest_rounding_;
-    // Fixed scratch keeps export memory independent of joint and sample counts.
+    // Numeric scratch has a fixed size, independent of joint and sample counts.
     std::array<char, 16384> buffer_;
     char* cursor_{buffer_.data()};
 };
@@ -437,9 +437,8 @@ Dataset ReadDatasetCsv(const std::string& path) {
         }
         dataset.samples.push_back(std::move(sample));
     }
-    // Header and row parsing already enforce names, dimensions, finite values
-    // and strict timestamps. Processed datasets need at least one sample.
-    if (dataset.samples.empty()) throw std::runtime_error("dataset CSV is invalid: dataset must contain samples");
+    std::string reason;
+    if (!dataset.Validate(&reason)) throw std::runtime_error("dataset CSV is invalid: " + reason);
     return dataset;
 }
 

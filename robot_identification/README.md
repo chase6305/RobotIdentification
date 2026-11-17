@@ -69,8 +69,8 @@ locale. Leading ASCII whitespace, explicit signs and `0x` numbers are accepted;
 trailing junk, overflow and nonzero values that underflow to zero are rejected.
 Representable subnormals and signed zero round-trip exactly.
 Short numeric rows try an exact single-digit conversion before the general parser;
-row length only selects the strategy. Header and row checks establish validity
-without rescanning the completed dataset. Raw imports need at least three samples,
+row length only selects the strategy. Raw imports use checked header and row
+invariants; processed imports retain final dataset validation. Raw imports need at least three samples,
 and processed imports need at least one.
 The streaming `dataset_inspect` tool requires at least three samples in either format.
 
