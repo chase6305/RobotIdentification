@@ -50,6 +50,7 @@ and default benchmarks require neither ROS nor Pinocchio.
 | `core_bench` | Huber/ridge solves and validation metrics on 1,500 rows and 12 parameters; seven-axis/20-harmonic trajectories | Warmed median of five repetitions; allocations per call |
 | `preprocessing_bench [SAMPLES] [DOF] [WINDOW] [REPETITIONS]` | Smooth, differentiate, materialize and destroy a synthetic dataset | JSON wall/process CPU microseconds per call and checksum |
 | `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Median milliseconds, allocations per read, process peak RSS |
+| `csv_write_bench raw\|processed SAMPLES DOF REPETITIONS [long\|short]` | Export a resident synthetic dataset, including validation and close | JSON wall/process CPU medians, allocations per write, output size/signature and full bitwise readback |
 | `design_bench CASE [ITERATIONS]` | One API batch; fixture construction excluded | JSON wall/process CPU microseconds per call and checksum |
 | `parameter_bench CASE [ITERATIONS]` | Warmed `ToBaseParameters`; construction excluded | JSON wall/process CPU time, allocations and checksum |
 | `pinocchio_bench` | Generic and named batch assembly of 1,000 samples on two/14-axis chains | Warmed median milliseconds and allocations per batch |
@@ -148,6 +149,32 @@ positive `reduction_percent` describes this sample, not a general speedup guaran
 For numeric parser changes, compare long decimals and short tokens (including
 signed zero). Processed imports also allocate individual sample vectors, so their
 overall time may change less than raw imports even with the same parser.
+
+### CSV export comparisons
+
+```bash
+build/benchmarks/csv_write_bench raw 200000 7 5 long
+build/benchmarks/csv_write_bench processed 100000 7 5 short
+```
+
+Build this same harness against each matched Release core installation. Compare
+alternating fresh processes, checking `output_bytes` and `output_signature` for
+every pair. The signature is FNV-1a over all file bytes, outside the timed region;
+it is a comparison aid rather than a cryptographic digest. Every final output
+is read back and compared bitwise with the fixture, including signed zero.
+
+`long` uses sine positions; `short` uses dyadic values and signed zero. The other
+signals repeat or negate those positions. Fixture generation, readback and
+checksum work are untimed. More than one repetition adds one warmup export;
+one repetition measures a cold export. The exporter validates the dataset and
+closes the file on every timed call. CPU and wall medians are separate statistics.
+
+Each process owns a new temporary directory and removes it on normal exit.
+Counts are limited to 3–1,000,000 samples, 1–256 joints, 1–100 repetitions and
+at most 10,000,000 joint samples. The full fixture stays resident; the
+`peak_rss_before_verification_kib` field includes generation, warmup and writes,
+and excludes the additional readback dataset. OS caching and filesystem behavior
+affect these measurements; the program does not synchronize data to stable storage.
 
 ## Correctness campaigns
 

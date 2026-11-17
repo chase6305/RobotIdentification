@@ -71,7 +71,10 @@ Representable subnormals and signed zero round-trip exactly.
 
 Raw imports use growing column chunks and release each consumed field while
 assembling owning outputs. Final storage still scales with sample/joint count.
-Both writers check buffered output when closing. Keep raw recordings immutable
+Both writers buffer numeric output in fixed 16 KiB scratch. Round-to-nearest
+exports use locale-independent conversion at 17 significant digits; other
+rounding modes retain stream formatting. Output bytes and caller rounding modes
+are preserved, and buffered errors are checked when closing. Keep raw recordings immutable
 and create separate processed artifacts. Installed JSON Schemas under
 `share/robot_identification/schema` define session, candidate, review and rollback
 contracts; result status remains `candidate`.

@@ -7,7 +7,7 @@ endif()
 find_package(robot_identification REQUIRED)
 option(ROBOT_IDENTIFICATION_BENCH_PINOCCHIO "Build the optional Pinocchio dataset benchmark" OFF)
 # The linked core exports its C++17 requirement to all consumers.
-foreach(name IN ITEMS core_bench csv_bench)
+foreach(name IN ITEMS core_bench csv_bench csv_write_bench)
   add_executable(${name} ${name}.cpp)
   target_link_libraries(${name} PRIVATE robot_identification::robot_identification)
   target_link_options(${name} PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc)

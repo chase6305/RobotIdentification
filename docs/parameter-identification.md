@@ -502,6 +502,13 @@ The migration separates robot-specific regressor construction from reusable prep
 
 Processed CSV uses `time_s`, followed by ordered `q/`, `dq/`, `ddq/`, and `tau/` columns for every joint. Names must be unique, timestamps strictly increasing, and all values finite. Keep raw recordings immutable and record torque provenance, preprocessing settings, model digest, software revision, exclusions, and operating context.
 
+Raw and processed exports retain classic-locale formatting at 17 significant digits.
+Under round-to-nearest, finite numeric fields use `to_chars` and fixed 16 KiB
+scratch before writing contiguous blocks. Other rounding modes retain stream
+formatting, and exporters leave the caller's mode unchanged. Header order, numeric
+bytes, signed zero and final buffered-write error checks are preserved. Export
+scratch does not grow with the dataset; the input dataset still resides in memory.
+
 Candidate creation validates and hashes the CSV in a single read so its digest always describes the byte stream that passed validation.
 
 Every accepted result needs full numerical rank, reviewed conditioning, uncertainty, per-joint training and holdout errors, robust-weight diagnostics, and physical validation such as symmetric positive-definite mass matrices over the intended workspace. Ridge and robust regression improve numerical behavior but do not repair insufficient excitation or a wrong model.

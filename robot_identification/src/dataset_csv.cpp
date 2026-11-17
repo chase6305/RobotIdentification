@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cfenv>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
@@ -91,6 +92,53 @@ std::ofstream OpenCsvOutput(const std::string& path,
     output << '\n' << std::setprecision(17);
     return output;
 }
+
+class CsvNumericOutput {
+public:
+    explicit CsvNumericOutput(std::ostream& output)
+        : output_(output), nearest_rounding_(std::fegetround() == FE_TONEAREST) {}
+    CsvNumericOutput(const CsvNumericOutput&) = delete;
+    CsvNumericOutput& operator=(const CsvNumericOutput&) = delete;
+
+    void WriteNumber(double value) {
+        if (!nearest_rounding_) {
+            // Preserve the stream's directed-rounding behavior for callers
+            // that changed their floating-point environment.
+            output_ << value;
+            return;
+        }
+        // A finite double at 17 significant digits needs at most 24 bytes.
+        // Flush before conversion so every field fits without temporary strings.
+        if (buffer_.data() + buffer_.size() - cursor_ < 32) Flush();
+        const auto converted =
+            std::to_chars(cursor_, buffer_.data() + buffer_.size(), value, std::chars_format::general, 17);
+        if (converted.ec != std::errc{}) throw std::runtime_error("CSV number conversion failed");
+        cursor_ = converted.ptr;
+    }
+
+    void WriteSeparator(char separator) {
+        if (!nearest_rounding_) {
+            output_.put(separator);
+            return;
+        }
+        if (cursor_ == buffer_.data() + buffer_.size()) Flush();
+        *cursor_++ = separator;
+    }
+
+    void Flush() {
+        if (cursor_ != buffer_.data()) {
+            output_.write(buffer_.data(), cursor_ - buffer_.data());
+            cursor_ = buffer_.data();
+        }
+    }
+
+private:
+    std::ostream& output_;
+    const bool nearest_rounding_;
+    // Fixed scratch keeps export memory independent of joint and sample counts.
+    std::array<char, 16384> buffer_;
+    char* cursor_{buffer_.data()};
+};
 
 bool ParseCsvRow(std::string& line, std::vector<double>& values, std::size_t line_number, double& previous_time) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -223,12 +271,17 @@ void WriteRawDatasetCsv(const RawDataset& dataset, const std::string& path) {
     std::string reason;
     if (!dataset.Validate(&reason)) throw std::invalid_argument("invalid raw dataset: " + reason);
     auto output = OpenCsvOutput(path, dataset.joint_names, {"q/", "tau/"}, "raw dataset");
+    CsvNumericOutput numeric(output);
     for (Eigen::Index row = 0; row < dataset.time_seconds.size(); ++row) {
-        output << dataset.time_seconds[row];
+        numeric.WriteNumber(dataset.time_seconds[row]);
         for (const auto* values : {&dataset.position, &dataset.torque})
-            for (Eigen::Index joint = 0; joint < values->cols(); ++joint) output << ',' << (*values)(row, joint);
-        output << '\n';
+            for (Eigen::Index joint = 0; joint < values->cols(); ++joint) {
+                numeric.WriteSeparator(',');
+                numeric.WriteNumber((*values)(row, joint));
+            }
+        numeric.WriteSeparator('\n');
     }
+    numeric.Flush();
     output.close();
     if (!output) throw std::runtime_error("failed while writing raw dataset: " + path);
 }
@@ -299,13 +352,18 @@ void WriteDatasetCsv(const Dataset& dataset, const std::string& path) {
     std::string reason;
     if (!dataset.Validate(&reason)) throw std::invalid_argument("invalid dataset: " + reason);
     auto output = OpenCsvOutput(path, dataset.joint_names, {"q/", "dq/", "ddq/", "tau/"}, "dataset");
+    CsvNumericOutput numeric(output);
     for (const auto& sample : dataset.samples) {
-        output << sample.time_seconds;
+        numeric.WriteNumber(sample.time_seconds);
         for (const auto* values : {&sample.position, &sample.velocity, &sample.acceleration, &sample.torque}) {
-            for (Eigen::Index index = 0; index < values->size(); ++index) output << ',' << (*values)[index];
+            for (Eigen::Index index = 0; index < values->size(); ++index) {
+                numeric.WriteSeparator(',');
+                numeric.WriteNumber((*values)[index]);
+            }
         }
-        output << '\n';
+        numeric.WriteSeparator('\n');
     }
+    numeric.Flush();
     output.close();
     if (!output) throw std::runtime_error("failed while writing dataset: " + path);
 }

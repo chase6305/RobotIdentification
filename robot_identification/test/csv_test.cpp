@@ -1,11 +1,14 @@
+#include <cfenv>
 #include <clocale>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <locale>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -277,8 +280,7 @@ void CheckRoundTrip(const Fixture& fixture, const std::vector<double>& values) {
     }
 }
 
-void TestFiniteRangeRoundTrip() {
-    const Fixture fixture;
+std::vector<double> FiniteValues() {
     std::vector<double> values{0.0,
                                -0.0,
                                std::numeric_limits<double>::denorm_min(),
@@ -300,7 +302,12 @@ void TestFiniteRangeRoundTrip() {
         if (!std::isfinite(value)) throw std::runtime_error("finite bit-pattern fixture is invalid");
         values.push_back(value);
     }
-    CheckRoundTrip(fixture, values);
+    return values;
+}
+
+void TestFiniteRangeRoundTrip() {
+    const Fixture fixture;
+    CheckRoundTrip(fixture, FiniteValues());
     for (bool raw : {false, true}) {
         for (const std::string token : {"4.9406564584124654e-324", "0x1p-1074", "+0X1P-1074", "-0x1p-1074"}) {
             fixture.Write(Header(raw) + "\n" + Row(raw, "0", token) + "\n" + Row(raw, "1", token) + "\n" +
@@ -309,6 +316,57 @@ void TestFiniteRangeRoundTrip() {
             const double actual = raw ? robot_identification::ReadRawDatasetCsv(fixture.path).position(0, 0)
                                       : robot_identification::ReadDatasetCsv(fixture.path).samples[0].position[0];
             RequireSameValue(actual, expected);
+        }
+    }
+}
+
+void TestWriterFormattingAndRounding() {
+    struct RestoreRounding {
+        int previous = std::fegetround();
+        ~RestoreRounding() {
+            if (previous != -1) std::fesetround(previous);
+        }
+    } restore_rounding;
+    const Fixture fixture;
+    const auto values = FiniteValues();
+    robot_identification::RawDataset raw;
+    robot_identification::Dataset processed;
+    raw.joint_names = processed.joint_names = {"joint"};
+    raw.time_seconds.resize(static_cast<Eigen::Index>(values.size()));
+    raw.position.resize(raw.time_seconds.size(), 1);
+    raw.torque.resize(raw.time_seconds.size(), 1);
+    for (Eigen::Index row = 0; row < raw.time_seconds.size(); ++row) {
+        const double value = values[static_cast<std::size_t>(row)];
+        raw.time_seconds[row] = static_cast<double>(row) * .5;
+        raw.position(row, 0) = value;
+        raw.torque(row, 0) = -value;
+        processed.samples.push_back({raw.time_seconds[row], Eigen::VectorXd::Constant(1, value),
+                                     Eigen::VectorXd::Constant(1, -value), Eigen::VectorXd::Constant(1, value),
+                                     Eigen::VectorXd::Constant(1, -value)});
+    }
+    for (const int mode : {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO}) {
+        if (std::fesetround(mode) != 0) continue;
+        for (const bool is_raw : {true, false}) {
+            // Independent stream formatting specifies the existing byte contract,
+            // including signed zero and the caller's current rounding direction.
+            std::ostringstream expected;
+            expected.imbue(std::locale::classic());
+            expected << Header(is_raw) << '\n' << std::setprecision(17);
+            for (Eigen::Index row = 0; row < raw.time_seconds.size(); ++row) {
+                const double value = raw.position(row, 0);
+                expected << raw.time_seconds[row] << ',' << value;
+                if (!is_raw) expected << ',' << -value << ',' << value;
+                expected << ',' << -value << '\n';
+            }
+            if (is_raw)
+                robot_identification::WriteRawDatasetCsv(raw, fixture.path);
+            else
+                robot_identification::WriteDatasetCsv(processed, fixture.path);
+            std::ifstream input(fixture.path, std::ios::binary);
+            const std::string actual{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+            if (actual != expected.str())
+                throw std::runtime_error("CSV writer changed numeric formatting or directed rounding");
+            if (std::fegetround() != mode) throw std::runtime_error("CSV writer changed the caller's rounding mode");
         }
     }
 }
@@ -423,12 +481,12 @@ void TestMultipleJoints() {
 #if defined(__unix__)
 class RejectFileWrites {
 public:
-    RejectFileWrites() {
+    explicit RejectFileWrites(rlim_t maximum_bytes) {
         if (getrlimit(RLIMIT_FSIZE, &previous_) != 0) throw std::runtime_error("cannot read file size limit");
         previous_handler_ = std::signal(SIGXFSZ, SIG_IGN);
         if (previous_handler_ == SIG_ERR) throw std::runtime_error("cannot ignore file size signal");
         auto limited = previous_;
-        limited.rlim_cur = 0;
+        limited.rlim_cur = maximum_bytes;
         if (setrlimit(RLIMIT_FSIZE, &limited) != 0) {
             std::signal(SIGXFSZ, previous_handler_);
             throw std::runtime_error("cannot set file size limit");
@@ -447,25 +505,36 @@ private:
 void TestFinalWriteFailure() {
     const Fixture fixture;
     for (bool raw : {false, true}) {
-        fixture.Write(Header(raw) + "\n" + Row(raw, "0", "1") + "\n" + Row(raw, "1", "2") + "\n" + Row(raw, "2", "3"));
+        std::string expected = Header(raw) + "\n";
+        // Cross both the filebuf and numeric-output buffer boundaries before
+        // failing, as well as failing the first buffered write at a zero limit.
+        for (int row = 0; row < 4099; ++row) expected += Row(raw, std::to_string(row), "1.2345678901234567") + "\n";
+        fixture.Write(expected);
         const auto raw_data =
             raw ? robot_identification::ReadRawDatasetCsv(fixture.path) : robot_identification::RawDataset{};
         const auto processed =
             raw ? robot_identification::Dataset{} : robot_identification::ReadDatasetCsv(fixture.path);
-        bool reported_write_failure = false;
-        {
-            const RejectFileWrites limit;
-            try {
-                if (raw) {
-                    robot_identification::WriteRawDatasetCsv(raw_data, fixture.path);
-                } else {
-                    robot_identification::WriteDatasetCsv(processed, fixture.path);
+        for (const rlim_t maximum_bytes : {0, 8191, 8192, 16383, 16384, 16385, 32768}) {
+            bool reported_write_failure = false;
+            {
+                const RejectFileWrites limit(maximum_bytes);
+                try {
+                    if (raw) {
+                        robot_identification::WriteRawDatasetCsv(raw_data, fixture.path);
+                    } else {
+                        robot_identification::WriteDatasetCsv(processed, fixture.path);
+                    }
+                } catch (const std::runtime_error& error) {
+                    reported_write_failure =
+                        std::string(error.what()).find("failed while writing") != std::string::npos;
                 }
-            } catch (const std::runtime_error& error) {
-                reported_write_failure = std::string(error.what()).find("failed while writing") != std::string::npos;
             }
+            if (!reported_write_failure) throw std::runtime_error("buffered CSV write failure was silently ignored");
+            std::ifstream input(fixture.path, std::ios::binary);
+            const std::string actual{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+            if (actual.size() > maximum_bytes || expected.compare(0, actual.size(), actual) != 0)
+                throw std::runtime_error("failed CSV write did not retain a correctly ordered prefix");
         }
-        if (!reported_write_failure) throw std::runtime_error("buffered CSV write failure was silently ignored");
     }
 }
 #endif
@@ -523,6 +592,7 @@ int main() {
     TestInvalidFieldsAcrossSignals();
     TestNumericGrammar();
     TestFiniteRangeRoundTrip();
+    TestWriterFormattingAndRounding();
     TestLocaleIndependence();
     TestRangeErrorLocation();
     TestMultipleJoints();

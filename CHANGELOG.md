@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Core 0.2.17 batches raw and processed CSV numeric exports in fixed 16 KiB
+  scratch, using locale-independent `to_chars` at 17 significant digits under
+  round-to-nearest. Retain stream formatting in other rounding modes, final
+  buffered-write checks, signed zero, finite extremes and existing output bytes.
+  Add all-exponent stream-oracle comparisons in four rounding modes and a
+  standalone export benchmark with full bitwise readback and output signatures.
+
 - Run ROS validation packages sequentially, cap default style checks at two
   workers, and reject invalid core build worker counts, including zero, to
   avoid unbounded or nested process pools.
