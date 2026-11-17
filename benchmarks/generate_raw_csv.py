@@ -12,6 +12,9 @@ def main():
     parser.add_argument("--dof", type=int, default=14)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--format", choices=("raw", "processed"), default="raw")
+    parser.add_argument("--distribution",
+                        choices=("long", "short", "zero"),
+                        default="long")
     args = parser.parse_args()
     if args.samples < 3 or args.dof < 1:
         parser.error("--samples must be at least 3 and --dof must be positive")
@@ -33,7 +36,19 @@ def main():
                 for joint in range(args.dof)
             ]
             write(",".join(header) + "\n")
+            tokens = (("0", "-0", "1", "-1", "0.5", "-0.5",
+                       "2") if args.distribution == "short" else
+                      ("0", "-0") if args.distribution == "zero" else ())
+            suffixes = [
+                "," + ",".join(tokens[(phase + group + joint) % len(tokens)]
+                               for group in range(len(prefixes))
+                               for joint in range(args.dof)) + "\n"
+                for phase in range(len(tokens))
+            ]
             for row in range(args.samples):
+                if suffixes:
+                    write(str(row) + suffixes[row % len(tokens)])
+                    continue
                 position = [
                     math.sin(row * .003 + joint * .2)
                     for joint in range(args.dof)
@@ -58,6 +73,7 @@ def main():
             json.dumps(dict(format=args.format,
                             samples=args.samples,
                             dof=args.dof,
+                            distribution=args.distribution,
                             bytes=args.output.stat().st_size,
                             sha256=digest.hexdigest()),
                        sort_keys=True))

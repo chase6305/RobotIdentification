@@ -128,14 +128,22 @@ python3 benchmarks/generate_raw_csv.py --samples 200000 --dof 14 \
   --output build/raw-fixture.csv
 python3 benchmarks/generate_raw_csv.py --format processed --samples 200000 --dof 14 \
   --output build/processed-fixture.csv
+python3 benchmarks/generate_raw_csv.py --distribution short --samples 200000 --dof 7 \
+  --output build/raw-short-fixture.csv
+python3 benchmarks/generate_raw_csv.py --format processed --distribution zero --samples 200000 --dof 7 \
+  --output build/processed-zero-fixture.csv
 build/benchmarks/csv_bench build/raw-fixture.csv 1
 build/benchmarks/csv_bench build/processed-fixture.csv 5 processed
 python3 benchmarks/compare_csv.py build/before/csv_bench build/after/csv_bench \
   build/raw-fixture.csv --rounds 4 --repetitions 5 --output build/csv-comparison.json
 ```
 
-The generator refuses replacement and reports size/SHA-256. Processed fixtures
-include analytic velocity and acceleration of the sine position. One repetition
+The generator refuses replacement and reports size/SHA-256. The default `long`
+distribution includes analytic velocity and acceleration for processed sine positions.
+`short` cycles through `0,-0,1,-1,0.5,-0.5,2`; `zero` alternates signed zeros.
+These two storage patterns use integer-second timestamps and shift the token
+cycle by signal group and joint; they exercise parsing rather than trajectory dynamics.
+One repetition
 skips warmup; multiple repetitions warm once. `peak_rss_kib` is Linux `getrusage`
 for the whole process, including warmup/launcher history; compare RSS in fresh
 processes. Chunked imports still retain storage proportional to final dataset size.
