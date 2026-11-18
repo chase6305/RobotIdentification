@@ -122,7 +122,9 @@ ExcitationDesignQuality EvaluateExcitationDesign(const HarmonicTrajectory& traje
             for (Eigen::Index joint = 0; joint < joint_count; ++joint) {
                 Eigen::Index minimum_row = joint, maximum_row = joint;
                 long double minimum = regressor(joint, column), maximum = minimum;
-                for (Eigen::Index row = joint + joint_count; row < regressor.rows(); row += joint_count) {
+                // Form only valid rows; a final stride can exceed Eigen::Index.
+                for (std::size_t sample_index = 1; sample_index < options.sample_count; ++sample_index) {
+                    const auto row = static_cast<Eigen::Index>(sample_index * dof) + joint;
                     const long double value = regressor(row, column);
                     if (value < minimum) {
                         minimum = value;
