@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -12,6 +13,19 @@
 #include "robot_identification/detail/regression_assembly.h"
 
 namespace robot_identification {
+namespace {
+bool IsExactlyDiagonal(const Eigen::MatrixXd& matrix) {
+    // Adjacent diagonal entries of a square owning matrix are n+1 positions
+    // apart in either storage order, with n off-diagonal entries between.
+    const Eigen::Index size = matrix.rows();
+    const auto nonzero = [](double value) { return value != 0.; };
+    const double* values = matrix.data() + 1;
+    for (Eigen::Index diagonal = 1; diagonal < size; ++diagonal, values += size + 1)
+        if (std::any_of(values, values + size, nonzero)) return false;
+    return true;
+}
+
+}  // namespace
 
 RegressionProblem BuildRegressionProblem(const Dataset& dataset, const RegressorBackend& backend) {
     return detail::AssembleRegressionProblem(dataset, backend,
@@ -98,7 +112,7 @@ PhysicalValidationResult ValidateMassMatrices(const Eigen::MatrixXd& joint_posit
     PhysicalValidationResult result;
     result.minimum_eigenvalue = std::numeric_limits<double>::infinity();
     Eigen::VectorXd joint_position(joint_positions.cols());
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigenvalue_solver(joint_positions.cols());
+    std::optional<Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd>> eigenvalue_solver;
     for (Eigen::Index row = 0; row < joint_positions.rows(); ++row) {
         joint_position = joint_positions.row(row).transpose();
         Eigen::MatrixXd scaled_mass_matrix = mass_matrix(joint_position, parameters);
@@ -106,6 +120,14 @@ PhysicalValidationResult ValidateMassMatrices(const Eigen::MatrixXd& joint_posit
         if (scaled_mass_matrix.rows() != joint_positions.cols() ||
             scaled_mass_matrix.cols() != joint_positions.cols() || !scaled_mass_matrix.allFinite()) {
             ++result.failed;
+            continue;
+        }
+        if (joint_positions.cols() == 1 || IsExactlyDiagonal(scaled_mass_matrix)) {
+            // Diagonal entries are the exact eigenvalues. Normalizing first can
+            // erase a small positive direction beside a much larger diagonal.
+            const double eigenvalue = scaled_mass_matrix.diagonal().minCoeff();
+            result.minimum_eigenvalue = std::min(result.minimum_eigenvalue, eigenvalue);
+            if (eigenvalue < required_minimum_eigenvalue) ++result.failed;
             continue;
         }
         // Normalize the symmetry comparison so squared Frobenius norms cannot
@@ -118,13 +140,14 @@ PhysicalValidationResult ValidateMassMatrices(const Eigen::MatrixXd& joint_posit
             ++result.failed;
             continue;
         }
-        eigenvalue_solver.compute(scaled_mass_matrix, Eigen::EigenvaluesOnly);
-        if (eigenvalue_solver.info() != Eigen::Success ||
-            !(eigenvalue_solver.eigenvalues() * mass_matrix_scale).allFinite()) {
+        if (!eigenvalue_solver) eigenvalue_solver.emplace(joint_positions.cols());
+        eigenvalue_solver->compute(scaled_mass_matrix, Eigen::EigenvaluesOnly);
+        if (eigenvalue_solver->info() != Eigen::Success ||
+            !(eigenvalue_solver->eigenvalues() * mass_matrix_scale).allFinite()) {
             ++result.failed;
             continue;
         }
-        const double smallest_sample_eigenvalue = eigenvalue_solver.eigenvalues().minCoeff() * mass_matrix_scale;
+        const double smallest_sample_eigenvalue = eigenvalue_solver->eigenvalues().minCoeff() * mass_matrix_scale;
         result.minimum_eigenvalue = std::min(result.minimum_eigenvalue, smallest_sample_eigenvalue);
         if (smallest_sample_eigenvalue < required_minimum_eigenvalue) {
             ++result.failed;

@@ -41,9 +41,9 @@ cmake --install build/benchmark-pin
 
 `COLCON_IGNORE` excludes these consumers from ROS workspace discovery. The core
 and default benchmarks require neither ROS nor Pinocchio.
-Standalone CI builds the CSV programs against the installed Debug core with Eigen
-NaN initialization, then checks export readback, generated inputs and the comparison
-helper using three-sample fixtures.
+Standalone CI builds the CSV and mass-validation programs against the installed
+Debug core with Eigen NaN initialization, then checks export readback, generated
+inputs, physical summaries and the comparison helper using three-sample fixtures.
 
 ## Timing and allocation measurements
 
@@ -54,6 +54,7 @@ helper using three-sample fixtures.
 | `preprocessing_bench [SAMPLES] [DOF] [WINDOW] [REPETITIONS]` | Smooth, differentiate, materialize and destroy a synthetic dataset | JSON wall/process CPU microseconds per call and checksum |
 | `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Separate wall/process CPU medians, allocations per read, process peak RSS |
 | `csv_write_bench raw\|processed SAMPLES DOF REPETITIONS [long\|short\|zero\|integer\|quarter]` | Export a resident synthetic dataset, including validation and close | JSON wall/process CPU medians, allocations per write, output size/signature and full bitwise readback |
+| `mass_validation_bench DOF SAMPLES ITERATIONS positive\|mixed\|diagonal` | Validate a resident position batch with a synthetic mass callback | JSON wall/process CPU medians, allocations per call, complete counts and minimum-eigenvalue bits |
 | `design_bench CASE [ITERATIONS]` | One API batch; fixture construction excluded | JSON wall/process CPU microseconds per call and checksum |
 | `parameter_bench CASE [ITERATIONS]` | Warmed `ToBaseParameters`; construction excluded | JSON wall/process CPU time, allocations and checksum |
 | `pinocchio_bench` | Generic and named batch assembly of 1,000 samples on two/14-axis chains | Warmed median milliseconds and allocations per batch |
@@ -123,6 +124,33 @@ build/benchmarks/design_bench trajectory-validation 1000
 build/benchmarks/design_bench optimize-scaled 20
 build/benchmarks/preprocessing_bench 10000 7 5 20
 ```
+
+### Mass-matrix validation comparisons
+
+```bash
+build/benchmarks/mass_validation_bench 1 1000 2000 positive
+build/benchmarks/mass_validation_bench 7 300 300 positive
+build/benchmarks/mass_validation_bench 14 100 500 diagonal
+build/benchmarks/mass_validation_bench 7 300 300 mixed
+```
+
+Build the same harness against matched Release installations and alternate fresh
+processes on an allowed CPU. `positive` returns a diagonal shift plus a positive
+rank-one block, with analytically known eigenvalues. `diagonal` returns dyadic
+diagonal entries. `mixed` includes valid matrices, negative/zero eigenvalues,
+wrong dimensions, nonfinite entries and asymmetric matrices. Scalar mixed cases
+replace the asymmetric case with a negative value. Every call checks tested/failed
+counts and the minimum against the verified warmup result; the initial result is
+checked against the analytic fixture before timing.
+
+The timed call includes position copying, callback matrix construction, finite and
+symmetry checks, eigenvalue calculation and workspace destruction. Fixture setup
+and the initial analytic check are untimed. Each fresh process warms once and
+reports independent medians of five repetitions, each containing `ITERATIONS`
+calls. Counts are limited to 1–64 joints, 1–100,000 samples, 1–1,000,000 iterations
+and at most 2,000,000 joint positions. These synthetic callbacks do not represent
+the cost of a robot-specific dynamics backend. Allocation counters have the scope
+described above.
 
 ### CSV comparisons
 

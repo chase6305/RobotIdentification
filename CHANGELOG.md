@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Core 0.2.18 reads exact diagonal mass-matrix eigenvalues before normalization.
+  Preserve weak positive directions beside large diagonal entries, including
+  subnormals and exact threshold decisions. Compare every off-diagonal entry
+  directly and retain scaled symmetry/eigensolver checks for coupled matrices.
+  Create the general eigensolver only when a valid coupled matrix needs it.
+  Add scalar/diagonal/dense benchmarks, four-rounding-mode boundary checks,
+  exhaustive off-diagonal position checks and mixed-batch recovery coverage.
+
 - Core 0.2.17 batches raw and processed CSV numeric exports in fixed 16 KiB
   scratch, using locale-independent `to_chars` at 17 significant digits under
   round-to-nearest. Retain stream formatting in other rounding modes, final
