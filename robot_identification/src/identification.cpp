@@ -3,6 +3,8 @@
 #include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -18,7 +20,21 @@ bool IsExactlyDiagonal(const Eigen::MatrixXd& matrix) {
     // Adjacent diagonal entries of a square owning matrix are n+1 positions
     // apart in either storage order, with n off-diagonal entries between.
     const Eigen::Index size = matrix.rows();
-    const auto nonzero = [](double value) { return value != 0.; };
+    const auto nonzero = [](double value) {
+        if constexpr (sizeof(double) == sizeof(std::uint64_t) && std::numeric_limits<double>::is_iec559 &&
+                      std::numeric_limits<double>::radix == 2 && std::numeric_limits<double>::digits == 53 &&
+                      std::numeric_limits<double>::min_exponent == -1021 &&
+                      std::numeric_limits<double>::max_exponent == 1024) {
+            // Clear the native sign bit to recognize both signed zeros.
+            std::uint64_t bits, sign_bit;
+            constexpr double negative_zero = -0.;
+            std::memcpy(&bits, &value, sizeof(bits));
+            std::memcpy(&sign_bit, &negative_zero, sizeof(sign_bit));
+            return (bits & ~sign_bit) != 0;
+        } else {
+            return value != 0.;
+        }
+    };
     const double* values = matrix.data() + 1;
     for (Eigen::Index diagonal = 1; diagonal < size; ++diagonal, values += size + 1)
         if (std::any_of(values, values + size, nonzero)) return false;

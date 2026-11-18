@@ -35,14 +35,16 @@ void TestDiagonalScaleSeparation() {
                  {std::numeric_limits<double>::denorm_min(), std::nextafter(std::numeric_limits<double>::min(), 0.),
                   std::numeric_limits<double>::min(), 1e-200, 1e-100, 1.}) {
                 for (const double largest : {1., 1e200, std::numeric_limits<double>::max()}) {
-                    Eigen::MatrixXd mass = Eigen::MatrixXd::Zero(dof, dof);
-                    mass.diagonal().setConstant(largest);
-                    mass(0, 0) = smallest;
-                    RequireMinimum(Check(mass, smallest), smallest, true);
-                    const double above = std::nextafter(smallest, std::numeric_limits<double>::infinity());
-                    RequireMinimum(Check(mass, above), smallest, false);
-                    if (std::fegetround() != mode)
-                        throw std::runtime_error("mass validation changed the caller's rounding mode");
+                    for (const double zero : {0., -0.}) {
+                        Eigen::MatrixXd mass = Eigen::MatrixXd::Constant(dof, dof, zero);
+                        mass.diagonal().setConstant(largest);
+                        mass(0, 0) = smallest;
+                        RequireMinimum(Check(mass, smallest), smallest, true);
+                        const double above = std::nextafter(smallest, std::numeric_limits<double>::infinity());
+                        RequireMinimum(Check(mass, above), smallest, false);
+                        if (std::fegetround() != mode)
+                            throw std::runtime_error("mass validation changed the caller's rounding mode");
+                    }
                 }
             }
         }
