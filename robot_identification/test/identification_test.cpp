@@ -471,9 +471,75 @@ void TestActuatorColumnIsolation() {
         throw std::runtime_error("disabled actuator terms changed column ordering or zero entries");
 }
 
+void TestActuatorInputValidation() {
+    using namespace robot_identification;
+    class CountingBackend final : public RegressorBackend {
+    public:
+        explicit CountingBackend(Eigen::Index dof) : dof_(dof) {}
+        std::size_t parameter_count() const noexcept override { return 1; }
+        std::vector<std::string> parameter_names() const override { return {"base"}; }
+        Eigen::MatrixXd Compute(const Sample&) const override {
+            ++calls;
+            return Eigen::MatrixXd::Ones(dof_, 1);
+        }
+        mutable int calls{0};
+
+    private:
+        Eigen::Index dof_;
+    };
+    for (int dof : {1, 2, 7, 14, 32, 64, 128}) {
+        auto backend = std::make_shared<CountingBackend>(dof);
+        std::vector<std::string> names;
+        for (int joint = 0; joint < dof; ++joint) names.push_back("joint" + std::to_string(joint));
+        for (bool bias_only : {false, true}) {
+            JointActuatorRegressorOptions options;
+            if (bias_only) options.drive_inertia = options.viscous_friction = options.coulomb_friction = false;
+            JointActuatorRegressor actuator(backend, names, options);
+            Sample sample;
+            sample.position = sample.velocity = sample.acceleration = Eigen::VectorXd::Zero(dof);
+            const auto require_rejected_before_backend = [&] {
+                const int previous = backend->calls;
+                bool rejected = false;
+                try {
+                    (void)actuator.Compute(sample);
+                } catch (const std::invalid_argument&) {
+                    rejected = true;
+                }
+                if (!rejected || backend->calls != previous)
+                    throw std::runtime_error("invalid actuator input reached the base backend");
+            };
+            for (Eigen::VectorXd* values : {&sample.position, &sample.velocity, &sample.acceleration}) {
+                for (int count : {0, dof - 1, dof + 1}) {
+                    *values = Eigen::VectorXd::Zero(count);
+                    require_rejected_before_backend();
+                }
+                *values = Eigen::VectorXd::Zero(dof);
+                for (int joint = 0; joint < dof; ++joint) {
+                    for (double value :
+                         {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
+                          -std::numeric_limits<double>::infinity()}) {
+                        (*values)[joint] = value;
+                        require_rejected_before_backend();
+                    }
+                    (*values)[joint] = 0.;
+                }
+            }
+            sample.position.setConstant(std::numeric_limits<double>::max());
+            sample.velocity.setConstant(-std::numeric_limits<double>::max());
+            sample.acceleration.setConstant(std::numeric_limits<double>::denorm_min());
+            const int previous = backend->calls;
+            const auto output = actuator.Compute(sample);
+            if (backend->calls != previous + 1 || output.rows() != dof ||
+                output.cols() != 1 + dof * (bias_only ? 1 : 4) || !output.allFinite())
+                throw std::runtime_error("finite extreme actuator inputs were rejected");
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
+    TestActuatorInputValidation();
     TestActuatorColumnIsolation();
     TestRobustWeightScales();
     TestHarmonicScaleRobustness();

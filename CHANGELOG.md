@@ -9,6 +9,9 @@
   Create the general eigensolver only when a valid coupled matrix needs it.
   Add scalar/diagonal/dense benchmarks, four-rounding-mode boundary checks,
   exhaustive off-diagonal position checks and mixed-batch recovery coverage.
+  Check actuator position, velocity and acceleration together after validating
+  their sizes; retain rejection before invoking the base backend, including
+  disabled terms and nonfinite entries at every joint.
 
 - Core 0.2.17 batches raw and processed CSV numeric exports in fixed 16 KiB
   scratch, using locale-independent `to_chars` at 17 significant digits under

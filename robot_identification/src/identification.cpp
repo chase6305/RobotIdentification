@@ -74,9 +74,13 @@ std::vector<std::string> JointActuatorRegressor::parameter_names() const {
 
 Eigen::MatrixXd JointActuatorRegressor::Compute(const Sample& sample) const {
     const Eigen::Index dof = static_cast<Eigen::Index>(joint_names_.size());
-    if (sample.position.size() != dof || sample.velocity.size() != dof || sample.acceleration.size() != dof ||
-        !sample.position.allFinite() || !sample.velocity.allFinite() || !sample.acceleration.allFinite()) {
+    if (sample.position.size() != dof || sample.velocity.size() != dof || sample.acceleration.size() != dof) {
         throw std::invalid_argument("joint actuator regressor sample dimension is invalid");
+    }
+    for (Eigen::Index joint = 0; joint < dof; ++joint) {
+        if (!std::isfinite(sample.position[joint]) || !std::isfinite(sample.velocity[joint]) ||
+            !std::isfinite(sample.acceleration[joint]))
+            throw std::invalid_argument("joint actuator regressor sample dimension is invalid");
     }
     const Eigen::MatrixXd base_block = base_->Compute(sample);
     if (base_block.rows() != dof || base_block.cols() != static_cast<Eigen::Index>(base_->parameter_count()) ||
