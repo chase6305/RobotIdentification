@@ -43,7 +43,7 @@ jobs:
           timeout 15 "$CSV_BENCHMARK_DIR/mass_validation_stress" 1
           for dof in 1 7; do
             for kind in positive mixed diagonal; do
-              "$CSV_BENCHMARK_DIR/mass_validation_bench" "$dof" 3 1 "$kind"
+              "$CSV_BENCHMARK_DIR/mass_validation_bench" "$dof" 7 1 "$kind"
             done
           done
           for format in raw processed; do

@@ -43,8 +43,9 @@ cmake --install build/benchmark-pin
 and default benchmarks require neither ROS nor Pinocchio.
 Standalone CI builds the CSV and mass-validation programs against the installed
 Debug core with Eigen NaN initialization, then checks export readback, generated
-inputs, physical summaries and the comparison helper using three-sample fixtures.
-It also runs a one-second deterministic mass-spectrum campaign.
+inputs and the comparison helper using three-sample CSV fixtures. Mass-validation
+fixtures use seven samples to exercise the complete mixed-validity cycle.
+CI also runs a one-second deterministic mass-spectrum campaign.
 
 ## Timing and allocation measurements
 
