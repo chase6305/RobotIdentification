@@ -71,6 +71,25 @@ void TestDiagonalSignsAndInvalidEntries() {
     }
 }
 
+void TestEveryNonfinitePosition() {
+    for (const int dof : {1, 2, 3, 7, 14}) {
+        for (int row = 0; row < dof; ++row) {
+            for (int column = 0; column < dof; ++column) {
+                for (const double invalid :
+                     {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
+                      -std::numeric_limits<double>::infinity()}) {
+                    Eigen::MatrixXd mass = Eigen::MatrixXd::Identity(dof, dof);
+                    mass(row, column) = invalid;
+                    const auto result = Check(mass, 1e-9);
+                    if (result.passed || result.tested != 1 || result.failed != 1 ||
+                        result.minimum_eigenvalue != std::numeric_limits<double>::infinity())
+                        throw std::runtime_error("a nonfinite mass entry bypassed physical validation");
+                }
+            }
+        }
+    }
+}
+
 void TestNonzeroOffDiagonalEntries() {
     for (const double scale : {std::numeric_limits<double>::denorm_min(), 1e-300, 1e-200, 1.}) {
         Eigen::Matrix2d mass;
@@ -156,6 +175,7 @@ int main() {
     try {
         TestDiagonalScaleSeparation();
         TestDiagonalSignsAndInvalidEntries();
+        TestEveryNonfinitePosition();
         TestNonzeroOffDiagonalEntries();
         TestEveryOffDiagonalPosition();
         TestBatchTransitions();

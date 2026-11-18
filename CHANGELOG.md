@@ -6,6 +6,8 @@
   Preserve weak positive directions beside large diagonal entries, including
   subnormals and exact threshold decisions. Compare every off-diagonal entry
   directly and retain scaled symmetry/eigensolver checks for coupled matrices.
+  Check only the diagonal for finiteness once all off-diagonal entries are
+  proved exactly zero; reject nonfinite entries at every matrix position.
   Create the general eigensolver only when a valid coupled matrix needs it.
   Add scalar/diagonal/dense benchmarks, four-rounding-mode boundary checks,
   exhaustive off-diagonal position checks and mixed-batch recovery coverage.

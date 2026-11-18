@@ -106,6 +106,8 @@ contracts; result status remains `candidate`.
   infinity. Nonfinite predictions or residuals fail.
 - Mass-matrix validation reads exact diagonal eigenvalues before scaling, so
   a weak positive diagonal direction is retained beside a much larger entry.
+  Exact zero off-diagonal entries prove their own finiteness; check the diagonal
+  before using this path, and retain full finite checks for coupled matrices.
   Direct comparisons detect every nonzero coupling, including tiny entries;
   coupled matrices retain scaled symmetry and eigenvalue checks. The general
   eigensolver is created only when needed and reused within the call.

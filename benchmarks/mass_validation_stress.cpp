@@ -109,7 +109,13 @@ int main(int argc, char** argv) {
                         mass.setIdentity();
                     } else {
                         mass.setIdentity();
-                        mass(0, 0) = std::numeric_limits<double>::quiet_NaN();
+                        const double invalid = case_index % 3 == 0   ? std::numeric_limits<double>::quiet_NaN()
+                                               : case_index % 3 == 1 ? std::numeric_limits<double>::infinity()
+                                                                     : -std::numeric_limits<double>::infinity();
+                        const int first = random() % dof;
+                        const int second =
+                            case_index % 2 || dof == 1 ? first : (first + 1 + random() % (dof - 1)) % dof;
+                        mass(first, second) = invalid;
                     }
                     valid_spectrum = false;
                 }

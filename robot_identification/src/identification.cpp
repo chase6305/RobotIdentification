@@ -118,11 +118,16 @@ PhysicalValidationResult ValidateMassMatrices(const Eigen::MatrixXd& joint_posit
         Eigen::MatrixXd scaled_mass_matrix = mass_matrix(joint_position, parameters);
         ++result.tested;
         if (scaled_mass_matrix.rows() != joint_positions.cols() ||
-            scaled_mass_matrix.cols() != joint_positions.cols() || !scaled_mass_matrix.allFinite()) {
+            scaled_mass_matrix.cols() != joint_positions.cols()) {
             ++result.failed;
             continue;
         }
         if (joint_positions.cols() == 1 || IsExactlyDiagonal(scaled_mass_matrix)) {
+            // Exact zero off-diagonal entries are already finite.
+            if (!scaled_mass_matrix.diagonal().allFinite()) {
+                ++result.failed;
+                continue;
+            }
             // Diagonal entries are the exact eigenvalues. Normalizing first can
             // erase a small positive direction beside a much larger diagonal.
             const double eigenvalue = scaled_mass_matrix.diagonal().minCoeff();
@@ -130,9 +135,12 @@ PhysicalValidationResult ValidateMassMatrices(const Eigen::MatrixXd& joint_posit
             if (eigenvalue < required_minimum_eigenvalue) ++result.failed;
             continue;
         }
+        if (!scaled_mass_matrix.allFinite()) {
+            ++result.failed;
+            continue;
+        }
         // Normalize the symmetry comparison so squared Frobenius norms cannot
-        // hide asymmetry through overflow or underflow. The zero matrix keeps
-        // its zero eigenvalue and fails the positive threshold below.
+        // hide asymmetry through overflow or underflow.
         // Eigenvalues are computed at this normalized scale, then restored before comparison.
         const double mass_matrix_scale = scaled_mass_matrix.cwiseAbs().maxCoeff();
         if (mass_matrix_scale != 0.0) scaled_mass_matrix /= mass_matrix_scale;
