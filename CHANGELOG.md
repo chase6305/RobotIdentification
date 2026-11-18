@@ -12,6 +12,12 @@
   Create the general eigensolver only when a valid coupled matrix needs it.
   Add scalar/diagonal/dense benchmarks, four-rounding-mode boundary checks,
   exhaustive off-diagonal position checks and mixed-batch recovery coverage.
+  Compute single-residual RMS and mean absolute error directly from its
+  magnitude, preserving normalized ratios, finite checks and rounding modes.
+  Find weighted excitation normalization from each joint/column's signed
+  endpoints, retaining the original scale arithmetic and normalized matrix.
+  Leave exact positive binary64 zeros unchanged during weighted normalization;
+  negative zero, subnormal coefficients and other formats retain the full path.
 
 - Core 0.2.17 batches raw and processed CSV numeric exports in fixed 16 KiB
   scratch, using locale-independent `to_chars` at 17 significant digits under

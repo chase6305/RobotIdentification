@@ -234,6 +234,55 @@ void TestPreprocessingBounds() {
         }
     }
 }
+void TestScalarMetricBoundaries() {
+    using namespace robot_identification;
+    struct RestoreRounding {
+        int previous = std::fegetround();
+        ~RestoreRounding() {
+            if (previous != -1) std::fesetround(previous);
+        }
+    } restore;
+    RegressionProblem problem;
+    problem.sample_count = problem.dof = 1;
+    problem.regressor = Eigen::MatrixXd::Ones(1, 1);
+    problem.row_weights = Eigen::VectorXd::Ones(1);
+    for (const int mode : {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO}) {
+        if (std::fesetround(mode) != 0) continue;
+        const auto check = [&](double observation, double prediction) {
+            problem.observation = Eigen::VectorXd::Constant(1, observation);
+            volatile double observed = observation, predicted = prediction;
+            const double error = observed - predicted;
+            ValidationMetrics metrics;
+            bool rejected = false;
+            try {
+                metrics = ValidateParameters(problem, Eigen::VectorXd::Constant(1, prediction));
+            } catch (const std::overflow_error&) {
+                rejected = true;
+            }
+            if (rejected != !std::isfinite(error))
+                throw std::runtime_error("scalar metric residual acceptance changed");
+            if (rejected) return;
+            const double magnitude = std::abs(error);
+            const double normalized = observation == 0.
+                                          ? (magnitude == 0. ? 0. : std::numeric_limits<double>::infinity())
+                                          : static_cast<double>(static_cast<long double>(magnitude) /
+                                                                std::abs(static_cast<long double>(observation)));
+            if (metrics.row_count != 1 || metrics.rmse != magnitude || metrics.mean_absolute_error != magnitude ||
+                metrics.max_absolute_error != magnitude || metrics.normalized_rmse != normalized ||
+                std::signbit(metrics.rmse) || std::signbit(metrics.mean_absolute_error) ||
+                std::signbit(metrics.max_absolute_error) || std::fegetround() != mode)
+                throw std::runtime_error("scalar metrics differ from their exact absolute-value oracle");
+        };
+        for (double observation :
+             {0., -0., std::numeric_limits<double>::denorm_min(), std::numeric_limits<double>::min(), 1e-200, -1e200,
+              std::numeric_limits<double>::max(), -std::numeric_limits<double>::max()}) {
+            for (double prediction : {0., .5 * observation, observation, -observation}) check(observation, prediction);
+        }
+        check(0., std::numeric_limits<double>::denorm_min());
+        check(-0., -std::numeric_limits<double>::max());
+    }
+}
+
 void TestMetricScales() {
     robot_identification::RegressionProblem problem;
     problem.sample_count = 4;
@@ -474,6 +523,7 @@ void TestActuatorColumnIsolation() {
 }  // namespace
 
 int main() {
+    TestScalarMetricBoundaries();
     TestActuatorColumnIsolation();
     TestRobustWeightScales();
     TestHarmonicScaleRobustness();

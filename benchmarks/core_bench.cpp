@@ -5,8 +5,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "allocation_hooks.h"
@@ -14,7 +17,9 @@
 template <typename Function>
 void Measure(const char* name, std::size_t count, Function function) {
     function();
-    std::vector<double> elapsed;
+    std::vector<double> elapsed, cpu;
+    elapsed.reserve(5);
+    cpu.reserve(5);
     std::size_t total_allocations = 0, total_new = 0;
     double checksum = 0;
     for (int repeat = 0; repeat < 5; ++repeat) {
@@ -22,22 +27,34 @@ void Measure(const char* name, std::size_t count, Function function) {
         new_allocations = 0;
         counting = true;
         auto start = std::chrono::steady_clock::now();
+        const auto cpu_start = std::clock();
         for (std::size_t index = 0; index < count; ++index) checksum += function();
+        const auto cpu_end = std::clock();
         auto end = std::chrono::steady_clock::now();
         counting = false;
+        if (cpu_start == static_cast<std::clock_t>(-1) || cpu_end == static_cast<std::clock_t>(-1))
+            throw std::runtime_error("process CPU timer is unavailable");
         elapsed.push_back(std::chrono::duration<double, std::micro>(end - start).count() / count);
+        cpu.push_back(1e6 * static_cast<double>(cpu_end - cpu_start) / CLOCKS_PER_SEC / count);
         total_allocations += allocations;
         total_new += new_allocations;
     }
     std::sort(elapsed.begin(), elapsed.end());
-    std::cout << std::setprecision(12) << name << " median_us=" << elapsed[2]
+    std::sort(cpu.begin(), cpu.end());
+    std::cout << std::setprecision(12) << name << " median_us=" << elapsed[2] << " cpu_median_us=" << cpu[2]
               << " malloc_calloc_per_call=" << double(total_allocations) / (5 * count)
               << " new_per_call=" << double(total_new) / (5 * count)
               << " tracked_total_per_call=" << double(total_allocations + total_new) / (5 * count)
               << " checksum=" << checksum << '\n';
 }
 
-int main() {
+int main(int argc, char** argv) {
+    const bool smoke = argc == 2 && std::string(argv[1]) == "--smoke";
+    if (argc != 1 && !smoke) {
+        std::cerr << "Usage: " << argv[0] << " [--smoke]\n";
+        return 2;
+    }
+    const auto iterations = [smoke](std::size_t count) { return smoke ? std::size_t{1} : count; };
     robot_identification::RegressionProblem problem;
     problem.sample_count = 1500;
     problem.dof = 1;
@@ -59,15 +76,31 @@ int main() {
         options.huber_delta = 0.01;
         options.max_iterations = 20;
         options.ridge = ridge;
-        Measure(ridge == 0 ? "irls" : "irls_ridge", 10, [&] {
+        Measure(ridge == 0 ? "irls" : "irls_ridge", iterations(10), [&] {
             auto result = robot_identification::Solve(problem, options);
             return result.parameters.sum() + result.iterations;
         });
     }
-    Measure("validation_metrics", 1000, [&] {
+    Measure("validation_metrics", iterations(1000), [&] {
         const auto metrics = robot_identification::ValidateParameters(problem, truth);
         return metrics.rmse + metrics.mean_absolute_error + metrics.max_absolute_error + metrics.normalized_rmse;
     });
+    for (const int columns : {1, 12}) {
+        robot_identification::RegressionProblem single;
+        single.sample_count = single.dof = 1;
+        single.regressor = Eigen::MatrixXd::Constant(1, columns, .125);
+        single.row_weights = Eigen::VectorXd::Ones(1);
+        const double magnitude = .125 * columns;
+        single.observation = Eigen::VectorXd::Constant(1, 2. * magnitude);
+        const Eigen::VectorXd parameters = Eigen::VectorXd::Ones(columns);
+        Measure(columns == 1 ? "scalar_validation_metrics" : "single_row_validation_metrics", iterations(1000000), [&] {
+            const auto metrics = robot_identification::ValidateParameters(single, parameters);
+            if (metrics.row_count != 1 || metrics.rmse != magnitude || metrics.mean_absolute_error != magnitude ||
+                metrics.max_absolute_error != magnitude || metrics.normalized_rmse != .5)
+                throw std::runtime_error("scalar metric benchmark differs from its analytic fixture");
+            return metrics.rmse + metrics.mean_absolute_error + metrics.max_absolute_error + metrics.normalized_rmse;
+        });
+    }
     Eigen::MatrixXd sine(7, 20), cosine(7, 20);
     for (Eigen::Index row = 0; row < 7; ++row)
         for (Eigen::Index col = 0; col < 20; ++col) {
@@ -76,12 +109,12 @@ int main() {
         }
     robot_identification::HarmonicTrajectory trajectory(Eigen::VectorXd::Zero(7), sine, cosine, 0.1);
     double time = 0;
-    Measure("harmonic_evaluate", 50000, [&] {
+    Measure("harmonic_evaluate", iterations(50000), [&] {
         time += 0.0001;
         auto sample = trajectory.Evaluate(time);
         return sample.position.sum() + sample.jerk.sum();
     });
-    Measure("harmonic_bounds", 10000, [&] {
+    Measure("harmonic_bounds", iterations(10000), [&] {
         const auto bounds = trajectory.ConservativeBounds();
         return bounds.maximum_position.sum() + bounds.maximum_absolute_jerk.sum();
     });
@@ -90,7 +123,7 @@ int main() {
     sparse_cosine.col(0) = cosine.col(0);
     const robot_identification::HarmonicTrajectory sparse(Eigen::VectorXd::Zero(7), sparse_sine, sparse_cosine, .1);
     time = 0.;
-    Measure("harmonic_sparse_evaluate", 50000, [&] {
+    Measure("harmonic_sparse_evaluate", iterations(50000), [&] {
         time += .0001;
         const auto sample = sparse.Evaluate(time);
         return sample.position.sum() + sample.jerk.sum();
@@ -98,7 +131,7 @@ int main() {
     const robot_identification::HarmonicTrajectory constant(
         Eigen::VectorXd::Constant(7, .2), Eigen::MatrixXd::Zero(7, 20), Eigen::MatrixXd::Zero(7, 20), .1);
     time = 0.;
-    Measure("harmonic_constant_evaluate", 50000, [&] {
+    Measure("harmonic_constant_evaluate", iterations(50000), [&] {
         time += .0001;
         const auto sample = constant.Evaluate(time);
         return sample.position.sum() + sample.jerk.sum();

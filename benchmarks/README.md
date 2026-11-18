@@ -45,14 +45,15 @@ Standalone CI builds the CSV and mass-validation programs against the installed
 Debug core with Eigen NaN initialization, then checks export readback, generated
 inputs and the comparison helper using three-sample CSV fixtures. Mass-validation
 fixtures use seven samples to exercise the complete mixed-validity cycle.
-CI also runs a one-second deterministic mass-spectrum campaign.
+CI also checks the scalar metric fixtures with `core_bench --smoke` and runs
+one-second deterministic mass-spectrum, residual-metric and design campaigns.
 
 ## Timing and allocation measurements
 
 | Program | Timed operation | Reporting |
 |---|---|---|
 | `actuator_bench DOF BASE_COLUMNS full\|friction\|bias ITERATIONS` | Compose a stored base block with joint actuator columns | Warmed CPU/wall microseconds and complete output signature |
-| `core_bench` | Huber/ridge solves and validation metrics on 1,500 rows and 12 parameters; seven-axis/20-harmonic trajectories | Warmed median of five repetitions; allocations per call |
+| `core_bench [--smoke]` | Huber/ridge solves and validation metrics on 1,500 rows and 12 parameters; analytic single-row metrics; seven-axis/20-harmonic trajectories | Separate CPU/wall medians of five repetitions; allocations per call |
 | `preprocessing_bench [SAMPLES] [DOF] [WINDOW] [REPETITIONS]` | Smooth, differentiate, materialize and destroy a synthetic dataset | JSON wall/process CPU microseconds per call and checksum |
 | `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Separate wall/process CPU medians, allocations per read, process peak RSS |
 | `csv_write_bench raw\|processed SAMPLES DOF REPETITIONS [long\|short\|zero\|integer\|quarter]` | Export a resident synthetic dataset, including validation and close | JSON wall/process CPU medians, allocations per write, output size/signature and full bitwise readback |

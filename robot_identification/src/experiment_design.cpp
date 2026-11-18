@@ -3,6 +3,8 @@
 #include <Eigen/SVD>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <initializer_list>
 #include <limits>
 #include <stdexcept>
@@ -10,6 +12,20 @@
 
 namespace robot_identification {
 namespace {
+bool CanSkipPositiveZeroScaling(double value) {
+    if constexpr (sizeof(double) == sizeof(std::uint64_t) && std::numeric_limits<double>::is_iec559 &&
+                  std::numeric_limits<double>::radix == 2 && std::numeric_limits<double>::digits == 53 &&
+                  std::numeric_limits<double>::min_exponent == -1021 &&
+                  std::numeric_limits<double>::max_exponent == 1024) {
+        // Positive zero retains its bits through the positive finite scales.
+        std::uint64_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        return bits == 0;
+    } else {
+        return false;
+    }
+}
+
 double ValidateOptions(const ExcitationDesignOptions& options, std::size_t dof, std::size_t parameter_count) {
     if (parameter_count == 0 || dof == 0 || options.sample_count < 3 || options.sample_count > 10000000 ||
         !std::isfinite(options.duration_seconds) || options.duration_seconds <= 0. || options.max_evaluations == 0 ||
@@ -98,10 +114,30 @@ ExcitationDesignQuality EvaluateExcitationDesign(const HarmonicTrajectory& traje
     long double maximum_magnitude = 0.L;
     if (unit_scales)
         maximum_magnitude = regressor.cwiseAbs().maxCoeff();
-    else
-        for (Eigen::Index column = 0; column < regressor.cols(); ++column)
-            for (Eigen::Index row = 0; row < regressor.rows(); ++row)
-                maximum_magnitude = std::max(maximum_magnitude, std::abs(scaled_coefficient(row, column)));
+    else {
+        // Positive scales preserve order within each joint/column. The largest
+        // scaled magnitude occurs at one of its two signed endpoints.
+        const auto joint_count = static_cast<Eigen::Index>(dof);
+        for (Eigen::Index column = 0; column < regressor.cols(); ++column) {
+            for (Eigen::Index joint = 0; joint < joint_count; ++joint) {
+                Eigen::Index minimum_row = joint, maximum_row = joint;
+                long double minimum = regressor(joint, column), maximum = minimum;
+                for (Eigen::Index row = joint + joint_count; row < regressor.rows(); row += joint_count) {
+                    const long double value = regressor(row, column);
+                    if (value < minimum) {
+                        minimum = value;
+                        minimum_row = row;
+                    }
+                    if (value > maximum) {
+                        maximum = value;
+                        maximum_row = row;
+                    }
+                }
+                maximum_magnitude = std::max({maximum_magnitude, std::abs(scaled_coefficient(minimum_row, column)),
+                                              std::abs(scaled_coefficient(maximum_row, column))});
+            }
+        }
+    }
     if (!std::isfinite(maximum_magnitude)) throw std::overflow_error("scaled excitation design matrix overflowed");
     ExcitationDesignQuality result;
     result.parameter_count = parameter_count;
@@ -112,10 +148,14 @@ ExcitationDesignQuality EvaluateExcitationDesign(const HarmonicTrajectory& traje
         for (Eigen::Index column = 0; column < regressor.cols(); ++column)
             for (Eigen::Index row = 0; row < regressor.rows(); ++row)
                 regressor(row, column) /= static_cast<double>(maximum_magnitude);
-    else
-        for (Eigen::Index column = 0; column < regressor.cols(); ++column)
-            for (Eigen::Index row = 0; row < regressor.rows(); ++row)
+    else {
+        for (Eigen::Index column = 0; column < regressor.cols(); ++column) {
+            for (Eigen::Index row = 0; row < regressor.rows(); ++row) {
+                if (CanSkipPositiveZeroScaling(regressor(row, column))) continue;
                 regressor(row, column) = static_cast<double>(scaled_coefficient(row, column) / maximum_magnitude);
+            }
+        }
+    }
     Eigen::JacobiSVD<Eigen::MatrixXd> svd(regressor);
     svd.setThreshold(options.relative_rank_tolerance);
     result.rank = static_cast<std::size_t>(svd.rank());
