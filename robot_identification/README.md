@@ -68,10 +68,20 @@ blank lines and a final row without a newline; writers use LF and the classic
 locale. Leading ASCII whitespace, explicit signs and `0x` numbers are accepted;
 trailing junk, overflow and nonzero values that underflow to zero are rejected.
 Representable subnormals and signed zero round-trip exactly.
+Short numeric rows try exact decimal conversion for integers with one or two digits before the general parser;
+row length only selects the strategy. Raw imports use checked header and row
+invariants; processed imports retain final dataset validation. Raw imports need at least three samples,
+and processed imports need at least one.
+The streaming `dataset_inspect` tool requires at least three samples in either format.
 
 Raw imports use growing column chunks and release each consumed field while
 assembling owning outputs. Final storage still scales with sample/joint count.
-Both writers check buffered output when closing. Keep raw recordings immutable
+Both writers buffer numeric output in fixed 16 KiB scratch. Round-to-nearest
+exports use locale-independent conversion at 17 significant digits; other
+rounding modes retain stream formatting. Output bytes and caller rounding modes
+are preserved, including exact short fixed-point values selected from their bits.
+Failed block writes stop further numeric conversion; closing reports the existing
+write failure. Keep raw recordings immutable
 and create separate processed artifacts. Installed JSON Schemas under
 `share/robot_identification/schema` define session, candidate, review and rollback
 contracts; result status remains `candidate`.

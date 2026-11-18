@@ -41,6 +41,9 @@ cmake --install build/benchmark-pin
 
 `COLCON_IGNORE` excludes these consumers from ROS workspace discovery. The core
 and default benchmarks require neither ROS nor Pinocchio.
+Standalone CI builds the CSV programs against the installed Debug core with Eigen
+NaN initialization, then checks export readback, generated inputs and the comparison
+helper using three-sample fixtures.
 
 ## Timing and allocation measurements
 
@@ -49,7 +52,8 @@ and default benchmarks require neither ROS nor Pinocchio.
 | `actuator_bench DOF BASE_COLUMNS full\|friction\|bias ITERATIONS` | Compose a stored base block with joint actuator columns | Warmed CPU/wall microseconds and complete output signature |
 | `core_bench` | Huber/ridge solves and validation metrics on 1,500 rows and 12 parameters; seven-axis/20-harmonic trajectories | Warmed median of five repetitions; allocations per call |
 | `preprocessing_bench [SAMPLES] [DOF] [WINDOW] [REPETITIONS]` | Smooth, differentiate, materialize and destroy a synthetic dataset | JSON wall/process CPU microseconds per call and checksum |
-| `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Median milliseconds, allocations per read, process peak RSS |
+| `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Separate wall/process CPU medians, allocations per read, process peak RSS |
+| `csv_write_bench raw\|processed SAMPLES DOF REPETITIONS [long\|short\|zero\|integer\|quarter]` | Export a resident synthetic dataset, including validation and close | JSON wall/process CPU medians, allocations per write, output size/signature and full bitwise readback |
 | `design_bench CASE [ITERATIONS]` | One API batch; fixture construction excluded | JSON wall/process CPU microseconds per call and checksum |
 | `parameter_bench CASE [ITERATIONS]` | Warmed `ToBaseParameters`; construction excluded | JSON wall/process CPU time, allocations and checksum |
 | `pinocchio_bench` | Generic and named batch assembly of 1,000 samples on two/14-axis chains | Warmed median milliseconds and allocations per batch |
@@ -127,14 +131,25 @@ python3 benchmarks/generate_raw_csv.py --samples 200000 --dof 14 \
   --output build/raw-fixture.csv
 python3 benchmarks/generate_raw_csv.py --format processed --samples 200000 --dof 14 \
   --output build/processed-fixture.csv
+python3 benchmarks/generate_raw_csv.py --distribution short --samples 200000 --dof 7 \
+  --output build/raw-short-fixture.csv
+python3 benchmarks/generate_raw_csv.py --format processed --distribution zero --samples 200000 --dof 7 \
+  --output build/processed-zero-fixture.csv
+python3 benchmarks/generate_raw_csv.py --distribution integer --samples 200000 --dof 7 \
+  --output build/raw-integer-fixture.csv
 build/benchmarks/csv_bench build/raw-fixture.csv 1
 build/benchmarks/csv_bench build/processed-fixture.csv 5 processed
 python3 benchmarks/compare_csv.py build/before/csv_bench build/after/csv_bench \
   build/raw-fixture.csv --rounds 4 --repetitions 5 --output build/csv-comparison.json
 ```
 
-The generator refuses replacement and reports size/SHA-256. Processed fixtures
-include analytic velocity and acceleration of the sine position. One repetition
+The generator refuses replacement and reports size/SHA-256. The default `long`
+distribution includes analytic velocity and acceleration for processed sine positions.
+`short` cycles through `0,-0,1,-1,0.5,-0.5,2`; `zero` alternates signed zeros;
+`integer` cycles through 0–99.
+These three storage patterns use integer-second timestamps and shift the token
+cycle by signal group and joint; they exercise parsing rather than trajectory dynamics.
+One repetition
 skips warmup; multiple repetitions warm once. `peak_rss_kib` is Linux `getrusage`
 for the whole process, including warmup/launcher history; compare RSS in fresh
 processes. Chunked imports still retain storage proportional to final dataset size.
@@ -144,10 +159,66 @@ in alternating order, checks dimensions/checksums, and hashes the fixture before
 and after with bounded memory. Dependencies must remain discoverable after copying.
 Add `--format processed` or `--cpu CPU` as needed. Reports must use new paths;
 positive `reduction_percent` describes this sample, not a general speedup guarantee.
+When both executables report process CPU time, the helper also includes
+`cpu_median_ms` and `cpu_reduction_percent`. Older benchmark output remains usable
+for wall-time comparisons. The two medians are independent statistics.
 
 For numeric parser changes, compare long decimals and short tokens (including
 signed zero). Processed imports also allocate individual sample vectors, so their
 overall time may change less than raw imports even with the same parser.
+
+### CSV export comparisons
+
+```bash
+build/benchmarks/csv_write_bench raw 200000 7 5 long
+build/benchmarks/csv_write_bench processed 100000 7 5 short
+build/benchmarks/csv_write_bench raw 200000 7 5 quarter
+```
+
+Build this same harness against each matched Release core installation. Compare
+alternating fresh processes, checking `output_bytes` and `output_signature` for
+every pair. The signature is FNV-1a over all file bytes, outside the timed region;
+it is a comparison aid rather than a cryptographic digest. Every final output
+is read back and compared bitwise with the fixture, including signed zero.
+
+`long` uses sine positions; `short` uses dyadic values and signed zero; `zero`
+alternates positive and negative zero. `integer` cycles through -4096 to 4095;
+`quarter` cycles from -1024 to 1023.75 in exact 0.25 steps. The other
+signals repeat or negate those positions. Fixture generation, readback and
+checksum work are untimed. More than one repetition adds one warmup export;
+one repetition measures a cold export. The exporter validates the dataset and
+closes the file on every timed call. CPU and wall medians are separate statistics.
+
+Each process owns a new temporary directory and removes it on normal exit.
+Counts are limited to 3–1,000,000 samples, 1–256 joints, 1–100 repetitions and
+at most 10,000,000 joint samples. The full fixture stays resident; the
+`peak_rss_before_verification_kib` field includes generation, warmup and writes,
+and excludes the additional readback dataset. OS caching and filesystem behavior
+affect these measurements; the program does not synchronize data to stable storage.
+
+### Python inspection comparisons
+
+Use the generated fixture with the same Python interpreter for both revisions:
+
+```bash
+PYTHONPATH=robot_identification_tools python3 - <<'PY'
+from pathlib import Path
+import statistics
+import time
+import timeit
+from robot_identification_tools.dataset_inspect import inspect_dataset
+
+dataset = Path("build/raw-fixture.csv")
+timer = timeit.Timer(lambda: inspect_dataset(dataset), timer=time.process_time)
+print("median_cpu_ms", 1000 * statistics.median(timer.repeat(repeat=5, number=1)))
+PY
+```
+
+Imports are untimed. Alternate fresh invocations from matched baseline/candidate
+checkouts and retain the observations. Verify summaries and input file hashes
+outside timing; use `inspect_dataset_with_digest` to include hashing in the timed
+operation. Compare short fixed-point, longer decimal and scientific-notation rows,
+because the inspection fast path depends on their text length and exponent syntax.
 
 ## Correctness campaigns
 
@@ -171,7 +242,7 @@ and scheduling determine counts. Programs stop on a mismatch and report counts.
 |---|---|
 | `solver_stress` | Orthogonal analytic systems; dimensions, rank, conditioning, weights and ridge |
 | `solver_scale_stress` | Common weights through `1e±300`, design scales through `1e±130`, extended-range covariance |
-| `csv_stress` | Bitwise raw round trips across chunk boundaries, signed zero, finite extremes, LF/CRLF/CR, late-error rejection and retained owning results |
+| `csv_stress` | Bitwise raw/processed round trips across chunk boundaries, dense signed zeros, finite extremes, LF/CRLF/CR, late-error rejection and retained owning results |
 | `preprocessing_stress` | Independent window means and Lagrange derivatives, smoothing, trimming, nonuniform intervals, extreme scales and range rejection |
 | `metrics_stress` | Independent extended-range RMS/absolute errors and normalized ratios, sparse subnormals, zero references, residual overflow |
 | `robust_stress` | Scalar Huber/ridge score roots by bisection, weighted covariance, outliers, weight/design exponents ±1000/±450, one/two-iteration stops |

@@ -138,6 +138,10 @@ RMSE 和平均绝对误差先按最大绝对值缩放再统计，避免平方或
 
 原始和预处理 CSV 均在逐行解析时检查时间戳顺序，遇到重复或倒退立即停止读取并报告实际行号，空行也计入行号。负起始时间仍然有效，只要所有时间戳有限且严格递增。
 
+C++ CSV 读取按行长度选择是否尝试一位或两位十进制整数的精确转换，两条路径执行相同的数值语法、范围、列数和时间戳检查。处理后数据保留返回前的完整校验；原始数据仍至少需要三个样本，处理后数据至少需要一个样本。Python 检查器对两种格式均要求至少三个有效样本。
+
+CSV 导出在最近舍入模式下先筛选尾数低位为零的 binary64 数值，再从位表示精确确认不超过 `1e15` 的四分之一刻度值。此范围的固定小数表示最多需要 17 位有效数字，可用整数转换及 `.25`、`.5`、`.75` 后缀生成相同字节；其他值仍使用通用转换。有符号零和其他舍入模式的输出行为保持不变。
+
 两个 CSV 读取入口也会在解析数据行前拒绝重复关节名或包含回车等 CSV 分隔字符的名称，与写入端的名称限制保持一致，避免读取整份无效数据后才报错。
 
 ### 参考项目评估与本次实现
@@ -501,6 +505,13 @@ predictions or residuals fail explicitly.
 The migration separates robot-specific regressor construction from reusable preprocessing, solving, and validation. `robot_identification` is a plain CMake package and therefore works both standalone and in a colcon workspace. It assumes neither left/right arms, seven joints, nor a fixed base-parameter dimension.
 
 Processed CSV uses `time_s`, followed by ordered `q/`, `dq/`, `ddq/`, and `tau/` columns for every joint. Names must be unique, timestamps strictly increasing, and all values finite. Keep raw recordings immutable and record torque provenance, preprocessing settings, model digest, software revision, exclusions, and operating context.
+
+Raw and processed exports retain classic-locale formatting at 17 significant digits.
+Under round-to-nearest, finite numeric fields use `to_chars` and fixed 16 KiB
+scratch before writing contiguous blocks. Other rounding modes retain stream
+formatting, and exporters leave the caller's mode unchanged. Header order, numeric
+bytes, signed zero and final buffered-write error checks are preserved. Export
+scratch does not grow with the dataset; the input dataset still resides in memory.
 
 Candidate creation validates and hashes the CSV in a single read so its digest always describes the byte stream that passed validation.
 

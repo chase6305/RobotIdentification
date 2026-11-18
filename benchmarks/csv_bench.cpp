@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <ctime>
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
@@ -50,21 +51,28 @@ int main(int argc, char** argv) {
                     dataset.time_seconds.sum() + dataset.position.sum() + dataset.torque.sum()};
         };
         if (repeats > 1) (void)read();
-        std::vector<double> elapsed;
+        std::vector<double> elapsed, cpu;
+        elapsed.reserve(repeats);
+        cpu.reserve(repeats);
         std::size_t total_allocations = 0, total_new = 0, rows = 0, dof = 0;
         double checksum = 0;
         for (int repeat = 0; repeat < repeats; ++repeat) {
             allocations = new_allocations = 0;
             counting = true;
             const auto started = std::chrono::steady_clock::now();
+            const auto cpu_started = std::clock();
             {
                 const auto result = read();
                 rows = result.rows;
                 dof = result.dof;
                 checksum += result.checksum;
             }
+            const auto cpu_finished = std::clock();
             const auto finished = std::chrono::steady_clock::now();
             counting = false;
+            if (cpu_started == static_cast<std::clock_t>(-1) || cpu_finished == static_cast<std::clock_t>(-1))
+                throw std::runtime_error("process CPU timer is unavailable");
+            cpu.push_back(1000. * static_cast<double>(cpu_finished - cpu_started) / CLOCKS_PER_SEC);
             total_allocations += allocations;
             total_new += new_allocations;
             elapsed.push_back(std::chrono::duration<double, std::milli>(finished - started).count());
@@ -72,10 +80,13 @@ int main(int argc, char** argv) {
         std::sort(elapsed.begin(), elapsed.end());
         const auto middle = elapsed.size() / 2;
         const double median = elapsed.size() % 2 ? elapsed[middle] : .5 * elapsed[middle - 1] + .5 * elapsed[middle];
+        std::sort(cpu.begin(), cpu.end());
+        const double cpu_median = cpu.size() % 2 ? cpu[middle] : .5 * cpu[middle - 1] + .5 * cpu[middle];
         struct rusage usage {};
         if (getrusage(RUSAGE_SELF, &usage) != 0) throw std::runtime_error("getrusage failed");
         std::cout << std::setprecision(12) << format << "_csv samples=" << rows << " dof=" << dof
                   << " repeats=" << repeats << " warmup_runs=" << (repeats > 1 ? 1 : 0) << " median_ms=" << median
+                  << " cpu_median_ms=" << cpu_median
                   << " malloc_calloc_per_read=" << double(total_allocations) / repeats
                   << " new_per_read=" << double(total_new) / repeats << " peak_rss_kib=" << usage.ru_maxrss
                   << " checksum=" << checksum << '\n';

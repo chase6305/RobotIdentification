@@ -1,11 +1,14 @@
+#include <cfenv>
 #include <clocale>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <locale>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -73,9 +76,38 @@ void TestNumericGrammar() {
                     throw std::runtime_error("short processed CSV changed its valid row contract");
             }
         }
-        for (const std::string token :
-             {"0", "-0", " +1.25", "\t-2.5e+2", "\r\f\v1.25", "0x1.8p+2", "-0x.8", " +0X1.8P+2", "0x1e2", "1.", ".5",
-              "0e-9999", "-0x0p-9999", "0x1p+2", "-0X1P-2", "1.7976931348623157e308", "2.2250738585072014e-308"}) {
+        for (const std::string token : {"0",
+                                        "-0",
+                                        "9",
+                                        "-9",
+                                        " +7",
+                                        "0x9",
+                                        "-0X9",
+                                        "10",
+                                        "99",
+                                        "-99",
+                                        " +10",
+                                        "00",
+                                        "09",
+                                        "0x10",
+                                        "0x99",
+                                        "-0X99",
+                                        "0x99p+2",
+                                        " +1.25",
+                                        "\t-2.5e+2",
+                                        "\r\f\v1.25",
+                                        "0x1.8p+2",
+                                        "-0x.8",
+                                        " +0X1.8P+2",
+                                        "0x1e2",
+                                        "1.",
+                                        ".5",
+                                        "0e-9999",
+                                        "-0x0p-9999",
+                                        "0x1p+2",
+                                        "-0X1P-2",
+                                        "1.7976931348623157e308",
+                                        "2.2250738585072014e-308"}) {
             const double expected = std::stod(token);
             for (const std::string newline : {"\n", "\r\n"}) {
                 // Blank rows and a final row without a newline remain valid.
@@ -96,25 +128,18 @@ void TestNumericGrammar() {
                 }
             }
         }
-        for (const std::string& token : std::vector<std::string>{"",          " ",
-                                                                 "1 ",        "1junk",
-                                                                 "1e",        "1e+",
-                                                                 "1e-",       "1\t",
-                                                                 "+",         "-",
-                                                                 " \t-",      "nan",
-                                                                 "inf",       "-infinity",
-                                                                 "1e9999",    "1e-9999",
-                                                                 "\"1\"",     "1,2",
-                                                                 "--1",       "+-1",
-                                                                 "-+1",       "++1",
-                                                                 "0x-1",      "0x+1",
-                                                                 "-0x-1",     "0x",
-                                                                 "0x1p",      "0x1e+2",
-                                                                 "0x1p+1024", "0x1p-1075",
-                                                                 "0x1p+-2",   "-0X0P+-999",
-                                                                 "0x1p--2",   "0x1p-+2",
-                                                                 "0x1p++2",   "1_000",
-                                                                 "１２",      std::string("1\0junk", 6)}) {
+        for (const std::string& token :
+             std::vector<std::string>{"",        " ",          "1 ",        "1junk",
+                                      "99junk",  "10 ",        "10x",       "00p0",
+                                      "09e",     "0x99junk",   "1e",        "1e+",
+                                      "1e-",     "1\t",        "+",         "-",
+                                      " \t-",    "nan",        "inf",       "-infinity",
+                                      "1e9999",  "1e-9999",    "\"1\"",     "1,2",
+                                      "--1",     "+-1",        "-+1",       "++1",
+                                      "0x-1",    "0x+1",       "-0x-1",     "0x",
+                                      "0x1p",    "0x1e+2",     "0x1p+1024", "0x1p-1075",
+                                      "0x1p+-2", "-0X0P+-999", "0x1p--2",   "0x1p-+2",
+                                      "0x1p++2", "1_000",      "１２",      std::string("1\0junk", 6)}) {
             ExpectRejected(raw, fixture,
                            Header(raw) + "\n" + Row(raw, "0", token) + "\n" + Row(raw, "1", "2") + "\n" +
                                Row(raw, "2", "3") + "\n");
@@ -233,6 +258,35 @@ void RequireSameValue(double actual, double expected) {
     }
 }
 
+void TestSmallIntegers() {
+    const Fixture fixture;
+    for (const bool raw : {false, true}) {
+        for (int value = 0; value < 100; ++value) {
+            const std::string digits = (value < 10 ? "0" : "") + std::to_string(value);
+            for (const std::string sign : {"", "+", "-", " \t+"}) {
+                const std::string token = sign + digits;
+                std::string signals;
+                for (int group = 0; group < (raw ? 2 : 4); ++group) signals += "," + token;
+                fixture.Write(Header(raw) + "\n0" + signals + "\n11" + signals + "\n99" + signals);
+                const double expected = std::stod(token);
+                if (raw) {
+                    const auto data = robot_identification::ReadRawDatasetCsv(fixture.path);
+                    RequireSameValue(data.time_seconds[2], 99.);
+                    RequireSameValue(data.position(2, 0), expected);
+                    RequireSameValue(data.torque(2, 0), expected);
+                } else {
+                    const auto data = robot_identification::ReadDatasetCsv(fixture.path);
+                    const auto& sample = data.samples[2];
+                    RequireSameValue(sample.time_seconds, 99.);
+                    for (const auto* signal :
+                         {&sample.position, &sample.velocity, &sample.acceleration, &sample.torque})
+                        RequireSameValue((*signal)[0], expected);
+                }
+            }
+        }
+    }
+}
+
 void CheckRoundTrip(const Fixture& fixture, const std::vector<double>& values) {
     robot_identification::RawDataset raw;
     raw.joint_names = {"joint"};
@@ -277,8 +331,7 @@ void CheckRoundTrip(const Fixture& fixture, const std::vector<double>& values) {
     }
 }
 
-void TestFiniteRangeRoundTrip() {
-    const Fixture fixture;
+std::vector<double> FiniteValues() {
     std::vector<double> values{0.0,
                                -0.0,
                                std::numeric_limits<double>::denorm_min(),
@@ -299,8 +352,37 @@ void TestFiniteRangeRoundTrip() {
         std::memcpy(&value, &pattern, sizeof(value));
         if (!std::isfinite(value)) throw std::runtime_error("finite bit-pattern fixture is invalid");
         values.push_back(value);
+        // Coarse significands complement full-width random fractions.
+        const std::uint64_t coarse = pattern & 0xffffffff00000000ULL;
+        std::memcpy(&value, &coarse, sizeof(value));
+        values.push_back(value);
     }
-    CheckRoundTrip(fixture, values);
+    // Decimal notation changes and exactly represented integer boundaries
+    // complement the random significands at every binary exponent.
+    const auto append_neighbors = [&](double value) {
+        for (const double neighbor :
+             {std::nextafter(value, 0.), value, std::nextafter(value, std::numeric_limits<double>::infinity())}) {
+            values.push_back(neighbor);
+            values.push_back(-neighbor);
+        }
+    };
+    // Exact quarter steps and their adjacent representable fractions.
+    for (int index = 1; index <= 257; ++index) append_neighbors(index * .25);
+    for (const double value :
+         {8191.75, 8192., 65535.75, 65536., 999999999999999.75, 1e15, std::ldexp(1., 49), std::ldexp(1., 50)})
+        append_neighbors(value);
+    const double coarse_step = std::ldexp(1., 29);
+    const double coarse_boundary = std::floor(1e15 / coarse_step) * coarse_step;
+    append_neighbors(coarse_boundary);
+    append_neighbors(coarse_boundary + coarse_step);
+    for (int exponent = -323; exponent <= 308; ++exponent) append_neighbors(std::pow(10., exponent));
+    for (const int exponent : {0, 20, 52, 53, 63, 64, 1023}) append_neighbors(std::ldexp(1., exponent));
+    return values;
+}
+
+void TestFiniteRangeRoundTrip() {
+    const Fixture fixture;
+    CheckRoundTrip(fixture, FiniteValues());
     for (bool raw : {false, true}) {
         for (const std::string token : {"4.9406564584124654e-324", "0x1p-1074", "+0X1P-1074", "-0x1p-1074"}) {
             fixture.Write(Header(raw) + "\n" + Row(raw, "0", token) + "\n" + Row(raw, "1", token) + "\n" +
@@ -309,6 +391,60 @@ void TestFiniteRangeRoundTrip() {
             const double actual = raw ? robot_identification::ReadRawDatasetCsv(fixture.path).position(0, 0)
                                       : robot_identification::ReadDatasetCsv(fixture.path).samples[0].position[0];
             RequireSameValue(actual, expected);
+        }
+    }
+}
+
+void TestWriterFormattingAndRounding() {
+    struct RestoreRounding {
+        int previous = std::fegetround();
+        ~RestoreRounding() {
+            if (previous != -1) std::fesetround(previous);
+        }
+    } restore_rounding;
+    const Fixture fixture;
+    auto values = FiniteValues();
+    // Dense zeros exercise repeated buffer flushes without losing their signs.
+    for (int index = 0; index < 8193; ++index) values.push_back(index % 2 ? -0. : 0.);
+    robot_identification::RawDataset raw;
+    robot_identification::Dataset processed;
+    raw.joint_names = processed.joint_names = {"joint"};
+    raw.time_seconds.resize(static_cast<Eigen::Index>(values.size()));
+    raw.position.resize(raw.time_seconds.size(), 1);
+    raw.torque.resize(raw.time_seconds.size(), 1);
+    for (Eigen::Index row = 0; row < raw.time_seconds.size(); ++row) {
+        const double value = values[static_cast<std::size_t>(row)];
+        raw.time_seconds[row] = static_cast<double>(row) * .5;
+        raw.position(row, 0) = value;
+        raw.torque(row, 0) = -value;
+        processed.samples.push_back({raw.time_seconds[row], Eigen::VectorXd::Constant(1, value),
+                                     Eigen::VectorXd::Constant(1, -value), Eigen::VectorXd::Constant(1, value),
+                                     Eigen::VectorXd::Constant(1, -value)});
+    }
+    raw.time_seconds[0] = processed.samples[0].time_seconds = -0.;
+    for (const int mode : {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO}) {
+        if (std::fesetround(mode) != 0) continue;
+        for (const bool is_raw : {true, false}) {
+            // Independent stream formatting specifies the existing byte contract,
+            // including signed zero and the caller's current rounding direction.
+            std::ostringstream expected;
+            expected.imbue(std::locale::classic());
+            expected << Header(is_raw) << '\n' << std::setprecision(17);
+            for (Eigen::Index row = 0; row < raw.time_seconds.size(); ++row) {
+                const double value = raw.position(row, 0);
+                expected << raw.time_seconds[row] << ',' << value;
+                if (!is_raw) expected << ',' << -value << ',' << value;
+                expected << ',' << -value << '\n';
+            }
+            if (is_raw)
+                robot_identification::WriteRawDatasetCsv(raw, fixture.path);
+            else
+                robot_identification::WriteDatasetCsv(processed, fixture.path);
+            std::ifstream input(fixture.path, std::ios::binary);
+            const std::string actual{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+            if (actual != expected.str())
+                throw std::runtime_error("CSV writer changed numeric formatting or directed rounding");
+            if (std::fegetround() != mode) throw std::runtime_error("CSV writer changed the caller's rounding mode");
         }
     }
 }
@@ -423,12 +559,12 @@ void TestMultipleJoints() {
 #if defined(__unix__)
 class RejectFileWrites {
 public:
-    RejectFileWrites() {
+    explicit RejectFileWrites(rlim_t maximum_bytes) {
         if (getrlimit(RLIMIT_FSIZE, &previous_) != 0) throw std::runtime_error("cannot read file size limit");
         previous_handler_ = std::signal(SIGXFSZ, SIG_IGN);
         if (previous_handler_ == SIG_ERR) throw std::runtime_error("cannot ignore file size signal");
         auto limited = previous_;
-        limited.rlim_cur = 0;
+        limited.rlim_cur = maximum_bytes;
         if (setrlimit(RLIMIT_FSIZE, &limited) != 0) {
             std::signal(SIGXFSZ, previous_handler_);
             throw std::runtime_error("cannot set file size limit");
@@ -447,25 +583,45 @@ private:
 void TestFinalWriteFailure() {
     const Fixture fixture;
     for (bool raw : {false, true}) {
-        fixture.Write(Header(raw) + "\n" + Row(raw, "0", "1") + "\n" + Row(raw, "1", "2") + "\n" + Row(raw, "2", "3"));
-        const auto raw_data =
-            raw ? robot_identification::ReadRawDatasetCsv(fixture.path) : robot_identification::RawDataset{};
-        const auto processed =
-            raw ? robot_identification::Dataset{} : robot_identification::ReadDatasetCsv(fixture.path);
-        bool reported_write_failure = false;
-        {
-            const RejectFileWrites limit;
-            try {
-                if (raw) {
-                    robot_identification::WriteRawDatasetCsv(raw_data, fixture.path);
-                } else {
-                    robot_identification::WriteDatasetCsv(processed, fixture.path);
+        for (int row_count : {3, 4099}) {
+            std::string expected = Header(raw) + "\n";
+            for (int row = 0; row < row_count; ++row)
+                expected += Row(raw, std::to_string(row), "1.2345678901234567") + "\n";
+            fixture.Write(expected);
+            const auto raw_data =
+                raw ? robot_identification::ReadRawDatasetCsv(fixture.path) : robot_identification::RawDataset{};
+            const auto processed =
+                raw ? robot_identification::Dataset{} : robot_identification::ReadDatasetCsv(fixture.path);
+            // Small files can fail only at close; larger files also cross the
+            // filebuf and numeric-output buffer boundaries before failing.
+            const std::vector<rlim_t> limits = row_count == 3
+                                                   ? std::vector<rlim_t>{0, static_cast<rlim_t>(expected.size() - 1)}
+                                                   : std::vector<rlim_t>{0, 8191, 8192, 16383, 16384, 16385, 32768};
+            for (const rlim_t maximum_bytes : limits) {
+                bool reported_write_failure = false;
+                {
+                    const RejectFileWrites limit(maximum_bytes);
+                    try {
+                        if (raw) {
+                            robot_identification::WriteRawDatasetCsv(raw_data, fixture.path);
+                        } else {
+                            robot_identification::WriteDatasetCsv(processed, fixture.path);
+                        }
+                    } catch (const std::runtime_error& error) {
+                        reported_write_failure =
+                            std::string(error.what()) ==
+                            (raw ? "failed while writing raw dataset: " : "failed while writing dataset: ") +
+                                fixture.path;
+                    }
                 }
-            } catch (const std::runtime_error& error) {
-                reported_write_failure = std::string(error.what()).find("failed while writing") != std::string::npos;
+                if (!reported_write_failure)
+                    throw std::runtime_error("buffered CSV write failure was silently ignored");
+                std::ifstream input(fixture.path, std::ios::binary);
+                const std::string actual{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+                if (actual.size() > maximum_bytes || expected.compare(0, actual.size(), actual) != 0)
+                    throw std::runtime_error("failed CSV write did not retain a correctly ordered prefix");
             }
         }
-        if (!reported_write_failure) throw std::runtime_error("buffered CSV write failure was silently ignored");
     }
 }
 #endif
@@ -522,7 +678,9 @@ int main() {
     TestTimestampDiagnostics();
     TestInvalidFieldsAcrossSignals();
     TestNumericGrammar();
+    TestSmallIntegers();
     TestFiniteRangeRoundTrip();
+    TestWriterFormattingAndRounding();
     TestLocaleIndependence();
     TestRangeErrorLocation();
     TestMultipleJoints();

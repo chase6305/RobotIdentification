@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Core 0.2.17 batches raw and processed CSV numeric exports in fixed 16 KiB
+  scratch, using locale-independent `to_chars` at 17 significant digits under
+  round-to-nearest. Retain stream formatting in other rounding modes, final
+  buffered-write checks, signed zero, finite extremes and existing output bytes.
+  Abort buffered numeric conversion after a failed block write, then close
+  and report the original write failure.
+  Format binary64 signed zeros directly from their bits, retaining subnormal values.
+  Screen coarse significands before formatting exact quarter steps up to 1e15
+  through integer conversion, preserving the same precision-17 output bytes.
+  Add all-exponent stream-oracle comparisons in four rounding modes and a
+  standalone export benchmark with full bitwise readback and output signatures.
+  Dispatch short numeric rows to exact conversion of decimal integers with one
+  or two digits,
+  retaining the original general parser for longer rows and final processed
+  dataset validation. Preserve sample minimums and diagnostics, and report
+  process CPU medians in reader comparisons.
+- Tools 0.1.3 proves short decimal rows without exponents finite from their
+  restricted alphabet and text length. Retain per-value checks for longer and
+  exponent rows, numeric diagnostics, underflow rejection and original-byte digests.
+
 - Run ROS validation packages sequentially, cap default style checks at two
   workers, and reject invalid core build worker counts, including zero, to
   avoid unbounded or nested process pools.

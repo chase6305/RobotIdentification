@@ -28,6 +28,10 @@ def parse_result(output, expected_format):
     elapsed = float(values["median_ms"])
     if not math.isfinite(elapsed) or elapsed < 0:
         raise ValueError("benchmark reported an invalid elapsed time")
+    if "cpu_median_ms" in values:
+        cpu_elapsed = float(values["cpu_median_ms"])
+        if not math.isfinite(cpu_elapsed) or cpu_elapsed < 0:
+            raise ValueError("benchmark reported an invalid process CPU time")
     identity = (int(values["samples"]), int(values["dof"]), values["checksum"])
     if min(identity[:2]) < 1 or not math.isfinite(float(identity[2])):
         raise ValueError("benchmark reported invalid dimensions or checksum")
@@ -38,6 +42,7 @@ def compare(args):
     fixture_digest = digest(args.dataset)
     records = []
     elapsed = {"before": [], "after": []}
+    cpu_elapsed = {"before": [], "after": []}
     identities = set()
     binaries = {}
     with tempfile.TemporaryDirectory(
@@ -75,6 +80,8 @@ def compare(args):
                     result.stdout, args.format)
                 identities.add(identity)
                 elapsed[label].append(milliseconds)
+                if "cpu_median_ms" in values:
+                    cpu_elapsed[label].append(float(values["cpu_median_ms"]))
                 records.append(
                     dict(variant=label, round=round_index + 1, values=values))
                 print(
@@ -91,18 +98,29 @@ def compare(args):
     }
     reduction = (100. * (1. - medians["after"] / medians["before"])
                  if medians["before"] else None)
-    return dict(binaries=binaries,
-                dataset=dict(path=str(args.dataset.resolve()),
-                             sha256=fixture_digest,
-                             bytes=args.dataset.stat().st_size,
-                             format=args.format),
-                cpu=args.cpu,
-                rounds=args.rounds,
-                repetitions=args.repetitions,
-                warmup_runs_per_process=int(args.repetitions > 1),
-                median_ms=medians,
-                reduction_percent=reduction,
-                runs=records)
+    report = dict(binaries=binaries,
+                  dataset=dict(path=str(args.dataset.resolve()),
+                               sha256=fixture_digest,
+                               bytes=args.dataset.stat().st_size,
+                               format=args.format),
+                  cpu=args.cpu,
+                  rounds=args.rounds,
+                  repetitions=args.repetitions,
+                  warmup_runs_per_process=int(args.repetitions > 1),
+                  median_ms=medians,
+                  reduction_percent=reduction,
+                  runs=records)
+    if all(len(values) == args.rounds for values in cpu_elapsed.values()):
+        cpu_medians = {
+            label: statistics.median(values)
+            for label, values in cpu_elapsed.items()
+        }
+        report.update(
+            cpu_median_ms=cpu_medians,
+            cpu_reduction_percent=(
+                100. * (1. - cpu_medians["after"] / cpu_medians["before"])
+                if cpu_medians["before"] else None))
+    return report
 
 
 def main():

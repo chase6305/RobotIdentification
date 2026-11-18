@@ -1,8 +1,11 @@
 #include <algorithm>
 #include <array>
+#include <cfenv>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <initializer_list>
 #include <iomanip>
@@ -92,6 +95,94 @@ std::ofstream OpenCsvOutput(const std::string& path,
     return output;
 }
 
+struct CsvOutputFailure {};
+
+class CsvNumericOutput {
+public:
+    explicit CsvNumericOutput(std::ostream& output)
+        : output_(output), nearest_rounding_(std::fegetround() == FE_TONEAREST) {}
+    CsvNumericOutput(const CsvNumericOutput&) = delete;
+    CsvNumericOutput& operator=(const CsvNumericOutput&) = delete;
+
+    void WriteNumber(double value) {
+        if (!nearest_rounding_) {
+            // Preserve the stream's directed-rounding behavior for callers
+            // that changed their floating-point environment.
+            output_ << value;
+            return;
+        }
+        // A finite double at 17 significant digits needs at most 24 bytes.
+        // Flush before conversion so every field fits without temporary strings.
+        if (buffer_.data() + buffer_.size() - cursor_ < 32) Flush();
+        if constexpr (sizeof(double) == sizeof(std::uint64_t) && std::numeric_limits<double>::is_iec559 &&
+                      std::numeric_limits<double>::radix == 2 && std::numeric_limits<double>::digits == 53) {
+            // Inspect the representation so zero detection avoids subnormal arithmetic.
+            std::uint64_t bits;
+            std::memcpy(&bits, &value, sizeof(bits));
+            // A single low-bit screen selects zeros and coarse significands.
+            if (static_cast<std::uint32_t>(bits) == 0) {
+                if ((bits << 1) == 0) {
+                    if (bits >> 63) *cursor_++ = '-';
+                    *cursor_++ = '0';
+                    return;
+                }
+                const unsigned exponent = static_cast<unsigned>((bits >> 52) & 0x7ff);
+                // Binary exponents -2..50 bound the shift for value * 4.
+                if (exponent - 1021 <= 52) {
+                    const unsigned shift = 1073 - exponent;
+                    if ((bits & ((std::uint64_t{1} << shift) - 1)) == 0) {
+                        const std::uint64_t significand = (bits & 0x000fffffffffffffULL) | (std::uint64_t{1} << 52);
+                        const std::uint64_t scaled = significand >> shift;
+                        // Exact quarter steps up to 1e15 fit precision-17 fixed notation.
+                        if (scaled <= 4000000000000000ULL) {
+                            if (bits >> 63) *cursor_++ = '-';
+                            const auto converted = std::to_chars(cursor_, buffer_.data() + buffer_.size(), scaled / 4);
+                            if (converted.ec != std::errc{}) throw std::runtime_error("CSV number conversion failed");
+                            cursor_ = converted.ptr;
+                            const unsigned fraction = static_cast<unsigned>(scaled & 3);
+                            if (fraction) {
+                                *cursor_++ = '.';
+                                if (fraction != 2) *cursor_++ = fraction == 1 ? '2' : '7';
+                                *cursor_++ = '5';
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        const auto converted =
+            std::to_chars(cursor_, buffer_.data() + buffer_.size(), value, std::chars_format::general, 17);
+        if (converted.ec != std::errc{}) throw std::runtime_error("CSV number conversion failed");
+        cursor_ = converted.ptr;
+    }
+
+    void WriteSeparator(char separator) {
+        if (!nearest_rounding_) {
+            output_.put(separator);
+            return;
+        }
+        if (cursor_ == buffer_.data() + buffer_.size()) Flush();
+        *cursor_++ = separator;
+    }
+
+    void Flush() {
+        if (cursor_ != buffer_.data()) {
+            output_.write(buffer_.data(), cursor_ - buffer_.data());
+            cursor_ = buffer_.data();
+            if (!output_) throw CsvOutputFailure{};
+        }
+    }
+
+private:
+    std::ostream& output_;
+    const bool nearest_rounding_;
+    // Numeric scratch has a fixed size, independent of joint and sample counts.
+    std::array<char, 16384> buffer_;
+    char* cursor_{buffer_.data()};
+};
+
+template <bool CheckShortInteger>
 bool ParseCsvRow(std::string& line, std::vector<double>& values, std::size_t line_number, double& previous_time) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     const char* cursor = line.data();
@@ -136,7 +227,18 @@ bool ParseCsvRow(std::string& line, std::vector<double>& values, std::size_t lin
             }
         }
         double value = 0.0;
-        const auto conversion = std::from_chars(number, field_end, value, format);
+        const unsigned digit = static_cast<unsigned char>(*number) - '0';
+        std::from_chars_result conversion;
+        if (CheckShortInteger && digit <= 9 && (number + 1 == field_end || number[1] == ',')) {
+            value = static_cast<double>(digit);
+            conversion = {number + 1, std::errc{}};
+        } else if (CheckShortInteger && format == std::chars_format::general && digit <= 9 && field_end - number >= 2 &&
+                   number[1] >= '0' && number[1] <= '9' && (number + 2 == field_end || number[2] == ',')) {
+            value = static_cast<double>(10 * digit + (number[1] - '0'));
+            conversion = {number + 2, std::errc{}};
+        } else {
+            conversion = std::from_chars(number, field_end, value, format);
+        }
         if (format == std::chars_format::general) field_end = conversion.ptr;
         if (conversion.ec == std::errc::invalid_argument) {
             throw std::invalid_argument("CSV numeric field is empty or invalid" + location());
@@ -196,7 +298,12 @@ public:
     bool ReadRow() {
         while (std::getline(input_, line_, separator_)) {
             ++line_number_;
-            if (ParseCsvRow(line_, values, line_number_, previous_time_)) return true;
+            // Choose integer shortcuts once per row; both paths enforce the
+            // same grammar. Divide the byte count to avoid a column-count product.
+            const bool parsed = line_.size() / 4 < values.size()
+                                    ? ParseCsvRow<true>(line_, values, line_number_, previous_time_)
+                                    : ParseCsvRow<false>(line_, values, line_number_, previous_time_);
+            if (parsed) return true;
         }
         if (input_.bad() || !input_.eof())
             throw std::runtime_error("failed while reading " + std::string(kind_) + ": " + path_);
@@ -223,11 +330,20 @@ void WriteRawDatasetCsv(const RawDataset& dataset, const std::string& path) {
     std::string reason;
     if (!dataset.Validate(&reason)) throw std::invalid_argument("invalid raw dataset: " + reason);
     auto output = OpenCsvOutput(path, dataset.joint_names, {"q/", "tau/"}, "raw dataset");
-    for (Eigen::Index row = 0; row < dataset.time_seconds.size(); ++row) {
-        output << dataset.time_seconds[row];
-        for (const auto* values : {&dataset.position, &dataset.torque})
-            for (Eigen::Index joint = 0; joint < values->cols(); ++joint) output << ',' << (*values)(row, joint);
-        output << '\n';
+    try {
+        CsvNumericOutput numeric(output);
+        for (Eigen::Index row = 0; row < dataset.time_seconds.size(); ++row) {
+            numeric.WriteNumber(dataset.time_seconds[row]);
+            for (const auto* values : {&dataset.position, &dataset.torque})
+                for (Eigen::Index joint = 0; joint < values->cols(); ++joint) {
+                    numeric.WriteSeparator(',');
+                    numeric.WriteNumber((*values)(row, joint));
+                }
+            numeric.WriteSeparator('\n');
+        }
+        numeric.Flush();
+    } catch (const CsvOutputFailure&) {
+        // Report the failure through the existing close check below.
     }
     output.close();
     if (!output) throw std::runtime_error("failed while writing raw dataset: " + path);
@@ -299,12 +415,21 @@ void WriteDatasetCsv(const Dataset& dataset, const std::string& path) {
     std::string reason;
     if (!dataset.Validate(&reason)) throw std::invalid_argument("invalid dataset: " + reason);
     auto output = OpenCsvOutput(path, dataset.joint_names, {"q/", "dq/", "ddq/", "tau/"}, "dataset");
-    for (const auto& sample : dataset.samples) {
-        output << sample.time_seconds;
-        for (const auto* values : {&sample.position, &sample.velocity, &sample.acceleration, &sample.torque}) {
-            for (Eigen::Index index = 0; index < values->size(); ++index) output << ',' << (*values)[index];
+    try {
+        CsvNumericOutput numeric(output);
+        for (const auto& sample : dataset.samples) {
+            numeric.WriteNumber(sample.time_seconds);
+            for (const auto* values : {&sample.position, &sample.velocity, &sample.acceleration, &sample.torque}) {
+                for (Eigen::Index index = 0; index < values->size(); ++index) {
+                    numeric.WriteSeparator(',');
+                    numeric.WriteNumber((*values)[index]);
+                }
+            }
+            numeric.WriteSeparator('\n');
         }
-        output << '\n';
+        numeric.Flush();
+    } catch (const CsvOutputFailure&) {
+        // Report the failure through the existing close check below.
     }
     output.close();
     if (!output) throw std::runtime_error("failed while writing dataset: " + path);

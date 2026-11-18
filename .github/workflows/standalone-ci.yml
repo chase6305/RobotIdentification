@@ -5,6 +5,15 @@ on:
 jobs:
   core-and-tools:
     runs-on: ubuntu-22.04
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      CTEST_PARALLEL_LEVEL: '1'
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      NUMEXPR_NUM_THREADS: '1'
+      MAX_JOBS: '2'
+      RAYON_NUM_THREADS: '2'
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -22,6 +31,27 @@ jobs:
           # Make reads of unfilled Eigen storage fail finite-input checks.
           CXXFLAGS: -DEIGEN_INITIALIZE_MATRICES_BY_NAN
         run: ./scripts/test.sh /tmp/robot-identification-ci
+      - name: Build and smoke test CSV benchmark programs
+        env:
+          CXXFLAGS: -DEIGEN_INITIALIZE_MATRICES_BY_NAN
+        run: |
+          CSV_BENCHMARK_DIR=/tmp/robot-identification-ci/benchmarks
+          cmake -S benchmarks -B "$CSV_BENCHMARK_DIR" -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_PREFIX_PATH=/tmp/robot-identification-ci/install
+          cmake --build "$CSV_BENCHMARK_DIR" --parallel 2 --target csv_bench csv_write_bench
+          for format in raw processed; do
+            for distribution in long short zero integer quarter; do
+              "$CSV_BENCHMARK_DIR/csv_write_bench" "$format" 3 2 1 "$distribution"
+            done
+            for distribution in long short zero integer; do
+              python3 benchmarks/generate_raw_csv.py --format "$format" --distribution "$distribution" \
+                --samples 3 --dof 2 --output "$CSV_BENCHMARK_DIR/$format-$distribution.csv"
+              "$CSV_BENCHMARK_DIR/csv_bench" "$CSV_BENCHMARK_DIR/$format-$distribution.csv" 1 "$format"
+            done
+          done
+          python3 benchmarks/compare_csv.py "$CSV_BENCHMARK_DIR/csv_bench" "$CSV_BENCHMARK_DIR/csv_bench" \
+            "$CSV_BENCHMARK_DIR/raw-short.csv" --rounds 1 --repetitions 1 \
+            --output "$CSV_BENCHMARK_DIR/comparison.json"
       - name: Verify Python packaging and console scripts
         run: |
           python3 -m pip install --no-deps --no-build-isolation --target /tmp/identification-tools ./robot_identification_tools

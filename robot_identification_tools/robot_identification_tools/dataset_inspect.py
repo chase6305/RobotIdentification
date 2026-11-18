@@ -26,6 +26,8 @@ _NONZERO_HEX = re.compile(r"[^pP]*[1-9a-fA-F]")
 # Without an exponent, a nonzero decimal this short cannot underflow to zero.
 # The conservative row-length screen lets ordinary zero fields avoid rescanning.
 _MIN_FIXED_UNDERFLOW_LENGTH = -sys.float_info.min_10_exp
+# Within the checked decimal alphabet, fixed-point fields this short are finite.
+_MAX_FIXED_FINITE_LENGTH = sys.float_info.max_10_exp
 
 
 def _parse_number(field: str, line_number: int, column: int) -> float:
@@ -59,13 +61,16 @@ def _parse_numeric_row(line: str, fields: list[str],
         except ValueError:
             pass  # Resolve the exact invalid column through the diagnostic path.
         else:
-            if not all(map(math.isfinite, values)):
+            has_exponent = "e" in line or "E" in line
+            if (has_exponent or
+                    len(line) > _MAX_FIXED_FINITE_LENGTH) and not all(
+                        map(math.isfinite, values)):
                 for column, value in enumerate(values, start=1):
                     if not math.isfinite(value):
                         raise ValueError(
                             f"line {line_number}, column {column} contains a non-finite value"
                         )
-            if ("e" in line or "E" in line or
+            if (has_exponent or
                     len(line) >= _MIN_FIXED_UNDERFLOW_LENGTH) and 0.0 in values:
                 for column, (field, value) in enumerate(zip(fields, values),
                                                         start=1):

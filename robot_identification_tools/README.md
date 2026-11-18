@@ -20,6 +20,9 @@ Packaged filenames, artifact fields, and `schema_version: 1` remain unchanged.
 processed identification CSV headers, finite values, monotonic timestamps,
 sample rate, timing spread, and peak absolute torque.
 
+检查器的两种布局都至少需要三个有效样本。C++ 核心的处理后 CSV 读取器也支持一个或两个样本。
+Inspection requires at least three valid samples in either layout. The C++ processed CSV reader also accepts one or two samples.
+
 `dataset_inspect` 逐行累计统计，额外内存只随关节数增长，不随录制时长增长。即使各时间戳有限，溢出的采样间隔、总时长或平均采样率也会被拒绝。
 
 CSV summaries accumulate one row at a time, using additional memory proportional to joint count, independent of recording length. Non-finite intervals, duration, or mean sample rate are rejected even when the individual timestamps are finite.
@@ -34,6 +37,14 @@ representable subnormal values remain valid. Blank lines are skipped while their
 bytes still contribute to the digest. Diagnostics use physical file lines and
 columns. The `dataset_inspect` CLI reports validation/read failures with a concise
 error and exit status 2.
+
+无指数的十进制行若总字符数不超过 `sys.float_info.max_10_exp`，每个字段的绝对值都小于 `10**max_10_exp`，因此处于浮点有限范围；受限字符集也排除了 NaN。检查器直接保留这些已转换数值，较长或带指数的行仍逐值检查有限性；下溢判定和实际行列诊断保持原有规则。
+
+For decimal rows without exponents, total ASCII length at most
+`sys.float_info.max_10_exp` bounds every field's magnitude below `10**max_10_exp`
+and within the finite floating-point range; the restricted alphabet also excludes NaNs. Such rows need no
+additional finite-value scan. Longer or exponent rows retain individual checks;
+underflow rejection and physical line/column diagnostics follow the same rules.
 
 候选结果创建通过 `inspect_dataset_with_digest()` 在一次流式读取中同时校验 CSV 和计算 SHA-256，摘要保留原始换行与 UTF-8 字节，不会在校验后重新打开数据集。参数和诊断元数据无效时，会在扫描数据集前报错。
 
