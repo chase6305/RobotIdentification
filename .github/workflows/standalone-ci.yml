@@ -37,8 +37,10 @@ jobs:
         run: |
           CSV_BENCHMARK_DIR=/tmp/robot-identification-ci/benchmarks
           cmake -S benchmarks -B "$CSV_BENCHMARK_DIR" -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_PREFIX_PATH=/tmp/robot-identification-ci/install
-          cmake --build "$CSV_BENCHMARK_DIR" --parallel 2 --target csv_bench csv_write_bench mass_validation_bench
+            -DCMAKE_PREFIX_PATH=/tmp/robot-identification-ci/install -DROBOT_IDENTIFICATION_BENCH_STRESS_TARGETS=ON
+          cmake --build "$CSV_BENCHMARK_DIR" --parallel 2 \
+            --target csv_bench csv_write_bench mass_validation_bench mass_validation_stress
+          timeout 15 "$CSV_BENCHMARK_DIR/mass_validation_stress" 1
           for dof in 1 7; do
             for kind in positive mixed diagonal; do
               "$CSV_BENCHMARK_DIR/mass_validation_bench" "$dof" 3 1 "$kind"

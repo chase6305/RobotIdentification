@@ -44,6 +44,7 @@ and default benchmarks require neither ROS nor Pinocchio.
 Standalone CI builds the CSV and mass-validation programs against the installed
 Debug core with Eigen NaN initialization, then checks export readback, generated
 inputs, physical summaries and the comparison helper using three-sample fixtures.
+It also runs a one-second deterministic mass-spectrum campaign.
 
 ## Timing and allocation measurements
 
@@ -266,11 +267,17 @@ Enable stress targets, then run a program with an optional duration in seconds
 (default 60; allowed 1–86,400). Fixed seeds produce reproducible cases; duration
 and scheduling determine counts. Programs stop on a mismatch and report counts.
 
+`mass_validation_stress [SECONDS] [FIRST_CASE]` seeds each case independently for
+direct replay. It checks exact random diagonal eigenvalues, analytically known
+coupled spectra and mixed callback batches across 1–64 joints, and reports the
+finite diagonal-exponent coverage actually passed to the validator.
+
 | Program | Reference and coverage |
 |---|---|
 | `solver_stress` | Orthogonal analytic systems; dimensions, rank, conditioning, weights and ridge |
 | `solver_scale_stress` | Common weights through `1e±300`, design scales through `1e±130`, extended-range covariance |
 | `csv_stress` | Bitwise raw/processed round trips across chunk boundaries, dense signed zeros, finite extremes, LF/CRLF/CR, late-error rejection and retained owning results |
+| `mass_validation_stress` | Random finite diagonal spectra, closed-form coupled spectra, weak directions, invalid shapes/nonfinite entries/asymmetry, batch callback order and case replay |
 | `preprocessing_stress` | Independent window means and Lagrange derivatives, smoothing, trimming, nonuniform intervals, extreme scales and range rejection |
 | `metrics_stress` | Independent extended-range RMS/absolute errors and normalized ratios, sparse subnormals, zero references, residual overflow |
 | `robust_stress` | Scalar Huber/ridge score roots by bisection, weighted covariance, outliers, weight/design exponents ±1000/±450, one/two-iteration stops |
