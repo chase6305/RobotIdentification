@@ -3,7 +3,9 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 using namespace robot_identification;
@@ -82,6 +84,72 @@ void TestAnalyticInformation() {
         Require(extreme.fully_identifiable() &&
                     std::abs(extreme.mean_log_information - expected - 1200. * std::log(10.)) < 1e-10,
                 "a representable log information score was lost to scaling overflow");
+    }
+}
+
+class BlockSequenceBackend final : public RegressorBackend {
+public:
+    std::vector<Eigen::MatrixXd> blocks;
+    mutable std::size_t calls{0};
+    std::size_t parameter_count() const noexcept override { return blocks.front().cols(); }
+    std::vector<std::string> parameter_names() const override {
+        std::vector<std::string> names;
+        for (std::size_t column = 0; column < parameter_count(); ++column) names.push_back(std::to_string(column));
+        return names;
+    }
+    Eigen::MatrixXd Compute(const Sample&) const override {
+        Require(calls < blocks.size(), "excitation evaluation exceeded the sample count");
+        return blocks[calls++];
+    }
+};
+
+void TestInterleavedScaledInformation() {
+    const HarmonicTrajectory trajectory(Eigen::Vector3d::Zero(), Eigen::MatrixXd::Zero(3, 1),
+                                        Eigen::MatrixXd::Zero(3, 1), .1);
+    auto options = Options();
+    options.duration_seconds = 1.;
+    options.sample_count = 3;
+    options.parameter_scales = Eigen::Vector3d(4., .5, 2.);
+    options.torque_noise_standard_deviation = Eigen::Vector3d(.5, 2., 4.);
+    constexpr double values[3][3] = {{1., 2., -2.}, {2., -8., -3.}, {-4., 1., 7.}};
+    const std::array<long double, 3> gram{1344.L, 69.L / 16.L, 15.5L};
+    long double expected = 0.L;
+    for (const auto eigenvalue : gram) expected += std::log(eigenvalue / 3.L) / 3.L;
+    for (int rotation = 0; rotation < 3; ++rotation) {
+        BlockSequenceBackend backend;
+        for (int sample = 0; sample < 3; ++sample) {
+            Eigen::MatrixXd block = Eigen::MatrixXd::Zero(3, 3);
+            for (int joint = 0; joint < 3; ++joint) block(joint, joint) = values[(sample + rotation) % 3][joint];
+            backend.blocks.push_back(block);
+        }
+        const auto quality = EvaluateExcitationDesign(trajectory, backend, options);
+        Require(backend.calls == 3 && quality.fully_identifiable() && quality.rank == 3,
+                "interleaved noise groups changed the analytic rank or callback count");
+        Require(std::abs(quality.mean_log_information - expected) < 1e-12L &&
+                    std::abs(quality.condition_number / std::sqrt(gram[0] / gram[1]) - 1.L) < 1e-12L,
+                "interleaved scaled information differs from its diagonal Gram oracle");
+    }
+    if (std::numeric_limits<long double>::max_exponent > 4 * std::numeric_limits<double>::max_exponent) {
+        options.parameter_scales = Eigen::VectorXd::Constant(1, 2.);
+        options.torque_noise_standard_deviation = Eigen::Vector3d(1., 1e200, 1e-200);
+        for (int peak = 0; peak < 9; ++peak) {
+            BlockSequenceBackend backend;
+            for (int sample = 0; sample < 3; ++sample)
+                backend.blocks.push_back(Eigen::MatrixXd::Constant(3, 1, -std::numeric_limits<double>::denorm_min()));
+            backend.blocks[peak / 3](peak % 3, 0) = (peak % 2 ? -1. : 1.) * std::numeric_limits<double>::max();
+            long double information = 0.L;
+            for (const auto& block : backend.blocks) {
+                for (int joint = 0; joint < 3; ++joint) {
+                    const long double scaled = static_cast<long double>(block(joint, 0)) * 2.L /
+                                               options.torque_noise_standard_deviation[joint];
+                    information += scaled * scaled;
+                }
+            }
+            const auto quality = EvaluateExcitationDesign(trajectory, backend, options);
+            Require(backend.calls == 3 && quality.rank == 1 && quality.condition_number == 1. &&
+                        std::abs(quality.mean_log_information - std::log(information / 3.L)) < 1e-10L,
+                    "an interleaved extreme coefficient lost its representable information score");
+        }
     }
 }
 
@@ -228,6 +296,7 @@ void TestExtremeFixedScales() {
 int main() {
     try {
         TestAnalyticInformation();
+        TestInterleavedScaledInformation();
         TestOptimizationAndBudget();
         TestRejectedTrialsPreserveCoefficients();
         TestUnitScaleRange();

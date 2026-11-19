@@ -101,9 +101,23 @@ contracts; result status remains `candidate`.
   singular values. Scaled root errors preserve representable uncertainty at extreme
   scales. Rank-deficient nullspace zeros follow the minimum-norm pseudoinverse
   convention and do not imply certainty; nonfinite covariance fails.
-- Residual metrics use scaled magnitudes. Normalized RMSE is dimensionless;
+- Residual metrics use scaled magnitudes. Single-residual RMS and mean absolute
+  error equal its magnitude directly. Normalized RMSE is dimensionless;
   zero reference/zero error gives zero and zero reference/nonzero error gives
   infinity. Nonfinite predictions or residuals fail.
+- Weighted excitation normalization scales the minimum and maximum original
+  coefficient of each joint/parameter group to find the shared magnitude.
+  Positive fixed scales preserve order; the normalized matrix and information
+  score retain the original arithmetic, including directed rounding.
+  Exact positive binary64 zeros need no rescaling; negative zero and all
+  nonzero coefficients retain the complete scaling calculation.
+- Mass-matrix validation reads exact diagonal eigenvalues before scaling, so
+  a weak positive diagonal direction is retained beside a much larger entry.
+  Exact zero off-diagonal entries prove their own finiteness; check the diagonal
+  before using this path, and retain full finite checks for coupled matrices.
+  Direct comparisons detect every nonzero coupling, including tiny entries;
+  coupled matrices retain scaled symmetry and eigenvalue checks. The general
+  eigensolver is created only when needed and reused within the call.
 - `HarmonicTrajectory` provides owning `Evaluate` and reusable `EvaluateInto`.
   Matching output dimensions need no vector allocation; failed reusable calls
   may leave partial output. Conservative outward envelopes precede sampled

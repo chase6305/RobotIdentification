@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(robot_identification VERSION 0.2.17 LANGUAGES CXX)
+project(robot_identification VERSION 0.2.18 LANGUAGES CXX)
 
 option(ROBOT_IDENTIFICATION_BUILD_EXAMPLES "Build standalone identification examples" OFF)
 
@@ -53,7 +53,7 @@ install(DIRECTORY schema/ DESTINATION ${CMAKE_INSTALL_DATADIR}/robot_identificat
 
 include(CTest)
 if(BUILD_TESTING)
-  foreach(name IN ITEMS base_parameters experiment_design covariance preprocessing trajectory csv)
+  foreach(name IN ITEMS base_parameters experiment_design covariance preprocessing trajectory physical_validation csv)
     add_executable(robot_identification_${name}_test test/${name}_test.cpp)
     target_link_libraries(robot_identification_${name}_test PRIVATE robot_identification::robot_identification)
     add_test(NAME robot_identification_${name}_test COMMAND robot_identification_${name}_test)

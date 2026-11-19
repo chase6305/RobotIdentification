@@ -57,6 +57,11 @@ MagnitudeStatistics MeasureMagnitudes(const Eigen::VectorXd& values) {
     MagnitudeStatistics result;
     result.maximum = values.cwiseAbs().maxCoeff();
     if (result.maximum == 0.0) return result;
+    if (values.size() == 1) {
+        result.rms = result.mean_absolute = result.maximum;
+        result.rms_over_maximum = 1.;
+        return result;
+    }
     // Scale before squaring or summing: the final metrics are bounded by the
     // largest magnitude even when the unscaled squared norm is not representable.
     long double absolute_sum = 0.0L;

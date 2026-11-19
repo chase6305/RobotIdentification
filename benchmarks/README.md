@@ -41,19 +41,23 @@ cmake --install build/benchmark-pin
 
 `COLCON_IGNORE` excludes these consumers from ROS workspace discovery. The core
 and default benchmarks require neither ROS nor Pinocchio.
-Standalone CI builds the CSV programs against the installed Debug core with Eigen
-NaN initialization, then checks export readback, generated inputs and the comparison
-helper using three-sample fixtures.
+Standalone CI builds the CSV and mass-validation programs against the installed
+Debug core with Eigen NaN initialization, then checks export readback, generated
+inputs and the comparison helper using three-sample CSV fixtures. Mass-validation
+fixtures use seven samples to exercise the complete mixed-validity cycle.
+CI also checks the scalar metric fixtures with `core_bench --smoke` and runs
+one-second deterministic mass-spectrum, residual-metric and design campaigns.
 
 ## Timing and allocation measurements
 
 | Program | Timed operation | Reporting |
 |---|---|---|
 | `actuator_bench DOF BASE_COLUMNS full\|friction\|bias ITERATIONS` | Compose a stored base block with joint actuator columns | Warmed CPU/wall microseconds and complete output signature |
-| `core_bench` | Huber/ridge solves and validation metrics on 1,500 rows and 12 parameters; seven-axis/20-harmonic trajectories | Warmed median of five repetitions; allocations per call |
+| `core_bench [--smoke]` | Huber/ridge solves and validation metrics on 1,500 rows and 12 parameters; analytic single-row metrics; seven-axis/20-harmonic trajectories | Separate CPU/wall medians of five repetitions; allocations per call |
 | `preprocessing_bench [SAMPLES] [DOF] [WINDOW] [REPETITIONS]` | Smooth, differentiate, materialize and destroy a synthetic dataset | JSON wall/process CPU microseconds per call and checksum |
 | `csv_bench CSV [REPETITIONS] [raw\|processed]` | Read, checksum and destroy a complete dataset | Separate wall/process CPU medians, allocations per read, process peak RSS |
 | `csv_write_bench raw\|processed SAMPLES DOF REPETITIONS [long\|short\|zero\|integer\|quarter]` | Export a resident synthetic dataset, including validation and close | JSON wall/process CPU medians, allocations per write, output size/signature and full bitwise readback |
+| `mass_validation_bench DOF SAMPLES ITERATIONS positive\|mixed\|diagonal` | Validate a resident position batch with a synthetic mass callback | JSON wall/process CPU medians, allocations per call, complete counts and minimum-eigenvalue bits |
 | `design_bench CASE [ITERATIONS]` | One API batch; fixture construction excluded | JSON wall/process CPU microseconds per call and checksum |
 | `parameter_bench CASE [ITERATIONS]` | Warmed `ToBaseParameters`; construction excluded | JSON wall/process CPU time, allocations and checksum |
 | `pinocchio_bench` | Generic and named batch assembly of 1,000 samples on two/14-axis chains | Warmed median milliseconds and allocations per batch |
@@ -123,6 +127,33 @@ build/benchmarks/design_bench trajectory-validation 1000
 build/benchmarks/design_bench optimize-scaled 20
 build/benchmarks/preprocessing_bench 10000 7 5 20
 ```
+
+### Mass-matrix validation comparisons
+
+```bash
+build/benchmarks/mass_validation_bench 1 1000 2000 positive
+build/benchmarks/mass_validation_bench 7 300 300 positive
+build/benchmarks/mass_validation_bench 14 100 500 diagonal
+build/benchmarks/mass_validation_bench 7 300 300 mixed
+```
+
+Build the same harness against matched Release installations and alternate fresh
+processes on an allowed CPU. `positive` returns a diagonal shift plus a positive
+rank-one block, with analytically known eigenvalues. `diagonal` returns dyadic
+diagonal entries. `mixed` includes valid matrices, negative/zero eigenvalues,
+wrong dimensions, nonfinite entries and asymmetric matrices. Scalar mixed cases
+replace the asymmetric case with a negative value. Every call checks tested/failed
+counts and the minimum against the verified warmup result; the initial result is
+checked against the analytic fixture before timing.
+
+The timed call includes position copying, callback matrix construction, finite and
+symmetry checks, eigenvalue calculation and workspace destruction. Fixture setup
+and the initial analytic check are untimed. Each fresh process warms once and
+reports independent medians of five repetitions, each containing `ITERATIONS`
+calls. Counts are limited to 1–64 joints, 1–100,000 samples, 1–1,000,000 iterations
+and at most 2,000,000 joint positions. These synthetic callbacks do not represent
+the cost of a robot-specific dynamics backend. Allocation counters have the scope
+described above.
 
 ### CSV comparisons
 
@@ -238,11 +269,17 @@ Enable stress targets, then run a program with an optional duration in seconds
 (default 60; allowed 1–86,400). Fixed seeds produce reproducible cases; duration
 and scheduling determine counts. Programs stop on a mismatch and report counts.
 
+`mass_validation_stress [SECONDS] [FIRST_CASE]` seeds each case independently for
+direct replay. It checks exact random diagonal eigenvalues, analytically known
+coupled spectra and mixed callback batches across 1–64 joints, and reports the
+finite diagonal-exponent coverage actually passed to the validator.
+
 | Program | Reference and coverage |
 |---|---|
 | `solver_stress` | Orthogonal analytic systems; dimensions, rank, conditioning, weights and ridge |
 | `solver_scale_stress` | Common weights through `1e±300`, design scales through `1e±130`, extended-range covariance |
 | `csv_stress` | Bitwise raw/processed round trips across chunk boundaries, dense signed zeros, finite extremes, LF/CRLF/CR, late-error rejection and retained owning results |
+| `mass_validation_stress` | Random finite diagonal spectra, closed-form coupled spectra, weak directions, invalid shapes/nonfinite entries/asymmetry, batch callback order and case replay |
 | `preprocessing_stress` | Independent window means and Lagrange derivatives, smoothing, trimming, nonuniform intervals, extreme scales and range rejection |
 | `metrics_stress` | Independent extended-range RMS/absolute errors and normalized ratios, sparse subnormals, zero references, residual overflow |
 | `robust_stress` | Scalar Huber/ridge score roots by bisection, weighted covariance, outliers, weight/design exponents ±1000/±450, one/two-iteration stops |

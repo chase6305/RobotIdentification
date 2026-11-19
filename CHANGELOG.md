@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Core 0.2.18 reads exact diagonal mass-matrix eigenvalues before normalization.
+  Preserve weak positive directions beside large diagonal entries, including
+  subnormals and exact threshold decisions. Check every off-diagonal entry for
+  exact zero, using native binary64 magnitude bits where available and direct
+  comparisons otherwise. Retain scaled symmetry/eigensolver checks for coupled matrices.
+  Check only the diagonal for finiteness once all off-diagonal entries are
+  proved exactly zero; reject nonfinite entries at every matrix position.
+  Create the general eigensolver only when a valid coupled matrix needs it.
+  Add scalar/diagonal/dense benchmarks, four-rounding-mode boundary checks,
+  exhaustive off-diagonal position checks and mixed-batch recovery coverage.
+  Compute single-residual RMS and mean absolute error directly from its
+  magnitude, preserving normalized ratios, finite checks and rounding modes.
+  Find weighted excitation normalization from each joint/column's signed
+  endpoints, retaining the original scale arithmetic and normalized matrix.
+  Leave exact positive binary64 zeros unchanged during weighted normalization;
+  negative zero, subnormal coefficients and other formats retain the full path.
+
 - Core 0.2.17 batches raw and processed CSV numeric exports in fixed 16 KiB
   scratch, using locale-independent `to_chars` at 17 significant digits under
   round-to-nearest. Retain stream formatting in other rounding modes, final
