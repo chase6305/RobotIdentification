@@ -119,6 +119,8 @@ With `--replay`, `holdout_dense.csv` records the states and torques at every int
 
 The simulator evaluates long references in blocks and interpolates delayed torque from adjacent integration ticks. For a 160 s OpenArm capture with 401 recorded points and an 8.3 ms delay, the collection process used about 64 MiB peak RSS, down from about 110 MiB when it held the full reference and torque history. The recorded arrays matched exactly in that comparison.
 
+Saving the pre-step state directly into the recorder's arrays made dense eight-second captures about 13% faster across both arms in five paired runs. Recorded samples, dense traces, and capture diagnostics matched exactly.
+
 For paired preprocessing comparisons on an existing `--fit-input simulator` run, replay the same raw samples through each window.
 
 ```bash

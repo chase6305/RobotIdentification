@@ -357,6 +357,10 @@ def _rollout_motion(plant,
         np.empty_like(motion[:, 1:]), 4, axis=1)
     sampled_reference_positions = np.empty_like(label_positions)
     dense = np.empty((step_count + 1, motion.shape[1])) if save_dense else None
+    if dense is not None:
+        dense_q, dense_dq, dense_ddq, dense_torque = np.split(dense[:, 1:],
+                                                              4,
+                                                              axis=1)
     delayed_torque_steps = None
     torque_row = 0
     if torque_delay_seconds:
@@ -371,15 +375,20 @@ def _rollout_motion(plant,
     control_data = mujoco.MjData(controller.model)
     peak_command = np.zeros_like(effort_limits)
     negative_effort_limits = -effort_limits
+    natural_order = np.arange(len(effort_limits))
+    q_index = slice(None) if np.array_equal(plant.positions,
+                                            natural_order) else plant.positions
+    v_index = slice(None) if np.array_equal(plant.dofs,
+                                            natural_order) else plant.dofs
     saturation_steps = 0
     row = 0
     for index, (q_ref, dq_ref, ddq_ref) in enumerate(references):
         if index == 0:
-            plant_data.qpos[plant.positions] = q_ref
-            plant_data.qvel[plant.dofs] = dq_ref
+            plant_data.qpos[q_index] = q_ref
+            plant_data.qvel[v_index] = dq_ref
         step = index - warmup_steps
-        position = plant_data.qpos[plant.positions]
-        velocity = plant_data.qvel[plant.dofs]
+        position = plant_data.qpos[q_index]
+        velocity = plant_data.qvel[v_index]
         desired_acceleration = (ddq_ref + POSITION_GAIN_S2 *
                                 (q_ref - position) + VELOCITY_GAIN_S *
                                 (dq_ref - velocity))
@@ -414,7 +423,22 @@ def _rollout_motion(plant,
                         torque - previous_torque)
                 torque_row += 1
             previous_torque[:] = torque
-        plant_data.qfrc_applied[plant.dofs] = torque
+        save_sample = row < len(sample_steps) and step == sample_steps[row]
+        save_step = dense is not None and 0 <= step <= step_count
+        # Save the state views before MuJoCo advances the integration step.
+        if save_sample:
+            label_positions[row] = position
+            label_velocities[row] = velocity
+            sampled_reference_positions[row] = q_ref
+            if delayed_torque_steps is None:
+                label_torques[row] = torque
+        if save_step:
+            dense[step, 0] = time
+            dense_q[step] = position
+            dense_dq[step] = velocity
+            dense_torque[step] = torque
+
+        plant_data.qfrc_applied[v_index] = torque
         if step < final_step:
             mujoco.mj_step(plant.model, plant_data)
         else:
@@ -423,19 +447,14 @@ def _rollout_motion(plant,
             raise ValueError(
                 f"{name} MuJoCo constraint or integration warning at t={time:.6g} s"
             )
-        if dense is not None and 0 <= step <= step_count:
-            dense[step, 0] = time
-            dense[step, 1:] = np.concatenate(
-                (position, velocity, plant_data.qacc[plant.dofs], torque))
-        if row < len(sample_steps) and step == sample_steps[row]:
-            label_positions[row] = position
-            label_velocities[row] = velocity
-            # During Euler stepping qacc still describes the pre-update state.
-            label_accelerations[row] = plant_data.qacc[plant.dofs]
-            sampled_reference_positions[row] = q_ref
-            if delayed_torque_steps is None:
-                label_torques[row] = torque
-            row += 1
+        # During Euler stepping qacc still describes the pre-update state.
+        if save_sample or save_step:
+            acceleration = plant_data.qacc[v_index]
+            if save_sample:
+                label_accelerations[row] = acceleration
+                row += 1
+            if save_step:
+                dense_ddq[step] = acceleration
     if row != len(motion) or (delayed_torque_steps is not None and
                               torque_row != len(motion)):
         raise ValueError(f"{name} did not capture every requested sample")
