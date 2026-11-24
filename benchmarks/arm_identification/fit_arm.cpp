@@ -400,7 +400,7 @@ void Fit(const char* nominal_urdf,
     const auto calibration = arm.BuildProblem(calibration_data);
     const BaseParameterBasis basis(calibration.regressor);
     const auto holdout_data = ReadDatasetCsv((directory / "holdout.csv").string());
-    const auto full_holdout = arm.BuildProblem(holdout_data);
+    auto full_holdout = arm.BuildProblem(holdout_data);
     const auto holdout = basis.ReduceProblem(full_holdout);
     const auto full_nominal = DynamicParameters(*model, std::vector<double>(drive_parameters.size()));
     const auto nominal = basis.ToBaseParameters(full_nominal);
@@ -419,6 +419,15 @@ void Fit(const char* nominal_urdf,
                   << ", reduction=" << reduction_error << '\n';
         throw std::runtime_error("clean holdout oracle check failed");
     }
+    const auto holdout_reconstruction_error = basis.ReconstructionError(full_holdout.regressor);
+    const auto payload_column = 10 * (model->njoints - 2);
+    Eigen::VectorXd payload_prior;
+    RegressionProblem payload_holdout;
+    if (estimate_payload) {
+        payload_prior = DynamicParameters(*model, drive_parameters);
+        payload_holdout = arm_identification::PayloadRegression(full_holdout, payload_prior, payload_column);
+    }
+    full_holdout = {};
     const BaseParameterRegressor base(arm.backend(), basis);
     const arm_identification::ForwardValidation validation(base, calibration_data, holdout_data);
 
@@ -426,7 +435,7 @@ void Fit(const char* nominal_urdf,
               << ",\"full_parameter_count\":" << basis.full_parameter_count()
               << ",\"base_parameter_count\":" << basis.parameter_count()
               << ",\"calibration_reconstruction_error\":" << basis.calibration_error()
-              << ",\"holdout_reconstruction_error\":" << basis.ReconstructionError(full_holdout.regressor)
+              << ",\"holdout_reconstruction_error\":" << holdout_reconstruction_error
               << ",\"nominal_holdout_rmse_nm\":" << nominal_rmse
               << ",\"oracle_holdout_max_absolute_error_nm\":" << engine_error
               << ",\"reduced_oracle_max_difference_nm\":" << reduction_error << ",\"parameter_names\":[";
@@ -456,9 +465,11 @@ void Fit(const char* nominal_urdf,
     std::optional<arm_identification::PayloadFit> payload;
     std::optional<arm_identification::PhysicalArmFit> physical_arm;
     for (const auto& name : {"baseline", "optimized"}) {
+        const bool optimized = std::string_view(name) == "optimized";
         const auto filename = std::string("train_") + name + ".csv";
-        const auto full_train = build(filename.c_str());
+        auto full_train = build(filename.c_str());
         const auto train = basis.ReduceProblem(full_train);
+        if (!optimized || (!estimate_payload && !estimate_physical_arm)) full_train = {};
         const auto ols = Solve(train);
         SolverOptions options;
         options.huber_delta = huber_delta ? *huber_delta : EstimateHuberDelta(train, ols);
@@ -468,7 +479,7 @@ void Fit(const char* nominal_urdf,
         std::cout << ",\"huber\":";
         WriteFit(robust, holdout, oracle, options.huber_delta, validation);
         std::cout << '}';
-        if (std::string_view(name) == "optimized") {
+        if (optimized) {
             WriteTorquePrediction(holdout_data, holdout.regressor * robust.parameters,
                                   directory / "holdout_predicted_optimized_huber.csv");
             if (estimate_physical_arm) {
@@ -483,10 +494,11 @@ void Fit(const char* nominal_urdf,
             }
             optimized_parameters = std::move(robust.parameters);
             optimized_delta = options.huber_delta;
-            if (estimate_payload)
-                payload = arm_identification::FitPayload(full_train, full_holdout,
-                                                         DynamicParameters(*model, drive_parameters),
-                                                         10 * (model->njoints - 2), optimized_delta);
+            if (estimate_payload) {
+                const auto payload_train =
+                    arm_identification::PayloadRegression(full_train, payload_prior, payload_column);
+                payload = arm_identification::FitPayload(payload_train, payload_holdout, optimized_delta);
+            }
         }
     }
     if (payload) {

@@ -164,16 +164,30 @@ PhysicalArmFit FitPhysicalArm(const robot_identification::RegressionProblem& tra
     for (Eigen::Index joint = 0; joint < joint_count; ++joint)
         prior.segment<kBodyCoordinates>(kBodyCoordinates * joint) = PackSymmetric(Eigen::Matrix4d::Identity());
 
-    const Eigen::VectorXd weights = row_weights.array().sqrt();
-    const Eigen::MatrixXd weighted = training.regressor.array().colwise() * weights.array();
-    const double count = static_cast<double>(weighted.rows());
+    const double count = static_cast<double>(training.regressor.rows());
     // Scale the dimensionless prior with inverse sample count and observed torque variance.
     const double prior_weight =
         std::clamp(residual_scale * residual_scale / count, kMinimumPriorWeight, kMaximumPriorWeight);
-    Eigen::MatrixXd information = map.transpose() * (weighted.transpose() * weighted / count) * map;
+    Eigen::MatrixXd gram = Eigen::MatrixXd::Zero(nominal.size(), nominal.size());
+    Eigen::VectorXd weighted_target = Eigen::VectorXd::Zero(nominal.size());
+    constexpr Eigen::Index kBlockRows = 2048;
+    const auto total_rows = training.regressor.rows();
+    Eigen::MatrixXd scratch(std::min(total_rows, kBlockRows), nominal.size());
+    for (Eigen::Index first = 0; first < total_rows;) {
+        const auto rows = std::min(kBlockRows, total_rows - first);
+        const auto regressor = training.regressor.middleRows(first, rows);
+        const Eigen::VectorXd weights = row_weights.segment(first, rows).array().sqrt();
+        auto weighted = scratch.topRows(rows);
+        weighted = regressor.array().colwise() * weights.array();
+        const Eigen::VectorXd residual =
+            weights.cwiseProduct(training.observation.segment(first, rows) - regressor * nominal);
+        gram.selfadjointView<Eigen::Lower>().rankUpdate(weighted.transpose());
+        weighted_target.noalias() += weighted.transpose() * residual;
+        first += rows;
+    }
+    Eigen::MatrixXd information = map.transpose() * gram.selfadjointView<Eigen::Lower>() * map / count;
     information.diagonal().array() += prior_weight;
-    const Eigen::VectorXd residual = weights.cwiseProduct(training.observation - training.regressor * nominal);
-    const Eigen::VectorXd target = map.transpose() * (weighted.transpose() * residual / count);
+    const Eigen::VectorXd target = map.transpose() * weighted_target / count;
 
     PhysicalArmFit result;
     result.prior_weight = prior_weight;

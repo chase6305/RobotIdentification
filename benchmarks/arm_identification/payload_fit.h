@@ -20,10 +20,13 @@ struct PayloadFit {
     std::optional<PayloadInertia> physical;
 };
 
-[[nodiscard]] PayloadFit FitPayload(const robot_identification::RegressionProblem& training,
+[[nodiscard]] robot_identification::RegressionProblem PayloadRegression(
+    const robot_identification::RegressionProblem& arm,
+    const Eigen::VectorXd& known_arm_parameters,
+    Eigen::Index payload_column);
+
+[[nodiscard]] PayloadFit FitPayload(const robot_identification::RegressionProblem& train,
                                     const robot_identification::RegressionProblem& holdout,
-                                    const Eigen::VectorXd& known_arm_parameters,
-                                    Eigen::Index payload_column,
                                     double huber_delta);
 
 }  // namespace arm_identification

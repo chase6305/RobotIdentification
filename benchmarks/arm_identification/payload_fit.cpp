@@ -6,16 +6,16 @@
 #include <stdexcept>
 
 namespace arm_identification {
-namespace {
 using robot_identification::RegressionProblem;
 
-RegressionProblem SubtractKnownArm(const RegressionProblem& original,
-                                   const Eigen::VectorXd& known,
-                                   Eigen::Index first_column) {
+RegressionProblem PayloadRegression(const RegressionProblem& original,
+                                    const Eigen::VectorXd& known,
+                                    Eigen::Index first_column) {
     return {original.regressor.middleCols(first_column, 10), original.observation - original.regressor * known,
             original.row_weights, original.sample_count, original.dof};
 }
 
+namespace {
 Eigen::Matrix3d InertiaAboutOrigin(const Eigen::VectorXd& parameters) {
     Eigen::Matrix3d inertia;
     inertia << parameters[4], parameters[5], parameters[7], parameters[5], parameters[6], parameters[8], parameters[7],
@@ -29,13 +29,7 @@ void SetInertiaAboutOrigin(Eigen::VectorXd& parameters, const Eigen::Matrix3d& i
 }
 }  // namespace
 
-PayloadFit FitPayload(const RegressionProblem& training,
-                      const RegressionProblem& holdout,
-                      const Eigen::VectorXd& known_arm_parameters,
-                      Eigen::Index payload_column,
-                      double huber_delta) {
-    const auto train = SubtractKnownArm(training, known_arm_parameters, payload_column);
-    const auto validation = SubtractKnownArm(holdout, known_arm_parameters, payload_column);
+PayloadFit FitPayload(const RegressionProblem& train, const RegressionProblem& holdout, double huber_delta) {
     robot_identification::SolverOptions options;
     options.huber_delta = huber_delta;
     const auto fit = robot_identification::Solve(train, options);
@@ -43,7 +37,7 @@ PayloadFit FitPayload(const RegressionProblem& training,
 
     PayloadFit result;
     result.estimated_mass = fit.parameters[0];
-    result.unconstrained_holdout_rmse = robot_identification::ValidateParameters(validation, fit.parameters).rmse;
+    result.unconstrained_holdout_rmse = robot_identification::ValidateParameters(holdout, fit.parameters).rmse;
     if (result.estimated_mass <= 0.) return result;
 
     const Eigen::Vector3d center = fit.parameters.segment<3>(1) / result.estimated_mass;
@@ -70,7 +64,7 @@ PayloadFit FitPayload(const RegressionProblem& training,
     SetInertiaAboutOrigin(physical_parameters, physical_inertia + parallel_axis);
     result.physical =
         PayloadInertia{result.estimated_mass, center, physical_inertia,
-                       robot_identification::ValidateParameters(validation, physical_parameters).rmse, projected};
+                       robot_identification::ValidateParameters(holdout, physical_parameters).rmse, projected};
     return result;
 }
 
