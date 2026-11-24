@@ -4,6 +4,8 @@
 
 Robot dynamics parameter identification: named joint datasets, preprocessing, regression, diagnostics, physical validation, and immutable candidate artifacts. The C++17/Eigen core builds independently; Pinocchio and ROS 2 are optional adapters.
 
+For the PM01 and OpenArm simulation quick start, see the [MuJoCo arm identification experiment](#mujoco-arm-identification-experiment).
+
 | Package | Responsibility | Additional dependency |
 |---|---|---|
 | `robot_identification` | Arbitrary-DoF datasets, CSV, preprocessing, weighted/ridge/Huber solving, observability, and physical checks | Eigen |
@@ -58,13 +60,23 @@ Reproduce synthetic solver and Pinocchio assembly measurements with the [standal
 
 ## MuJoCo arm identification experiment
 
-Generate simulated data for the HumanoidAssets PM01 left arm (5 axes) and OpenArm left arm (7 axes), fit identifiable inertial combinations with the Pinocchio regressor and C++ solver, and validate torque predictions on a separate trajectory. See the [experiment and reproduction commands](benchmarks/arm_identification/README.md).
+Run point design, MuJoCo data collection, dynamics identification, and independent trajectory replay for the fixed-base PM01 left arm (5 axes) and OpenArm left arm (7 axes). The launcher sets up Pinocchio 4.1.0 and MuJoCo 3.13.0 in an isolated environment.
+
+On Ubuntu, install `build-essential`, `cmake`, `libeigen3-dev`, and `python3-venv`, and make sure `flock` is available. Run from the repository root. The launcher reads the URDFs from the sibling `../HumanoidAssets` directory by default. For an existing checkout elsewhere, pass `--assets-root /path/to/HumanoidAssets`. [Dependencies and asset setup](benchmarks/arm_identification/README.md#quick-start)
 
 ```bash
 ./scripts/run_arm_identification.sh --demo --output build/arms-demo
 ```
 
-Export automatic points with `--design-only`, collect from the saved plan with `--reference-plan`, and rerun identification on the capture with `--refit`.
+The demo generates a baseline training trajectory, an optimized training trajectory, and an independent holdout for each arm, with 401 points per trajectory. You can export the points first and use the saved plan for collection and fitting.
+
+```bash
+./scripts/run_arm_identification.sh --design-only --actuator-scale 1 --output build/arm-points
+./scripts/run_arm_identification.sh --demo --reference-plan build/arm-points \
+  --output build/arm-planned-demo
+```
+
+The demo writes `build/arms-demo/report.json` and stores each arm's points, raw samples, and URDF, MJCF, and MJB models under `pm01/` and `openarm/`. Use a new output directory for each run. Pass a saved capture to `--refit` to rerun identification. [Default results](benchmarks/arm_identification/README.md#default-demo-results) · [Output files](benchmarks/arm_identification/README.md#outputs) · [Refit a capture](benchmarks/arm_identification/README.md#refit-a-capture)
 
 ## Offline tools
 

@@ -1,44 +1,115 @@
 # MuJoCo arm identification
 
-This experiment uses the left arm of EngineAI PM01 (5 joints, fixed torso, fixed elbow end retained) and the left arm of OpenArm (7 joints, fixed base, detachable gripper omitted). The runner reads the two URDFs from a local [HumanoidAssets checkout](https://github.com/chase6305/HumanoidAssets/tree/067393d2b63b7ffa5b022e847ef2f4436799ad70) and generates mesh-free URDFs in the output directory. The extracted models preserve the joint frames, axes, limits, and moving-link inertias. The default plant uses rigid-body dynamics in free space.
+[简体中文快速入口](../../README.md#mujoco-手臂辨识实验)
 
-## Run
+This experiment uses the left arm of EngineAI PM01 (5 joints, fixed torso, fixed elbow end retained) and the left arm of OpenArm (7 joints, fixed base, detachable gripper omitted). The extracted URDFs preserve the joint frames, axes, limits, and moving-link inertias. The arms move in free space in MuJoCo.
 
-The launcher builds the C++ tools and creates an isolated Python environment using the pinned wheels for Pinocchio 4.1.0 and MuJoCo 3.13.0. On Ubuntu it needs a C++17 compiler, CMake, Eigen 3.4 (`libeigen3-dev`), and Python with `venv`. Fresh launcher builds were verified with Python 3.10 and 3.12.
+## Quick start
 
-The exported MJCF files were also reloaded and replayed using MuJoCo 4.0.1 on Python 3.12. The manual launcher below supports a separate simulator environment with an existing native benchmark build.
+Run the commands from the RobotIdentification repository root. On Ubuntu, install the native build tools, Eigen 3.4, Python with `venv`, and `flock`.
+
+```bash
+sudo apt-get update
+sudo apt-get install build-essential cmake git libeigen3-dev python3-venv util-linux
+```
+
+The launcher creates an isolated environment with Pinocchio 4.1.0 and MuJoCo 3.13.0 and builds the C++ benchmark. Fresh launcher builds were verified with Python 3.10 and 3.12. [Pinned dependencies](requirements.txt)
+
+Use a sibling `../HumanoidAssets` directory with the two URDFs below, or pass its location with `--assets-root /path/to/HumanoidAssets`. The runner generates its own mesh-free models from these files.
+
+| Arm | Path relative to the asset root | Select one arm |
+| --- | --- | --- |
+| PM01 | `Engineai_PM01/urdf/robot.urdf` | `--robot pm01` |
+| OpenArm | `OpenArm/left_arm.urdf` | `--robot openarm` |
+
+For a new asset checkout, fetch the same revision and files used by CI. [HumanoidAssets revision](https://github.com/chase6305/HumanoidAssets/tree/067393d2b63b7ffa5b022e847ef2f4436799ad70) · [Arm identification workflow](../../.github/workflows/arm-identification-ci.yml)
+
+```bash
+git clone --filter=blob:none --no-checkout \
+  https://github.com/chase6305/HumanoidAssets.git ../HumanoidAssets
+git -C ../HumanoidAssets sparse-checkout set --no-cone \
+  /Engineai_PM01/urdf/robot.urdf /OpenArm/left_arm.urdf
+git -C ../HumanoidAssets checkout --detach 067393d2b63b7ffa5b022e847ef2f4436799ad70
+```
+
+Once the URDFs are in place, run the demo.
 
 ```bash
 ./scripts/run_arm_identification.sh --demo --output build/arms-demo
 ```
 
-The demo prepares both arms, generates reference points, captures raw encoder and torque data in MuJoCo, and estimates derivatives with a periodic Fourier fit. It exports the identified whole-arm and payload models and replays 16 validation windows in the reloaded arm model. With the default build directory, native build output is saved to `build/arm-identification/build.log`. The runner prints the results and the path to `report.json`.
+The demo generates bounded Fourier references, records encoder positions and applied torques, estimates joint velocities and accelerations from positions, then fits and exports the whole-arm and payload models. It prints a summary and the path to `report.json`. Each run needs a new output directory. Omit `--output` in `--demo` mode to use an automatically named directory.
 
-To run forward acquisition using the simulated derivative states, use the simpler rollout command.
+The launcher reuses its environment and native build in `build/arm-identification/`. If setup fails, check `build/arm-identification/build.log`. To use a different Python interpreter for a fresh environment, set `PYTHON` and point `ARM_IDENTIFICATION_BUILD_DIR` at a new build directory.
 
-```bash
-./scripts/run_arm_identification.sh --assets-root ../HumanoidAssets \
-  --acquisition rollout --output build/arm-rollout
-```
+## Default demo results
 
-Use `--acquisition inverse` for prescribed-state inverse dynamics, `--torque-noise-nm 0 --outlier-nm 0` for the clean control, or `--robot pm01` / `--robot openarm` for a single arm. The default asset location is the sibling `HumanoidAssets` checkout. The launcher reuses its build directory on later runs. Each experiment uses a new output directory. See the [arm identification workflow](../../.github/workflows/arm-identification-ci.yml).
+The torque RMSE is measured on an independent trajectory. The position RMSE is measured after reloading each whole-arm model and running 16 open-loop windows of 100 ms under recorded torques. The payload mass is fitted separately using the known arm and drive model. The simulated payload is 0.35 kg.
 
-Export automatic points and their analytic trajectory coefficients before running the simulator.
+| Left arm | Base / full coordinates | Holdout torque RMSE [N·m] | Reloaded replay position RMSE [rad] | Fitted payload [kg] |
+| --- | ---: | ---: | ---: | ---: |
+| PM01 | 39 / 60 | 0.00382 | 0.000100 | 0.351138 |
+| OpenArm | 55 / 84 | 0.00406 | 0.000606 | 0.350644 |
 
-```bash
-./scripts/run_arm_identification.sh --design-only --sample-count 401 --output build/arm-points
-```
+All 1,024 separately sampled workspace states per arm were within the effort limits. The identified models had positive mass matrices at all of those states and reached workspace torque RMSE of 0.01143 N·m for PM01 and 0.03714 N·m for OpenArm. The same reference points were collected and fitted under MuJoCo 4.0.1. The whole-arm holdout RMSE changed by less than `1e-9 N·m` for each arm.
 
-Use `--training-period-s` and `--holdout-period-s` to set each cycle's duration. The design rescales the initial amplitude when a shorter period would exceed the configured velocity, acceleration, or jerk bounds. The generated CSVs and Fourier coefficients use the requested period and the report records the kinematic bounds.
+## Generate and reuse point plans
 
-Run acquisition later from a saved reference plan. The runner verifies the asset hash, joint order, timestamps, and Fourier states, then uses the saved points, period, and regressor structure.
+Each arm has two 8 s training trajectories (baseline and optimized) and a separate 6.25 s holdout, with 401 points per trajectory by default. The reference CSVs contain time, joint positions, velocities, and accelerations. MuJoCo evaluates the Fourier reference on its own integration grid when tracking these points, so actual measured states are saved separately.
 
 ```bash
-./scripts/run_arm_identification.sh --reference-plan build/arm-points \
-  --acquisition rollout --output build/arm-planned-capture
+./scripts/run_arm_identification.sh --design-only --actuator-scale 1 --output build/arm-points
+./scripts/run_arm_identification.sh --demo --reference-plan build/arm-points \
+  --output build/arm-planned-demo
 ```
 
-For a plan you intend to use with `--demo --reference-plan`, add `--actuator-scale 1` when generating the points so the plan includes drive parameters.
+The plan's `--actuator-scale 1` matches the demo's drive regressor. Set `--sample-count`, `--training-period-s`, and `--holdout-period-s` when generating the plan to change the point count or cycle durations. Faster cycles can cause the designer to reduce the initial motion amplitude to stay within the velocity, acceleration, and jerk bounds.
+
+When you reuse a plan, the runner verifies the asset hash, joint order, timestamps, and Fourier states. It uses the saved point count, periods, and regressor structure. You can use `--robot pm01` or `--robot openarm` on both commands to work with only one URDF.
+
+## Refit a capture
+
+Refit uses the saved arm models and recorded CSVs. The acquisition settings, Huber threshold, and model export choices carry over unless you override them. The original capture and the refit each have their own output directory.
+
+```bash
+./scripts/run_arm_identification.sh --refit build/arms-demo --summary --output build/arms-demo-refit
+```
+
+The `arm-identification-demo` artifact from a successful CI run includes the URDFs and CSV inputs required to refit both arms. Extract it so `report.json`, `pm01/`, and `openarm/` are directly inside `build/arms-from-ci/`, then run the command below. [Arm identification workflow runs](https://github.com/chase6305/RobotIdentification/actions/workflows/arm-identification-ci.yml)
+
+```bash
+./scripts/run_arm_identification.sh --refit build/arms-from-ci --summary --output build/arms-ci-refit
+```
+
+To compare preprocessing settings on the same capture, select an estimator in the refit command.
+
+```bash
+./scripts/run_arm_identification.sh --refit build/arms-demo --raw-estimator local-cubic \
+  --raw-window 17 --huber-auto --output build/arms-local-cubic
+```
+
+## Outputs
+
+| Path in the demo output | Contents |
+| --- | --- |
+| `report.json` | Source URDF hashes, joint order, dependency versions, trajectory scores, ranks, fitted parameters, and validation metrics. |
+| `<arm>/{baseline,optimized,holdout}_states.csv` | Planned time, position, velocity, and acceleration, with a zero torque field. |
+| `<arm>/train_{baseline,optimized}_raw.csv` | Recorded timestamps, noisy encoder positions, and applied torques with simulated sensor noise. |
+| `<arm>/train_{baseline,optimized}.csv` | Training samples used by the fit, including estimated velocities and accelerations. |
+| `<arm>/holdout.csv`, `<arm>/holdout_dense.csv` | Independent validation samples and the integration-rate replay trace. |
+| `<arm>/holdout_predicted_physical_arm.csv` | Predicted torque from the physically constrained fit on the saved holdout states. |
+| `<arm>/nominal.urdf`, `<arm>/truth.{urdf,mjb}` | Extracted unloaded model and the simulated test plant. The MJB contains the simulated drive parameters. |
+| `<arm>/identified_{arm,payload}.{urdf,xml,mjb}` | Fitted arm and known-arm payload models. Use MJCF (`.xml`) to carry the fitted drive coefficients across MuJoCo versions. |
+
+`<arm>` is `pm01` or `openarm`. In the JSON report, `robots.<arm>.fit.physical_arm_fit` contains the whole-arm metrics, `reloaded_mujoco_replay` records position error after reloading, and `robots.<arm>.fit.payload_fit` contains the separate payload estimate.
+
+## Acquisition and preprocessing options
+
+Use a forward rollout to fit from the simulated derivative states. `--acquisition inverse` selects prescribed-state inverse dynamics. For a clean torque control, set `--torque-noise-nm 0 --outlier-nm 0`.
+
+```bash
+./scripts/run_arm_identification.sh --acquisition rollout --output build/arm-rollout
+```
 
 Run the forward simulation and fit using the recorder-format position and torque measurements.
 
@@ -59,14 +130,7 @@ The demo uses `--timestamp-jitter-ms auto`, which requests up to 2 ms and reduce
 
 `--capture-dropout` sets the probability of losing each interior training sample, preserving the period endpoints. `--encoder-resolution-rad` rounds the raw positions to encoder increments. The training trajectories share the seeded dropout mask. These controls keep positions and torques synchronized at every retained timestamp.
 
-Use `--refit` to try new preprocessing and solver settings on a saved capture. It copies the inputs used by the fit, then creates a new report and exports in the requested directory. The original acquisition settings, Huber threshold, and model export choices carry over unless you override them. `--refit` uses the recorded position and torque samples and skips trajectory design and data collection.
-
-```bash
-./scripts/run_arm_identification.sh --refit build/arms-demo --raw-estimator local-cubic \
-  --raw-window 17 --huber-auto --output build/arms-demo-refit
-```
-
-The `arm-identification-demo` CI artifact contains the complete demo output, including reference points, raw samples, holdout traces, and fitted models. Pass the downloaded directory to `--refit` to rerun identification using the packaged arm models. [Arm identification workflow runs](https://github.com/chase6305/RobotIdentification/actions/workflows/arm-identification-ci.yml)
+## Torque-channel latency
 
 To test alignment against a known torque latency, simulate the delay in the training channel and refit the same recorded data.
 
@@ -80,11 +144,13 @@ A positive delay means that torque recorded at time `t` describes the arm at `t 
 
 Use `--search-torque-delay-ms 20` to search up to 20 ms in either direction. The search transfers each model between the two training trajectories and accepts a shift when the mean cross-trajectory Huber loss improves by at least 2% compared with zero delay. It fits the encoder harmonics once on up to 801 points per trajectory, searches at most 17 shifts, then refits on all available samples. The per-arm `torque_alignment` report includes the tested range, loss, and applied delay. A refit inherits that delay unless an alignment option is supplied.
 
+## Drive dynamics, whole-arm fit, and payload
+
 For a new acquisition, add `--actuator-scale 1` to test synthetic reflected rotor inertia and linear viscous friction. The plant uses per-joint armature `0.04 r kg·m²` and damping `(0.02 + 0.05 r) N·m·s/rad`, where `r` is each joint's URDF effort limit divided by the largest effort limit on that arm. The scale multiplies both terms. In this mode, `truth.mjb` contains the compiled MuJoCo plant. The fit adds columns for each joint's acceleration and velocity, and the report compares against a rigid-only model fitted to the same samples. The base-parameter rank determines which combinations can be identified. See the [MuJoCo joint model reference](https://mujoco.readthedocs.io/en/stable/XMLreference.html#body-joint).
 
 The actuator report recovers individually observable coefficients by solving for each full coordinate as a linear combination of base coordinates. All viscous coefficients are observable on both arms, and the first two rotor inertias appear as `null` individual estimates. The projected candidate uses the final Huber weighted least-squares metric to make the observable passive coefficients nonnegative within numerical tolerance. Its holdout and mass-matrix metrics are reported alongside the unconstrained fit.
 
-For a complete example with drive dynamics, raw encoder measurements, and forward replay:
+The following command collects raw encoder measurements and runs forward replay with drive dynamics.
 
 ```bash
 ./scripts/run_arm_identification.sh --acquisition rollout --actuator-scale 1 --replay \
@@ -104,9 +170,13 @@ The runner compares the reloaded binary's predicted holdout torque against `hold
 
 The reloaded arm also predicts torque on 1,024 independent workspace states within the middle 85% of each padded joint interval, with speeds up to 75% of the design caps and accelerations up to 18 rad/s². `workspace_validation` reports the count within the simulated effort limits, the smallest fitted mass-matrix eigenvalue, and the nominal and identified torque errors. These samples are generated independently of the fitted trajectories.
 
+## Use an existing native build
+
 An existing core and Pinocchio installation can also build the benchmark with `cmake -S benchmarks/arm_identification -B build/arm-bench` and `cmake --build build/arm-bench --parallel 2`. In that case, run `run_experiment.py` with `--executable build/arm-bench/arm_identification` and a Python environment containing MuJoCo and NumPy. See the [standalone installation guide](../../README_EN.md#standalone-build).
 
 ## Protocol
+
+Before column normalization, the benchmark zeros calibration columns below 64 machine epsilons times the largest calibration entry. It checks the same columns against this bound in subsequent regressors. This removes two numerical directions in the PM01 root inertia and keeps the reported rank stable across simulator versions.
 
 1. The Pinocchio rigid-body regressor builds the base-parameter basis from 192 deterministic calibration states. These states are used only to learn linear dependencies in the regressor. The existing Fourier optimizer improves the mean log information score in that fixed basis under position, velocity, acceleration, and jerk limits. The position interval has a 5% margin at each end and the speed cap is the smaller of 80% of the URDF limit and 4 rad/s. The acceleration and jerk caps are 25 rad/s² and 160 rad/s³.
 2. The benchmark automatically generates 401 joint references for each 8 s training trajectory and an independent 401-point holdout over 6.25 s. The Fourier coefficients let the rollout evaluate the same continuous reference at every integration step. With `--acquisition rollout`, a computed-torque controller based on the unloaded model tracks the reference while the loaded MuJoCo plant integrates with steps of at most 1 ms. It tracks the periodic reference for 3 s before recording, limits applied torque to each joint's URDF effort, and records position, velocity, acceleration, and applied torque at the same instant. The acceleration feedback gains are 10,000 s⁻² for position error and 200 s⁻¹ for velocity error. The plant and replay both use semi-implicit Euler with the viscous force evaluated explicitly. With `--acquisition inverse`, MuJoCo evaluates the torque at each analytical reference state and rejects torques above the URDF effort. Both modes reject active constraints and use gravity `(0, 0, -9.81) m/s²`. See the [MuJoCo stepping and inverse-dynamics documentation](https://mujoco.readthedocs.io/en/stable/programming/simulation.html).
@@ -136,8 +206,6 @@ benchmark_dir=build/arm-identification
 
 ## Reference results
 
-Before column normalization, the benchmark zeros calibration columns below 64 machine epsilons times the largest calibration entry. It checks the same columns against this bound in subsequent regressors. This removes two numerical directions in the PM01 root inertia and keeps the reported rank stable across simulator versions.
-
 Prescribed-state inverse dynamics holdout torque RMSE in N·m, with fitted results reported as medians over the CI noise seeds `20261124, 11, 29, 47, 71`.
 
 | Left arm | Base / full coordinates | Unloaded nominal | Baseline OLS | Baseline Huber | Optimized OLS | Optimized Huber |
@@ -146,14 +214,5 @@ Prescribed-state inverse dynamics holdout torque RMSE in N·m, with fitted resul
 | OpenArm | 43 / 70 | 0.23947 | 0.03789 | 0.01160 | 0.01109 | 0.00337 |
 
 In the clean control, the relative error against the known base coordinates is about `1.04e-8` for PM01 and `6.54e-9` for OpenArm. These figures characterize rigid-body inverse dynamics along prescribed trajectories in simulation.
-
-The default torque-driven demo uses the constrained whole-arm model for the following measurements. The payload mass is fitted separately with a known arm and drive model. Its simulated value is `0.35 kg`.
-
-| Left arm | Holdout torque RMSE [N·m] | Reloaded replay position RMSE [rad] | Fitted payload [kg] |
-| --- | ---: | ---: | ---: |
-| PM01 | 0.00382 | 0.000100 | 0.351138 |
-| OpenArm | 0.00406 | 0.000606 | 0.350644 |
-
-All 1,024 workspace states met the effort constraints for both demo arms. Their identified-model torque RMSE was `0.01143 N·m` for PM01 and `0.03714 N·m` for OpenArm.
 
 At torque noise `0.20 N·m` and encoder noise `0.0008 rad`, the OpenArm median holdout torque RMSE over six seeds was `0.05235 N·m` for optimized Huber and `0.02119 N·m` for the constrained model. The reloaded constrained model finished all 16 replay windows on each seed.

@@ -4,6 +4,8 @@
 
 机器人动力学参数辨识工具集。从具名关节数据出发，完成预处理、回归、诊断、物理验证和候选参数工件管理。核心使用 C++17 和 Eigen；ROS 2 与 Pinocchio 分别由可选包提供。
 
+PM01 和 OpenArm 的仿真快速开始见 [MuJoCo 手臂辨识实验](#mujoco-手臂辨识实验)。
+
 | 包 | 职责 | 额外依赖 |
 |---|---|---|
 | `robot_identification` | 任意自由度数据、CSV、预处理、加权/ridge/Huber 求解、可观测性及物理验证 | Eigen |
@@ -61,13 +63,23 @@ python3 -m pip install -r requirements-dev.txt
 
 ## MuJoCo 手臂辨识实验
 
-从 HumanoidAssets 的 PM01 左臂（5 轴）和 OpenArm 左臂（7 轴）生成仿真数据，使用 Pinocchio 回归和现有 C++ 求解器估计可辨识的惯性组合，并在独立轨迹上验证力矩预测。参见[实验说明与复现命令](benchmarks/arm_identification/README.md)。
+一条命令跑完固定基座 PM01 左臂（5 轴）和 OpenArm 左臂（7 轴）的点位设计、MuJoCo 采集、动力学参数辨识和独立轨迹回放。启动脚本会创建独立环境并安装 Pinocchio 4.1.0 和 MuJoCo 3.13.0。
+
+在 Ubuntu 安装 `build-essential`、`cmake`、`libeigen3-dev`、`python3-venv`，并确认系统有 `flock`。从仓库根目录运行时，脚本默认从同级的 `../HumanoidAssets` 读取 URDF。已有其他目录时可传入 `--assets-root /path/to/HumanoidAssets`。[资产准备与依赖](benchmarks/arm_identification/README.md#quick-start)
 
 ```bash
 ./scripts/run_arm_identification.sh --demo --output build/arms-demo
 ```
 
-用 `--design-only` 导出自动点位，再用 `--reference-plan` 读取该计划采集。`--refit` 可复用采集文件重新辨识。
+每条臂自动生成一条基线训练轨迹、一条优化训练轨迹和一条独立验证轨迹，每条 401 点。用下面的命令先导出点位，再用同一份计划完成采集和辨识。
+
+```bash
+./scripts/run_arm_identification.sh --design-only --actuator-scale 1 --output build/arm-points
+./scripts/run_arm_identification.sh --demo --reference-plan build/arm-points \
+  --output build/arm-planned-demo
+```
+
+结果见 `build/arms-demo/report.json`，两条臂的点位、原始数据和 URDF、MJCF、MJB 模型分别保存在 `pm01/` 和 `openarm/`。每次运行使用新的输出目录。`--refit` 可用已有采集重跑辨识。[默认结果](benchmarks/arm_identification/README.md#default-demo-results) · [输出文件](benchmarks/arm_identification/README.md#outputs) · [重拟合](benchmarks/arm_identification/README.md#refit-a-capture)
 
 ## 离线工具
 
