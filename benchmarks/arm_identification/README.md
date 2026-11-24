@@ -44,6 +44,10 @@ The launcher reuses its environment and native build in `build/arm-identificatio
 
 ## Default demo results
 
+![MuJoCo holdout motion for the PM01 and OpenArm left arms](../../docs/media/mujoco-arm-holdout.gif)
+
+The animation renders the demo's recorded joint positions from `holdout_dense.csv` using the HumanoidAssets visual meshes. It shows each arm's 6.25 s independent holdout and the simulated 0.35 kg payload.
+
 The torque RMSE is measured on an independent trajectory. The position RMSE is measured after reloading each whole-arm model and running 16 open-loop windows of 100 ms under recorded torques. The payload mass is fitted separately using the known arm and drive model. The simulated payload is 0.35 kg.
 
 | Left arm | Base / full coordinates | Holdout torque RMSE [N·m] | Reloaded replay position RMSE [rad] | Fitted payload [kg] |

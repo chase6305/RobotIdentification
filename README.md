@@ -65,6 +65,10 @@ python3 -m pip install -r requirements-dev.txt
 
 一条命令跑完固定基座 PM01 左臂（5 轴）和 OpenArm 左臂（7 轴）的点位设计、MuJoCo 采集、动力学参数辨识和独立轨迹回放。启动脚本会创建独立环境并安装 Pinocchio 4.1.0 和 MuJoCo 3.13.0。
 
+![PM01 和 OpenArm 左臂并排回放独立验证轨迹](docs/media/mujoco-arm-holdout.gif)
+
+动图回放默认 Demo 采集的 6.25 秒独立验证轨迹，橙色方块标出 0.35 kg 仿真负载。
+
 在 Ubuntu 安装 `build-essential`、`cmake`、`libeigen3-dev`、`python3-venv`，并确认系统有 `flock`。从仓库根目录运行时，脚本默认从同级的 `../HumanoidAssets` 读取 URDF。已有其他目录时可传入 `--assets-root /path/to/HumanoidAssets`。[资产准备与依赖](benchmarks/arm_identification/README.md#quick-start)
 
 ```bash

@@ -62,6 +62,10 @@ Reproduce synthetic solver and Pinocchio assembly measurements with the [standal
 
 Run point design, MuJoCo data collection, dynamics identification, and independent trajectory replay for the fixed-base PM01 left arm (5 axes) and OpenArm left arm (7 axes). The launcher sets up Pinocchio 4.1.0 and MuJoCo 3.13.0 in an isolated environment.
 
+![Side-by-side holdout replay for the PM01 and OpenArm left arms](docs/media/mujoco-arm-holdout.gif)
+
+The GIF shows the 6.25 s holdout recorded by the default demo. The orange box marks the simulated 0.35 kg payload.
+
 On Ubuntu, install `build-essential`, `cmake`, `libeigen3-dev`, and `python3-venv`, and make sure `flock` is available. Run from the repository root. The launcher reads the URDFs from the sibling `../HumanoidAssets` directory by default. For an existing checkout elsewhere, pass `--assets-root /path/to/HumanoidAssets`. [Dependencies and asset setup](benchmarks/arm_identification/README.md#quick-start)
 
 ```bash
