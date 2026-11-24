@@ -3,7 +3,6 @@ on:
   pull_request:
     paths:
       - .github/workflows/arm-identification-ci.yml
-      - benchmarks/CMakeLists.txt
       - benchmarks/arm_identification/**
       - robot_identification/**
       - robot_identification_pinocchio/**
@@ -53,21 +52,20 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release "-DPython3_EXECUTABLE=$(command -v python)"
           cmake --build build/pinocchio --parallel 2
           cmake --install build/pinocchio --prefix "$GITHUB_WORKSPACE/build/install"
-          cmake -S benchmarks -B build/benchmarks -DCMAKE_BUILD_TYPE=Release \
-            -DROBOT_IDENTIFICATION_BENCH_PINOCCHIO=ON "-DPython3_EXECUTABLE=$(command -v python)"
-          cmake --build build/benchmarks --parallel 2 --target arm_identification
+          cmake -S benchmarks/arm_identification -B build/arm-bench -DCMAKE_BUILD_TYPE=Release \
+            "-DPython3_EXECUTABLE=$(command -v python)"
+          cmake --build build/arm-bench --parallel 2
       - name: Verify identification on both arms
         run: |
-          for scenario in clean noisy; do
-            options=()
-            if [[ "$scenario" == clean ]]; then
-              options=(--torque-noise-nm 0 --outlier-nm 0)
-            fi
+          run_experiment() {
             python benchmarks/arm_identification/run_experiment.py \
-              --assets-root build/HumanoidAssets --executable build/benchmarks/arm_identification \
-              --output "build/arms-$scenario" "${options[@]}"
+              --assets-root build/HumanoidAssets --executable build/arm-bench/arm_identification "$@"
+          }
+          run_experiment --output build/arms-clean --torque-noise-nm 0 --outlier-nm 0
+          for seed in 20261124 11 29 47 71; do
+            run_experiment --output "build/arms-noisy-$seed" --seed "$seed"
           done
-          python benchmarks/arm_identification/check_experiment.py build/arms-clean/report.json build/arms-noisy/report.json
+          python benchmarks/arm_identification/check_experiment.py build/arms-clean/report.json build/arms-noisy-*/report.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

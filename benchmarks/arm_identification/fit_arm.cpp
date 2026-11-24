@@ -20,7 +20,9 @@ using robot_identification_pinocchio::PinocchioRegressor;
 
 constexpr int kTrajectorySamples = 401;
 constexpr double kGravity = 9.81;
-constexpr double kOracleToleranceNm = 1e-8;
+// MuJoCo diagonalizes the source URDF's full inertia tensors on import.
+constexpr double kOracleToleranceNm = 1e-7;
+constexpr double kReductionToleranceNm = 1e-8;
 
 std::shared_ptr<const pinocchio::Model> LoadModel(const char* path) {
     auto model = std::make_shared<pinocchio::Model>();
@@ -193,10 +195,17 @@ void Fit(const char* nominal_urdf, const fs::path& directory, double huber_delta
 
     const auto truth = LoadModel((directory / "truth.urdf").c_str());
     if (JointNames(*truth) != JointNames(*model)) throw std::runtime_error("truth model changed joint order");
-    const auto oracle = basis.ToBaseParameters(DynamicParameters(*truth));
-    const auto oracle_metrics = ValidateParameters(holdout, oracle);
-    if (oracle_metrics.max_absolute_error > kOracleToleranceNm)
-        throw std::runtime_error("MuJoCo and Pinocchio disagree on clean holdout torque");
+    const auto full_truth = DynamicParameters(*truth);
+    const auto oracle = basis.ToBaseParameters(full_truth);
+    const Eigen::VectorXd full_prediction = full_holdout.regressor * full_truth;
+    const Eigen::VectorXd reduced_prediction = holdout.regressor * oracle;
+    const double engine_error = (holdout.observation - full_prediction).cwiseAbs().maxCoeff();
+    const double reduction_error = (full_prediction - reduced_prediction).cwiseAbs().maxCoeff();
+    if (!(engine_error <= kOracleToleranceNm) || !(reduction_error <= kReductionToleranceNm)) {
+        std::cerr << "holdout maximum torque errors [N m]: cross-engine=" << engine_error
+                  << ", reduction=" << reduction_error << '\n';
+        throw std::runtime_error("clean holdout oracle check failed");
+    }
 
     std::cout << "{\"pinocchio_version\":" << std::quoted(PINOCCHIO_VERSION)
               << ",\"full_parameter_count\":" << basis.full_parameter_count()
@@ -204,8 +213,8 @@ void Fit(const char* nominal_urdf, const fs::path& directory, double huber_delta
               << ",\"calibration_reconstruction_error\":" << basis.calibration_error()
               << ",\"holdout_reconstruction_error\":" << basis.ReconstructionError(full_holdout.regressor)
               << ",\"nominal_holdout_rmse_nm\":" << nominal_rmse
-              << ",\"oracle_holdout_max_absolute_error_nm\":" << oracle_metrics.max_absolute_error
-              << ",\"selected_columns\":";
+              << ",\"oracle_holdout_max_absolute_error_nm\":" << engine_error
+              << ",\"reduced_oracle_max_difference_nm\":" << reduction_error << ",\"selected_columns\":";
     WriteVector(basis.selected_columns());
     std::cout << ",\"column_scales\":";
     WriteVector(basis.column_scales());

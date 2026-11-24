@@ -5,7 +5,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_CXX_COMPILER_ID MATCHES "
   message(FATAL_ERROR "Allocator instrumentation requires Linux and a GNU-compatible linker")
 endif()
 find_package(robot_identification REQUIRED)
-option(ROBOT_IDENTIFICATION_BENCH_PINOCCHIO "Build the optional Pinocchio benchmarks" OFF)
+option(ROBOT_IDENTIFICATION_BENCH_PINOCCHIO "Build the optional Pinocchio dataset benchmark" OFF)
 # The linked core exports its C++17 requirement to all consumers.
 foreach(name IN ITEMS core_bench csv_bench csv_write_bench mass_validation_bench)
   add_executable(${name} ${name}.cpp)
@@ -44,8 +44,6 @@ if(ROBOT_IDENTIFICATION_BENCH_PINOCCHIO)
   target_link_options(pinocchio_bench PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc)
   if(robot_identification_pinocchio_VERSION VERSION_GREATER_EQUAL "0.2.0")
     target_compile_definitions(pinocchio_bench PRIVATE ROBOT_IDENTIFICATION_BENCH_HAS_BATCH_API)
-    add_executable(arm_identification arm_identification/fit_arm.cpp)
-    target_link_libraries(arm_identification PRIVATE robot_identification::pinocchio)
   endif()
 endif()
 

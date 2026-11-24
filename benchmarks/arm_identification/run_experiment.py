@@ -197,9 +197,9 @@ def run_cpp(executable, *args):
                                 text=True,
                                 check=True)
     except subprocess.CalledProcessError as error:
-        raise ValueError(
-            error.stderr.strip() or
-            f"arm_identification exited {error.returncode}") from error
+        message = error.stderr.strip(
+        ) or f"arm_identification exited {error.returncode}"
+        raise ValueError(f"{args[0]} {args[1]}: {message}") from error
     return json.loads(result.stdout)
 
 
