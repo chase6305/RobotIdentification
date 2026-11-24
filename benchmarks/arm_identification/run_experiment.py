@@ -18,7 +18,7 @@ import numpy as np
 
 from simulation import (ArmDynamics, configure_integrator, harmonic_states,
                         inverse_dynamics, replay_windows, rollout,
-                        save_contact_free_mjcf)
+                        save_contact_free_mjcf, validate_workspace)
 
 
 @dataclass(frozen=True)
@@ -427,6 +427,7 @@ def export_identified_arm(fit, nominal, directory, joints, holdout,
                     native_replay["position_rmse_rad"]) > 1e-7):
             raise ValueError(
                 "exported arm disagrees with the native replay position error")
+    return reloaded
 
 
 def fit_captured_arm(args, directory, metadata, holdout, dense_holdout):
@@ -462,8 +463,16 @@ def fit_captured_arm(args, directory, metadata, holdout, dense_holdout):
                                directory, joints, drive, holdout, dense_holdout,
                                effort)
         if args.estimate_arm:
-            export_identified_arm(fit, nominal, directory, joints, holdout,
-                                  dense_holdout)
+            identified = export_identified_arm(fit, nominal, directory, joints,
+                                               holdout, dense_holdout)
+            limits = metadata["design"].get("kinematic_limits")
+            if limits is not None:
+                truth = ArmDynamics.from_urdf(directory / "truth.urdf", joints,
+                                              drive)
+                nominal_arm = ArmDynamics.from_urdf(nominal_path, joints)
+                fit["physical_arm_fit"][
+                    "workspace_validation"] = validate_workspace(
+                        truth, nominal_arm, identified, limits, effort)
     return fit
 
 

@@ -146,6 +146,56 @@ def inverse_dynamics(plant, motions, effort_limits=None):
     return result
 
 
+def validate_workspace(truth, nominal, identified, limits, effort_limits):
+    """Compare models on independent, effort-feasible states across the joint workspace."""
+    count = 1024
+    seed = 61543
+    random = np.random.default_rng(seed)
+    shape = (count, len(effort_limits))
+    minimum = np.asarray(limits["minimum_position_rad"])
+    maximum = np.asarray(limits["maximum_position_rad"])
+    center = (maximum + minimum) / 2
+    radius = 0.85 * (maximum - minimum) / 2
+    positions = center + radius * random.uniform(-1, 1, size=shape)
+    velocities = 0.75 * np.asarray(
+        limits["maximum_velocity_rad_s"]) * random.uniform(-1, 1, size=shape)
+    acceleration_limit = np.minimum(18.0, limits["maximum_acceleration_rad_s2"])
+    accelerations = acceleration_limit * random.uniform(-1, 1, size=shape)
+
+    models = {"nominal": nominal, "identified": identified}
+    data = {name: mujoco.MjData(model.model) for name, model in models.items()}
+    truth_data = mujoco.MjData(truth.model)
+    errors = {name: [] for name in models}
+    mass = np.empty((identified.model.nv, identified.model.nv))
+    minimum_eigenvalue = None
+    for state in zip(positions, velocities, accelerations):
+        target = truth.inverse_torque(truth_data, *state)
+        if truth_data.nefc or not np.isfinite(target).all():
+            raise ValueError("invalid workspace oracle state")
+        if np.any(np.abs(target) > effort_limits):
+            continue
+        for name, model in models.items():
+            torque = model.inverse_torque(data[name], *state)
+            if data[name].nefc or not np.isfinite(torque).all():
+                raise ValueError(f"{name}: invalid workspace torque prediction")
+            errors[name].append(torque - target)
+        mujoco.mj_fullM(identified.model, data["identified"], mass)
+        eigenvalue = float(np.linalg.eigvalsh(mass)[0])
+        if minimum_eigenvalue is None or eigenvalue < minimum_eigenvalue:
+            minimum_eigenvalue = eigenvalue
+
+    report = {
+        "requested_samples": count,
+        "effort_feasible_samples": len(errors["identified"]),
+        "seed": seed,
+        "minimum_mass_eigenvalue_kg_m2": minimum_eigenvalue
+    }
+    for name, residual in errors.items():
+        report[f"{name}_torque_rmse_nm"] = float(
+            np.sqrt(np.mean(np.square(residual)))) if residual else None
+    return report
+
+
 def configure_integrator(model, step_seconds):
     model.opt.timestep = step_seconds
     model.opt.integrator = mujoco.mjtIntegrator.mjINT_EULER

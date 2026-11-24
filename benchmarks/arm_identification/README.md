@@ -96,6 +96,8 @@ Add `--estimate-arm` to fit the moving links and drive coefficients together. Th
 
 The runner compares the reloaded binary's predicted holdout torque against `holdout_predicted_physical_arm.csv` to within `1e-7 N·m` and, with `--replay`, steps it under the recorded holdout torques. `physical_arm_fit` in the report contains the full coordinates, solver convergence, holdout errors, and replay results. The demo summary shows this model's metrics.
 
+The reloaded arm also predicts torque on 1,024 independent workspace states within the middle 85% of each padded joint interval, with speeds up to 75% of the design caps and accelerations up to 18 rad/s². `workspace_validation` reports the count within the simulated effort limits, the smallest fitted mass-matrix eigenvalue, and the nominal and identified torque errors. These samples are generated independently of the fitted trajectories.
+
 An existing core and Pinocchio installation can also build the benchmark with `cmake -S benchmarks/arm_identification -B build/arm-bench` and `cmake --build build/arm-bench --parallel 2`. In that case, run `run_experiment.py` with `--executable build/arm-bench/arm_identification` and a Python environment containing MuJoCo and NumPy. See the [standalone installation guide](../../README_EN.md#standalone-build).
 
 ## Protocol
@@ -141,5 +143,7 @@ The default torque-driven demo uses the constrained whole-arm model for the foll
 | --- | ---: | ---: | ---: |
 | PM01 | 0.00373 | 0.000108 | 0.350844 |
 | OpenArm | 0.00406 | 0.000606 | 0.350644 |
+
+All 1,024 workspace states met the effort constraints for both demo arms. Their identified-model torque RMSE was `0.01641 N·m` for PM01 and `0.03714 N·m` for OpenArm.
 
 At torque noise `0.20 N·m` and encoder noise `0.0008 rad`, the OpenArm median holdout torque RMSE over six seeds was `0.05235 N·m` for optimized Huber and `0.02119 N·m` for the constrained model. The reloaded constrained model finished all 16 replay windows on each seed.

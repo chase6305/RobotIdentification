@@ -21,6 +21,13 @@ def check_case(directory, maximum_torque_rmse, maximum_position_rmse):
         if (replay["windows"] != 16 or replay["complete_windows"] != 16 or
                 replay["position_rmse_rad"] >= maximum_position_rmse):
             raise ValueError(f"{name}: physical arm replay exceeded tolerance")
+        workspace = fit["workspace_validation"]
+        if (workspace["requested_samples"] != 1024 or
+                not 768 <= workspace["effort_feasible_samples"] <= 1024 or
+                workspace["minimum_mass_eigenvalue_kg_m2"] <= 0.0 or
+                workspace["identified_torque_rmse_nm"]
+                >= 0.4 * workspace["nominal_torque_rmse_nm"]):
+            raise ValueError(f"{name}: physical arm failed the workspace check")
         for filename in ("identified_arm.urdf", "identified_arm.mjb",
                          "identified_arm.xml",
                          "holdout_predicted_physical_arm.csv"):
