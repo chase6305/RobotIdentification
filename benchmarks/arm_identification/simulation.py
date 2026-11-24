@@ -34,6 +34,15 @@ class ArmDynamics:
                 joint.damping[0] = damping
             model = spec.compile()
         model.opt.gravity[:] = (0.0, 0.0, -9.81)
+        return cls._named_model(model, joints, urdf)
+
+    @classmethod
+    def from_mjb(cls, filename, joints):
+        return cls._named_model(mujoco.MjModel.from_binary_path(str(filename)),
+                                joints, filename)
+
+    @classmethod
+    def _named_model(cls, model, joints, filename):
         joint_ids = [
             mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
             for name in joints
@@ -43,7 +52,7 @@ class ArmDynamics:
                 any(index < 0 for index in joint_ids) or np.any(
                     model.jnt_type[joint_ids] != mujoco.mjtJoint.mjJNT_HINGE)):
             raise ValueError(
-                f"expected exactly the requested hinge joints in {urdf}")
+                f"expected exactly the requested hinge joints in {filename}")
         return cls(model, model.jnt_qposadr[joint_ids],
                    model.jnt_dofadr[joint_ids])
 

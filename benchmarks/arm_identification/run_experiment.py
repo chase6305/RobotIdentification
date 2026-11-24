@@ -103,24 +103,33 @@ def add_payload(robot, terminal, mass):
     if mass == 0.0:
         return
     x, y, z = PAYLOAD_SIZE_METERS
+    diagonal = [
+        mass * (y * y + z * z) / 12.0, mass * (x * x + z * z) / 12.0,
+        mass * (x * x + y * y) / 12.0
+    ]
+    add_payload_inertia(robot, terminal, mass, PAYLOAD_CENTER_XYZ,
+                        np.diag(diagonal))
+
+
+def add_payload_inertia(robot, terminal, mass, center, matrix):
     box = ET.SubElement(robot, "link", name="experiment_payload")
     inertia = ET.SubElement(box, "inertial")
     ET.SubElement(inertia, "mass", value=str(mass))
     ET.SubElement(inertia,
                   "inertia",
-                  ixx=str(mass * (y * y + z * z) / 12.0),
-                  iyy=str(mass * (x * x + z * z) / 12.0),
-                  izz=str(mass * (x * x + y * y) / 12.0),
-                  ixy="0",
-                  ixz="0",
-                  iyz="0")
+                  ixx=str(matrix[0, 0]),
+                  iyy=str(matrix[1, 1]),
+                  izz=str(matrix[2, 2]),
+                  ixy=str(matrix[0, 1]),
+                  ixz=str(matrix[0, 2]),
+                  iyz=str(matrix[1, 2]))
     joint = ET.SubElement(robot,
                           "joint",
                           name="experiment_payload_mount",
                           type="fixed")
     ET.SubElement(joint, "parent", link=terminal)
     ET.SubElement(joint, "child", link="experiment_payload")
-    ET.SubElement(joint, "origin", xyz=PAYLOAD_CENTER_XYZ, rpy="0 0 0")
+    ET.SubElement(joint, "origin", xyz=center, rpy="0 0 0")
 
 
 def write_urdf(robot, path):
@@ -194,6 +203,29 @@ def differentiation_metrics(estimated, measured, dof):
             "position_rmse_rad", "velocity_rmse_rad_s",
             "acceleration_rmse_rad_s2"), np.split(error, 3, axis=1))
     }
+
+
+def export_payload(candidate, nominal, terminal, directory, joints,
+                   drive_parameters, holdout, effort):
+    estimated = copy.deepcopy(nominal)
+    center = " ".join(map(str, candidate["center_m"]))
+    add_payload_inertia(estimated, terminal, candidate["mass_kg"], center,
+                        np.asarray(candidate["inertia_at_center_kg_m2"]))
+    urdf = directory / "identified_payload.urdf"
+    binary = directory / "identified_payload.mjb"
+    write_urdf(estimated, urdf)
+    model = ArmDynamics.from_urdf(urdf, joints, drive_parameters)
+    mujoco.mj_saveModel(model.model, str(binary))
+    reloaded = ArmDynamics.from_mjb(binary, joints)
+    predicted = inverse_dynamics(reloaded, {"holdout": holdout},
+                                 effort)["holdout"]
+    torque_error = predicted[:, -len(joints):] - holdout[:, -len(joints):]
+    candidate["reloaded_mujoco_holdout_rmse_nm"] = float(
+        np.sqrt(np.mean(torque_error**2)))
+    if abs(candidate["reloaded_mujoco_holdout_rmse_nm"] -
+           candidate["holdout_rmse_nm"]) > 1e-7:
+        raise ValueError(
+            "exported payload disagrees with the native holdout prediction")
 
 
 def run_arm(name, args):
@@ -292,8 +324,14 @@ def run_arm(name, args):
     if dense_holdout is not None:
         write_dataset(directory / "holdout_dense.csv", dense_holdout,
                       dataset_header(arm.joints))
+    payload_options = ["payload"] if args.estimate_payload else []
     fit = run_cpp(args.executable, "fit", nominal_path, directory,
-                  args.huber_delta_nm, *drive_options)
+                  args.huber_delta_nm, *payload_options, *drive_options)
+    if args.estimate_payload and fit["payload_fit"][
+            "physical_candidate"] is not None:
+        export_payload(fit["payload_fit"]["physical_candidate"], nominal,
+                       terminal, directory, arm.joints, drive_parameters,
+                       labels["holdout"], effort)
 
     result.update({
         "payload_parent": terminal,
@@ -393,6 +431,12 @@ def main():
         type=float,
         default=0.0,
         help="scale of synthetic rotor inertia and viscous joint friction")
+    parser.add_argument(
+        "--estimate-payload",
+        action="store_true",
+        help=
+        "calibrate and export payload inertia using the known arm and drive model"
+    )
     parser.add_argument("--torque-noise-nm",
                         type=float,
                         default=0.02,
@@ -435,6 +479,8 @@ def main():
             "--replay requires --acquisition rollout with simulation and fitting"
         )
     args.executable = args.executable.resolve()
+    if args.estimate_payload and args.design_only:
+        parser.error("--estimate-payload requires simulated torque")
     robots = ARMS if args.robot == "both" else (args.robot,)
     try:
         for name in robots:
@@ -455,6 +501,7 @@ def main():
             "fit_input": args.fit_input,
             "seed": args.seed,
             "payload_kg": args.payload_kg,
+            "estimate_payload": args.estimate_payload,
             "actuator_scale": args.actuator_scale,
             "payload_box_size_m": PAYLOAD_SIZE_METERS,
             "payload_center_xyz_m": [

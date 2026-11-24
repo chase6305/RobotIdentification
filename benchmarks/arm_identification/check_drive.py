@@ -69,6 +69,35 @@ def check(directory, clean):
                               (model.dof_damping, "viscous_nm_s_per_rad")):
             expected = [robot["actuators"][joint][field] for joint in joints]
             np.testing.assert_array_equal(values[addresses], expected)
+        payload = fit["payload_fit"]["physical_candidate"]
+        if not report["estimate_payload"] or payload is None:
+            raise ValueError(f"{name}: expected an exported physical payload")
+        if abs(payload["mass_kg"] -
+               report["payload_kg"]) > (1e-7 if clean else 0.01):
+            raise ValueError(f"{name}: inaccurate estimated payload mass")
+        np.testing.assert_allclose(payload["center_m"],
+                                   report["payload_center_xyz_m"],
+                                   rtol=0.0,
+                                   atol=(1e-7 if clean else 0.005))
+        inertia = np.asarray(payload["inertia_at_center_kg_m2"])
+        central_moment = 0.5 * np.trace(inertia) * np.eye(3) - inertia
+        if np.linalg.eigvalsh(central_moment).min() <= 0:
+            raise ValueError(
+                f"{name}: exported payload inertia violates physical constraints"
+            )
+        binary = mujoco.MjModel.from_binary_path(
+            str(directory / name / "identified_payload.mjb"))
+        nominal = mujoco.MjModel.from_xml_path(
+            str(directory / name / "nominal.urdf"))
+        np.testing.assert_allclose(binary.body_mass.sum() -
+                                   nominal.body_mass.sum(),
+                                   payload["mass_kg"],
+                                   rtol=0.0,
+                                   atol=1e-12)
+        if abs(payload["reloaded_mujoco_holdout_rmse_nm"] -
+               payload["holdout_rmse_nm"]) > 1e-7:
+            raise ValueError(
+                f"{name}: exported payload torque changed on reload")
 
 
 if __name__ == "__main__":
