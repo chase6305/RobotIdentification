@@ -123,10 +123,6 @@ jobs:
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
-          name: arm-identification-demo-models
-          path: |
-            build/arms-drive-raw/*/identified_*.urdf
-            build/arms-drive-raw/*/identified_*.mjb
-            build/arms-drive-raw/*/identified_*.xml
-            build/arms-drive-raw/report.json
+          name: arm-identification-demo
+          path: build/arms-drive-raw/
           if-no-files-found: error

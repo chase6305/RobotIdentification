@@ -64,6 +64,8 @@ Use `--refit` to try new preprocessing and solver settings on a saved capture. I
   --raw-window 17 --huber-auto --output build/arms-demo-refit
 ```
 
+The `arm-identification-demo` CI artifact contains the complete demo output, including reference points, raw samples, holdout traces, and fitted models. Pass the downloaded directory to `--refit` to rerun identification using the packaged arm models. [Arm identification workflow runs](https://github.com/chase6305/RobotIdentification/actions/workflows/arm-identification-ci.yml)
+
 To test alignment against a known torque latency, simulate the delay in the training channel and refit the same recorded data.
 
 ```bash
