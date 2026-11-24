@@ -6,7 +6,8 @@ import sys
 
 import numpy as np
 
-from run_experiment import ARMS, read_motion
+from arm_models import ARMS
+from capture_io import read_motion
 from simulation import harmonic_states
 
 

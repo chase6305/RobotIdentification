@@ -10,11 +10,12 @@ import xml.etree.ElementTree as ET
 import mujoco
 import numpy as np
 
-from run_experiment import (ARMS, FOURIER_ESTIMATORS, RAW_ESTIMATORS,
+from arm_models import ARMS
+from capture_io import read_motion
+from run_experiment import (FOURIER_ESTIMATORS, RAW_ESTIMATORS,
                             add_torque_alignment_arguments,
                             differentiation_metrics, fit_captured_arm,
-                            print_summary, read_motion, run_cpp,
-                            select_torque_alignment)
+                            print_summary, run_cpp, select_torque_alignment)
 
 
 def refit_arm(args, source_report, name):

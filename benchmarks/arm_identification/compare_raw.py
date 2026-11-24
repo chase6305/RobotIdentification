@@ -7,7 +7,8 @@ from pathlib import Path
 import sys
 import tempfile
 
-from run_experiment import differentiation_metrics, read_motion, run_cpp
+from capture_io import read_motion
+from run_experiment import differentiation_metrics, run_cpp
 
 ESTIMATOR_SIZES = {
     "moving-average": (1, 3, 5, 7, 9, 13, 17),

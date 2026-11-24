@@ -7,7 +7,7 @@ import sys
 
 import numpy as np
 
-from run_experiment import dataset_header, read_motion
+from capture_io import dataset_header, read_motion
 
 
 def check(directory):

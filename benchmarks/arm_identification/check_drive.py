@@ -7,7 +7,7 @@ import sys
 import mujoco
 import numpy as np
 
-from run_experiment import read_motion
+from capture_io import read_motion
 
 
 def check(directory, clean):
