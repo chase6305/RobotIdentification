@@ -128,11 +128,9 @@ def write_urdf(robot, path):
     ET.ElementTree(robot).write(path, encoding="utf-8", xml_declaration=True)
 
 
-def dataset_header(joints):
-    return ["time_s"] + [
-        f"{name}/{joint}" for name in ("q", "dq", "ddq", "tau")
-        for joint in joints
-    ]
+def dataset_header(joints, fields=("q", "dq", "ddq", "tau")):
+    return ["time_s"
+           ] + [f"{name}/{joint}" for name in fields for joint in joints]
 
 
 def read_motion(path, joints):
@@ -169,13 +167,33 @@ def run_cpp(executable, *args):
     return json.loads(result.stdout)
 
 
-def write_dataset(path, labels, joints):
+def write_dataset(path, labels, header):
     np.savetxt(path,
                labels,
                fmt="%.17g",
                delimiter=",",
-               header=",".join(dataset_header(joints)),
+               header=",".join(header),
                comments="")
+
+
+def write_raw(path, labels, joints, encoder_noise):
+    dof = len(joints)
+    observations = np.column_stack(
+        (labels[:, 0], labels[:, 1:1 + dof] + encoder_noise, labels[:, -dof:]))
+    write_dataset(path, observations, dataset_header(joints, ("q", "tau")))
+
+
+def differentiation_metrics(estimated, measured, dof):
+    indices = np.searchsorted(measured[:, 0], estimated[:, 0])
+    if np.any(indices == len(measured)) or not np.array_equal(
+            estimated[:, 0], measured[indices, 0]):
+        raise ValueError("raw and processed dataset timestamps do not align")
+    error = estimated[:, 1:1 + 3 * dof] - measured[indices, 1:1 + 3 * dof]
+    return {
+        name: float(np.sqrt(np.mean(group**2))) for name, group in zip((
+            "position_rmse_rad", "velocity_rmse_rad_s",
+            "acceleration_rmse_rad_s2"), np.split(error, 3, axis=1))
+    }
 
 
 def run_arm(name, args):
@@ -186,13 +204,25 @@ def run_arm(name, args):
     directory = args.output / name
     directory.mkdir()
     nominal_path = directory / "nominal.urdf"
-    truth_path = directory / "truth.urdf"
     write_urdf(nominal, nominal_path)
+    design = run_cpp(args.executable, "design", nominal_path, directory,
+                     args.sample_count, args.design_evaluations)
+    result = {
+        "urdf": arm.urdf,
+        "urdf_sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "fixed_base": arm.base,
+        "joint_names": arm.joints,
+        "joint_effort_limits_nm": effort.tolist(),
+        "design": design,
+    }
+    if args.design_only:
+        return result
+
+    truth_path = directory / "truth.urdf"
     truth = copy.deepcopy(nominal)
     add_payload(truth, terminal, args.payload_kg)
     write_urdf(truth, truth_path)
 
-    design = run_cpp(args.executable, "design", nominal_path, directory)
     motions = {
         split: read_motion(directory / f"{split}_states.csv", arm.joints)
         for split in ("baseline", "optimized", "holdout")
@@ -213,21 +243,35 @@ def run_arm(name, args):
     noise, outlier_count = make_noise(labels["baseline"][:, -dof:].shape,
                                       args.seed, args.torque_noise_nm,
                                       args.outlier_nm)
+    encoder_random = np.random.default_rng(
+        np.random.SeedSequence([args.seed, 1]))
+    encoder_noise = encoder_random.normal(0.0,
+                                          args.encoder_noise_rad,
+                                          size=noise.shape)
+    processed = {}
     for split in ("baseline", "optimized"):
         training = labels[split].copy()
         training[:, -dof:] += noise
-        write_dataset(directory / f"train_{split}.csv", training, arm.joints)
-    write_dataset(directory / "holdout.csv", labels["holdout"], arm.joints)
+        raw_path = directory / f"train_{split}_raw.csv"
+        processed_path = directory / f"train_{split}.csv"
+        write_raw(raw_path, training, arm.joints, encoder_noise)
+        if args.fit_input == "raw":
+            processed[split] = run_cpp(args.executable, "preprocess", raw_path,
+                                       processed_path, args.raw_window,
+                                       args.raw_estimator)
+            estimated = read_motion(processed_path, arm.joints)
+            processed[split].update(
+                differentiation_metrics(estimated, labels[split], dof))
+        else:
+            write_dataset(processed_path, training, dataset_header(arm.joints))
+    write_raw(directory / "holdout_raw.csv", labels["holdout"], arm.joints, 0.0)
+    write_dataset(directory / "holdout.csv", labels["holdout"],
+                  dataset_header(arm.joints))
     fit = run_cpp(args.executable, "fit", nominal_path, directory,
                   args.huber_delta_nm)
 
-    return {
-        "urdf": arm.urdf,
-        "urdf_sha256": hashlib.sha256(source_bytes).hexdigest(),
-        "fixed_base": arm.base,
+    result.update({
         "payload_parent": terminal,
-        "joint_names": arm.joints,
-        "joint_effort_limits_nm": effort.tolist(),
         "samples": {
             split: len(dataset) for split, dataset in labels.items()
         },
@@ -237,9 +281,10 @@ def run_arm(name, args):
         },
         "outlier_count_per_training_trajectory": outlier_count,
         "acquisition": acquisition,
-        "design": design,
+        "preprocessing": processed,
         "fit": fit,
-    }
+    })
+    return result
 
 
 def main():
@@ -258,11 +303,44 @@ def main():
                         help="new directory for datasets and report.json")
     parser.add_argument("--robot", choices=("both", *ARMS), default="both")
     parser.add_argument(
+        "--design-only",
+        action="store_true",
+        help="export automatic reference points without simulating or fitting")
+    parser.add_argument("--sample-count",
+                        type=int,
+                        default=401,
+                        help="number of reference points per trajectory")
+    parser.add_argument("--design-evaluations",
+                        type=int,
+                        default=240,
+                        help="Fourier design search evaluation budget")
+    parser.add_argument(
         "--acquisition",
         choices=("inverse", "rollout"),
         default="inverse",
         help=
         "prescribed-state inverse dynamics or torque-driven forward simulation")
+    parser.add_argument(
+        "--fit-input",
+        choices=("simulator", "raw"),
+        default="simulator",
+        help=
+        "fit with simulated derivatives or estimate them from recorder-format CSV"
+    )
+    parser.add_argument(
+        "--encoder-noise-rad",
+        type=float,
+        default=5e-5,
+        help="training encoder noise standard deviation in recorded positions")
+    parser.add_argument("--raw-window",
+                        type=int,
+                        default=5,
+                        help="positive odd smoothing window for raw input")
+    parser.add_argument(
+        "--raw-estimator",
+        choices=("moving-average", "local-cubic"),
+        default="moving-average",
+        help="position derivative estimator for recorder-format input")
     parser.add_argument("--seed",
                         type=int,
                         default=20261124,
@@ -285,13 +363,21 @@ def main():
                         help="Huber threshold")
     args = parser.parse_args()
     for field in ("payload_kg", "torque_noise_nm", "outlier_nm",
-                  "huber_delta_nm"):
+                  "encoder_noise_rad", "huber_delta_nm"):
         value = getattr(args, field)
         if not math.isfinite(value) or value < 0.0 or (field == "huber_delta_nm"
                                                        and value == 0.0):
             parser.error(f"invalid --{field.replace('_', '-')} value")
     if args.seed < 0:
         parser.error("--seed must be nonnegative")
+    if args.sample_count < 3:
+        parser.error("--sample-count must be at least three")
+    if args.design_evaluations < 1:
+        parser.error("--design-evaluations must be positive")
+    if args.raw_window <= 0 or args.raw_window % 2 == 0:
+        parser.error("--raw-window must be positive and odd")
+    if args.raw_estimator == "local-cubic" and args.raw_window < 5:
+        parser.error("local-cubic requires --raw-window of at least five")
     args.executable = args.executable.resolve()
     robots = ARMS if args.robot == "both" else (args.robot,)
     try:
@@ -306,6 +392,10 @@ def main():
             "mujoco_version": mujoco.__version__,
             "numpy_version": np.__version__,
             "acquisition": args.acquisition,
+            "design_only": args.design_only,
+            "sample_count": args.sample_count,
+            "design_evaluations": args.design_evaluations,
+            "fit_input": args.fit_input,
             "seed": args.seed,
             "payload_kg": args.payload_kg,
             "payload_box_size_m": PAYLOAD_SIZE_METERS,
@@ -313,6 +403,9 @@ def main():
                 float(value) for value in PAYLOAD_CENTER_XYZ.split()
             ],
             "torque_noise_nm": args.torque_noise_nm,
+            "encoder_noise_rad": args.encoder_noise_rad,
+            "raw_window": args.raw_window,
+            "raw_estimator": args.raw_estimator,
             "outlier_nm": args.outlier_nm,
             "outlier_probability": OUTLIER_PROBABILITY,
             "huber_delta_nm": args.huber_delta_nm,

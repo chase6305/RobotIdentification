@@ -15,7 +15,8 @@ Usage: ./scripts/run_arm_identification.sh --output DIRECTORY [experiment option
 This builds the optional C++ benchmark and runs the two arms in HumanoidAssets.
 The asset checkout defaults to ../HumanoidAssets relative to the repository.
 Pass --assets-root to choose a different location or --robot pm01 / openarm
-to run one arm. Pass --acquisition rollout for torque-driven simulation.
+to run one arm. Pass --acquisition rollout for torque-driven simulation
+or --design-only to export automatic reference points.
 Use a new output directory for each experiment.
 
 PYTHON selects the base interpreter. ARM_IDENTIFICATION_BUILD_DIR selects the

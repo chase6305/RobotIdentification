@@ -3,6 +3,7 @@
 #include <robot_identification_pinocchio/pinocchio_regressor.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <filesystem>
 #include <iomanip>
@@ -12,13 +13,17 @@
 #include <pinocchio/parsers/urdf.hpp>
 #include <random>
 #include <stdexcept>
+#include <string_view>
+
+#include "raw_preprocessing.h"
 
 namespace {
 namespace fs = std::filesystem;
 using namespace robot_identification;
 using robot_identification_pinocchio::PinocchioRegressor;
 
-constexpr int kTrajectorySamples = 401;
+constexpr std::size_t kTrajectorySamples = 401;
+constexpr std::size_t kDesignEvaluations = 240;
 constexpr double kGravity = 9.81;
 // MuJoCo diagonalizes the source URDF's full inertia tensors on import.
 constexpr double kOracleToleranceNm = 1e-7;
@@ -83,14 +88,16 @@ HarmonicDesign SeedDesign(const ExcitationLimits& limits, bool holdout) {
 void WriteMotion(const HarmonicTrajectory& trajectory,
                  const ExcitationLimits& limits,
                  const std::vector<std::string>& names,
-                 const fs::path& path) {
+                 const fs::path& path,
+                 std::size_t sample_count) {
     const double duration = trajectory.period_seconds();
-    const double period = duration / (kTrajectorySamples - 1);
+    const double period = duration / (sample_count - 1);
     const auto validation = ValidateExcitationTrajectory(trajectory, limits, duration, period);
     if (!validation.passed) throw std::runtime_error(path.string() + ": " + validation.reason);
     Dataset dataset{names, {}};
-    for (int index = 0; index < kTrajectorySamples; ++index) {
-        const double time = duration * index / (kTrajectorySamples - 1);
+    dataset.samples.reserve(sample_count);
+    for (std::size_t index = 0; index < sample_count; ++index) {
+        const double time = duration * index / (sample_count - 1);
         auto motion = trajectory.Evaluate(time);
         dataset.samples.push_back({time, std::move(motion.position), std::move(motion.velocity),
                                    std::move(motion.acceleration), Eigen::VectorXd::Zero(names.size())});
@@ -132,7 +139,9 @@ void WriteReference(const HarmonicDesign& design) {
     std::cout << '}';
 }
 
-void Design(const char* nominal_urdf, const fs::path& directory) {
+void Design(const char* nominal_urdf, const fs::path& directory, std::size_t samples, std::size_t evaluations) {
+    if (samples < 3 || evaluations == 0)
+        throw std::invalid_argument("design requires at least three samples and one evaluation");
     const auto model = LoadModel(nominal_urdf);
     const auto backend = std::make_shared<PinocchioRegressor>(model);
     const Eigen::VectorXd margin = .05 * (model->upperPositionLimit - model->lowerPositionLimit);
@@ -152,17 +161,18 @@ void Design(const char* nominal_urdf, const fs::path& directory) {
     const auto holdout = SeedDesign(limits, true);
     ExcitationDesignOptions options;
     options.duration_seconds = baseline.trajectory().period_seconds();
-    options.sample_count = 101;
-    options.max_evaluations = 240;
+    options.sample_count = std::min<std::size_t>(101, samples);
+    options.max_evaluations = evaluations;
     const auto result = OptimizeExcitationDesign(baseline, limits, base, options);
     if (!result.initial_quality.fully_identifiable() || !result.quality.fully_identifiable() ||
         !result.validation.passed || result.quality.mean_log_information < result.initial_quality.mean_log_information)
         throw std::runtime_error("excitation design failed rank, information or limit validation");
 
     WriteDatasetCsv(calibration, (directory / "calibration.csv").string());
-    WriteMotion(baseline.trajectory(), limits, calibration.joint_names, directory / "baseline_states.csv");
-    WriteMotion(result.design.trajectory(), limits, calibration.joint_names, directory / "optimized_states.csv");
-    WriteMotion(holdout.trajectory(), limits, calibration.joint_names, directory / "holdout_states.csv");
+    WriteMotion(baseline.trajectory(), limits, calibration.joint_names, directory / "baseline_states.csv", samples);
+    WriteMotion(result.design.trajectory(), limits, calibration.joint_names, directory / "optimized_states.csv",
+                samples);
+    WriteMotion(holdout.trajectory(), limits, calibration.joint_names, directory / "holdout_states.csv", samples);
     std::cout << "{\"baseline\":";
     WriteQuality(result.initial_quality);
     std::cout << ",\"optimized\":";
@@ -263,23 +273,62 @@ void Fit(const char* nominal_urdf, const fs::path& directory, double huber_delta
     }
     std::cout << "}\n";
 }
+
+Dataset EstimateMovingAverage(const RawDataset& raw, std::size_t window) {
+    const auto sample_count = static_cast<std::size_t>(raw.time_seconds.size());
+    if (window == 0 || window % 2 == 0 || window > sample_count)
+        throw std::invalid_argument("raw smoothing window must be a positive odd number within the dataset length");
+    PreprocessOptions options;
+    options.smoothing_window = window;
+    // Three centered averages and two centered differences extend this far.
+    options.trim_front = options.trim_back = 3 * (window / 2) + 2;
+    if (options.trim_front > (sample_count - 3) / 2)
+        throw std::invalid_argument("raw smoothing leaves fewer than three valid interior samples");
+    return PreprocessPositionAndTorque(raw, options);
+}
+
+void ProcessRaw(const char* input, const char* output, std::size_t window, std::string_view method) {
+    const auto raw = ReadRawDatasetCsv(input);
+    if (method != "moving-average" && method != "local-cubic")
+        throw std::invalid_argument("raw method must be moving-average or local-cubic");
+    const auto dataset = method == "local-cubic" ? arm_identification::EstimateLocalCubic(raw, window)
+                                                 : EstimateMovingAverage(raw, window);
+    WriteDatasetCsv(dataset, output);
+    std::cout << "{\"input_samples\":" << raw.time_seconds.size() << ",\"used_samples\":" << dataset.samples.size()
+              << "}\n";
+}
+
+std::size_t ParseCount(std::string_view value, const char* label) {
+    std::size_t count = 0;
+    const auto* end = value.data() + value.size();
+    const auto parsed = std::from_chars(value.data(), end, count);
+    if (parsed.ec != std::errc{} || parsed.ptr != end)
+        throw std::invalid_argument(std::string(label) + " must be a nonnegative integer");
+    return count;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
     try {
         std::cout << std::setprecision(std::numeric_limits<double>::max_digits10);
         const auto mode = argc > 1 ? std::string(argv[1]) : "";
-        if (argc == 4 && mode == "design") {
-            Design(argv[2], argv[3]);
+        if ((argc == 4 || argc == 6) && mode == "design") {
+            const auto samples = argc == 6 ? ParseCount(argv[4], "sample count") : kTrajectorySamples;
+            const auto evaluations = argc == 6 ? ParseCount(argv[5], "evaluation budget") : kDesignEvaluations;
+            Design(argv[2], argv[3], samples, evaluations);
         } else if (argc == 5 && mode == "fit") {
             std::size_t end = 0;
             const double delta = std::stod(argv[4], &end);
             if (argv[4][end] != '\0' || !std::isfinite(delta) || delta <= 0.)
                 throw std::invalid_argument("Huber delta must be finite and positive");
             Fit(argv[2], argv[3], delta);
+        } else if ((argc == 5 || argc == 6) && mode == "preprocess") {
+            ProcessRaw(argv[2], argv[3], ParseCount(argv[4], "raw smoothing window"),
+                       argc == 6 ? argv[5] : "moving-average");
         } else {
-            std::cerr << "usage: arm_identification design NOMINAL_URDF DIRECTORY\n"
-                         "       arm_identification fit NOMINAL_URDF DIRECTORY HUBER_DELTA_NM\n";
+            std::cerr << "usage: arm_identification design NOMINAL_URDF DIRECTORY [SAMPLES EVALUATIONS]\n"
+                         "       arm_identification fit NOMINAL_URDF DIRECTORY HUBER_DELTA_NM\n"
+                         "       arm_identification preprocess RAW_CSV PROCESSED_CSV WINDOW [METHOD]\n";
             return 2;
         }
     } catch (const std::exception& error) {

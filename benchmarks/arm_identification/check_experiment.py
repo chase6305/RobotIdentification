@@ -20,6 +20,13 @@ def check_arm(name, dof, expected_rank, experiment, clean):
                     for peak in experiment["peak_effort_fraction"].values())):
         raise ValueError(
             f"{name}: joint layout, oracle, excitation or effort check failed")
+    for split, acquisition in experiment.get("acquisition", {}).items():
+        if (acquisition["integration_steps"] <= experiment["samples"][split] or
+                acquisition["saturation_steps"] != 0 or
+                not acquisition["position_tracking_rmse_rad"] < 0.02):
+            raise ValueError(
+                f"{name}/{split}: invalid forward simulation or tracking accuracy"
+            )
     for trajectory in ("baseline", "optimized"):
         if design[trajectory]["rank"] != rank:
             raise ValueError(f"{name}/{trajectory}: design rank mismatch")

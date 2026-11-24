@@ -7,8 +7,8 @@ import mujoco
 import numpy as np
 
 MAX_STEP_SECONDS = 0.001
-POSITION_GAIN_S2 = 64.0
-VELOCITY_GAIN_S = 16.0
+POSITION_GAIN_S2 = 10000.0
+VELOCITY_GAIN_S = 200.0
 
 
 @dataclass(frozen=True)
@@ -124,11 +124,16 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name):
         command = controller.inverse_torque(control_data, position, velocity,
                                             desired_acceleration)
         torque = np.clip(command, -effort_limits, effort_limits)
-        if (not np.isfinite(command).all() or control_data.nefc or
-                abs(plant_data.time - step * step_seconds) > 1e-9):
+        time = step * step_seconds
+        if not np.isfinite(command).all():
             raise ValueError(
-                f"{name} tracking became invalid at t={step * step_seconds:.6g} s"
-            )
+                f"{name} computed non-finite torque at t={time:.6g} s")
+        if control_data.nefc:
+            raise ValueError(
+                f"{name} tracking reached a joint constraint at t={time:.6g} s")
+        if abs(plant_data.time - time) > 1e-9:
+            raise ValueError(
+                f"{name} simulation time became invalid at t={time:.6g} s")
         if np.any(command != torque):
             saturation_steps += 1
         peak_effort = max(peak_effort,
@@ -141,7 +146,7 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name):
             mujoco.mj_forward(plant.model, plant_data)
         if plant_data.nefc or np.any(plant_data.warning.number):
             raise ValueError(
-                f"{name} MuJoCo constraint or integration warning at t={step * step_seconds:.6g} s"
+                f"{name} MuJoCo constraint or integration warning at t={time:.6g} s"
             )
         if step % substeps == 0:
             row = step // substeps
