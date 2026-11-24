@@ -366,6 +366,30 @@ def run_arm(name, args):
     return result
 
 
+def print_summary(report):
+    if report["design_only"]:
+        print(
+            f"Exported {report['sample_count']} points per trajectory for {', '.join(report['robots'])}.",
+            file=sys.stderr)
+        return
+    print(
+        f"{'Arm':<10}{'Base rank':>10}{'Torque RMSE [N m]':>20}"
+        f"{'Replay RMSE [rad]':>20}{'Payload [kg]':>16}",
+        file=sys.stderr)
+    for name, robot in report["robots"].items():
+        fit = robot["fit"]
+        replay = fit.get("replay", {}).get("optimized_huber",
+                                           {}).get("position_rmse_rad")
+        payload = fit.get("payload_fit", {}).get("physical_candidate")
+        replay_value = f"{replay:.5g}" if replay is not None else "—"
+        payload_value = f"{payload['mass_kg']:.6g}" if payload is not None else "—"
+        print(
+            f"{name:<10}{fit['base_parameter_count']:>10}"
+            f"{fit['optimized']['huber']['holdout_rmse_nm']:>20.5g}"
+            f"{replay_value:>20}{payload_value:>16}",
+            file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets-root",
@@ -381,6 +405,9 @@ def main():
                         type=Path,
                         help="new directory for datasets and report.json")
     parser.add_argument("--robot", choices=("both", *ARMS), default="both")
+    parser.add_argument("--summary",
+                        action="store_true",
+                        help="print concise per-arm results to stderr")
     parser.add_argument(
         "--design-only",
         action="store_true",
@@ -579,6 +606,8 @@ def main():
     except (OSError, KeyError, ET.ParseError, ValueError) as error:
         print(f"arm experiment: {error}", file=sys.stderr)
         return 1
+    if args.summary:
+        print_summary(report)
     print(report_path)
     return 0
 

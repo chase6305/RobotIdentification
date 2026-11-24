@@ -60,6 +60,10 @@ Reproduce synthetic solver and Pinocchio assembly measurements with the [standal
 
 Generate simulated data for the HumanoidAssets PM01 left arm (5 axes) and OpenArm left arm (7 axes), fit identifiable inertial combinations with the Pinocchio regressor and C++ solver, and validate torque predictions on a separate trajectory. See the [experiment and reproduction commands](benchmarks/arm_identification/README.md).
 
+```bash
+./scripts/run_arm_identification.sh --demo --output build/arms-demo
+```
+
 ## Offline tools
 
 ```bash

@@ -7,6 +7,14 @@ This experiment uses the left arm of EngineAI PM01 (5 joints, fixed torso, fixed
 The launcher builds the C++ tools and creates an isolated Python environment using the pinned wheels for Pinocchio 4.1.0 and MuJoCo 3.13.0. On Ubuntu it needs a C++17 compiler, CMake, Eigen 3.4 (`libeigen3-dev`), and Python 3.10 with `venv`.
 
 ```bash
+./scripts/run_arm_identification.sh --demo --output build/arms-demo
+```
+
+The demo prepares both arms, generates reference points, captures raw encoder and torque data in MuJoCo, fits with periodic Fourier derivatives, replays 16 validation windows, and exports the identified payload models. With the default build directory, native build output is saved to `build/arm-identification/build.log`. The runner prints the results and the path to `report.json`.
+
+To run forward acquisition using the simulated derivative states, use the simpler rollout command.
+
+```bash
 ./scripts/run_arm_identification.sh --assets-root ../HumanoidAssets \
   --acquisition rollout --output build/arm-rollout
 ```

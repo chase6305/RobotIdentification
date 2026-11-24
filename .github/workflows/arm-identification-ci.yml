@@ -59,8 +59,7 @@ jobs:
             --raw-window 9 --timestamp-jitter-ms 2 --output build/arms-rollout-raw
           run_experiment --acquisition rollout --actuator-scale 1 --estimate-payload --replay \
             --torque-noise-nm 0 --outlier-nm 0 --output build/arms-drive-clean
-          run_experiment --acquisition rollout --actuator-scale 1 --estimate-payload --replay --fit-input raw \
-            --raw-estimator periodic-fourier --raw-harmonics 7 --timestamp-jitter-ms 2 --output build/arms-drive-raw
+          ./scripts/run_arm_identification.sh --demo --assets-root build/HumanoidAssets --output build/arms-drive-raw
           run_experiment --acquisition rollout --actuator-scale 1 --fit-input raw --raw-estimator periodic-fourier \
             --design-evaluations 240 --huber-auto --torque-noise-nm 0.08 --timestamp-jitter-ms 2 \
             --output build/arms-drive-high-noise
