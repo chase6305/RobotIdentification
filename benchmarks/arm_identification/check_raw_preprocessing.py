@@ -56,6 +56,12 @@ def check_report(path):
         raise ValueError("expected a raw local-cubic arm experiment")
     for arm, rank in (("pm01", 33), ("openarm", 43)):
         data = report["robots"][arm]
+        for motion, acquisition in data["acquisition"].items():
+            if not 0 < acquisition["max_timestamp_jitter_s"] <= report[
+                    "timestamp_jitter_ms"] / 1000 + 1e-12:
+                raise ValueError(
+                    f"{arm}/{motion}: capture jitter did not match the requested range"
+                )
         for name, metrics in data["preprocessing"].items():
             if metrics["used_samples"] != metrics["input_samples"] - report[
                     "raw_window"] + 1:

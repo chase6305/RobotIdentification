@@ -40,6 +40,33 @@ std::vector<std::string> JointNames(const pinocchio::Model& model) {
     return {model.names.begin() + 1, model.names.end()};
 }
 
+class ArmRegression {
+public:
+    ArmRegression(std::shared_ptr<const pinocchio::Model> model, bool actuator_terms)
+        : rigid_(std::make_shared<PinocchioRegressor>(std::move(model))), backend_(rigid_) {
+        if (actuator_terms) {
+            JointActuatorRegressorOptions options;
+            options.coulomb_friction = false;
+            options.torque_bias = false;
+            backend_ = std::make_shared<JointActuatorRegressor>(rigid_, JointNames(rigid_->model()), options);
+        }
+    }
+
+    [[nodiscard]] const auto& backend() const { return backend_; }
+    [[nodiscard]] const PinocchioRegressor& rigid() const { return *rigid_; }
+
+    [[nodiscard]] RegressionProblem BuildProblem(const Dataset& dataset) const {
+        if (backend_ == rigid_) return rigid_->BuildProblem(dataset);
+        if (dataset.joint_names != JointNames(rigid_->model()))
+            throw std::invalid_argument("dataset joint names do not match the loaded arm");
+        return BuildRegressionProblem(dataset, *backend_);
+    }
+
+private:
+    std::shared_ptr<const PinocchioRegressor> rigid_;
+    std::shared_ptr<const RegressorBackend> backend_;
+};
+
 Dataset Calibration(const pinocchio::Model& model, const ExcitationLimits& limits) {
     Dataset dataset;
     dataset.joint_names = JointNames(model);
@@ -139,11 +166,15 @@ void WriteReference(const HarmonicDesign& design) {
     std::cout << '}';
 }
 
-void Design(const char* nominal_urdf, const fs::path& directory, std::size_t samples, std::size_t evaluations) {
+void Design(const char* nominal_urdf,
+            const fs::path& directory,
+            std::size_t samples,
+            std::size_t evaluations,
+            bool actuator_terms) {
     if (samples < 3 || evaluations == 0)
         throw std::invalid_argument("design requires at least three samples and one evaluation");
     const auto model = LoadModel(nominal_urdf);
-    const auto backend = std::make_shared<PinocchioRegressor>(model);
+    const ArmRegression arm(model, actuator_terms);
     const Eigen::VectorXd margin = .05 * (model->upperPositionLimit - model->lowerPositionLimit);
 #if PINOCCHIO_VERSION_AT_LEAST(4, 0, 0)
     const auto& velocity_limit = model->upperVelocityLimit;
@@ -154,9 +185,9 @@ void Design(const char* nominal_urdf, const fs::path& directory, std::size_t sam
                                   (.8 * velocity_limit).cwiseMin(4.), Eigen::VectorXd::Constant(model->nv, 25.),
                                   Eigen::VectorXd::Constant(model->nv, 160.)};
     const auto calibration = Calibration(*model, limits);
-    const auto full = backend->BuildProblem(calibration);
+    const auto full = arm.BuildProblem(calibration);
     const BaseParameterBasis basis(full.regressor);
-    const BaseParameterRegressor base(backend, basis);
+    const BaseParameterRegressor base(arm.backend(), basis);
     const auto baseline = SeedDesign(limits, false);
     const auto holdout = SeedDesign(limits, true);
     ExcitationDesignOptions options;
@@ -187,10 +218,13 @@ void Design(const char* nominal_urdf, const fs::path& directory, std::size_t sam
     std::cout << "}}\n";
 }
 
-Eigen::VectorXd DynamicParameters(const pinocchio::Model& model) {
-    Eigen::VectorXd parameters(10 * (model.njoints - 1));
+Eigen::VectorXd DynamicParameters(const pinocchio::Model& model, const std::vector<double>& drive_parameters) {
+    const auto inertia_count = 10 * (model.njoints - 1);
+    Eigen::VectorXd parameters(inertia_count + drive_parameters.size());
     for (int joint = 1; joint < model.njoints; ++joint)
         parameters.segment<10>(10 * (joint - 1)) = model.inertias[joint].toDynamicParameters();
+    for (std::size_t index = 0; index < drive_parameters.size(); ++index)
+        parameters[inertia_count + index] = drive_parameters[index];
     return parameters;
 }
 
@@ -220,22 +254,29 @@ void WriteFit(const RegressionProblem& train,
     std::cout << '}';
 }
 
-void Fit(const char* nominal_urdf, const fs::path& directory, double huber_delta) {
+void Fit(const char* nominal_urdf,
+         const fs::path& directory,
+         double huber_delta,
+         const std::vector<double>& drive_parameters) {
     const auto model = LoadModel(nominal_urdf);
-    const PinocchioRegressor backend(model);
+    const bool actuator_terms = !drive_parameters.empty();
+    if (actuator_terms && drive_parameters.size() != static_cast<std::size_t>(2 * model->nv))
+        throw std::invalid_argument("expected one armature and damping pair per joint");
+    const ArmRegression arm(model, actuator_terms);
     const auto build = [&](const char* filename) {
-        return backend.BuildProblem(ReadDatasetCsv((directory / filename).string()));
+        return arm.BuildProblem(ReadDatasetCsv((directory / filename).string()));
     };
     const auto calibration = build("calibration.csv");
     const BaseParameterBasis basis(calibration.regressor);
     const auto full_holdout = build("holdout.csv");
     const auto holdout = basis.ReduceProblem(full_holdout);
-    const auto nominal = basis.ToBaseParameters(DynamicParameters(*model));
+    const auto nominal =
+        basis.ToBaseParameters(DynamicParameters(*model, std::vector<double>(drive_parameters.size())));
     const double nominal_rmse = ValidateParameters(holdout, nominal).rmse;
 
     const auto truth = LoadModel((directory / "truth.urdf").c_str());
     if (JointNames(*truth) != JointNames(*model)) throw std::runtime_error("truth model changed joint order");
-    const auto full_truth = DynamicParameters(*truth);
+    const auto full_truth = DynamicParameters(*truth, drive_parameters);
     const auto oracle = basis.ToBaseParameters(full_truth);
     const Eigen::VectorXd full_prediction = full_holdout.regressor * full_truth;
     const Eigen::VectorXd reduced_prediction = holdout.regressor * oracle;
@@ -254,7 +295,13 @@ void Fit(const char* nominal_urdf, const fs::path& directory, double huber_delta
               << ",\"holdout_reconstruction_error\":" << basis.ReconstructionError(full_holdout.regressor)
               << ",\"nominal_holdout_rmse_nm\":" << nominal_rmse
               << ",\"oracle_holdout_max_absolute_error_nm\":" << engine_error
-              << ",\"reduced_oracle_max_difference_nm\":" << reduction_error << ",\"selected_columns\":";
+              << ",\"reduced_oracle_max_difference_nm\":" << reduction_error << ",\"parameter_names\":[";
+    const auto parameter_names = arm.backend()->parameter_names();
+    for (std::size_t index = 0; index < parameter_names.size(); ++index) {
+        if (index != 0) std::cout << ',';
+        std::cout << std::quoted(parameter_names[index]);
+    }
+    std::cout << "],\"selected_columns\":";
     WriteVector(basis.selected_columns());
     std::cout << ",\"column_scales\":";
     WriteVector(basis.column_scales());
@@ -270,6 +317,19 @@ void Fit(const char* nominal_urdf, const fs::path& directory, double huber_delta
         std::cout << ",\"huber\":";
         WriteFit(train, holdout, oracle, huber_delta);
         std::cout << '}';
+    }
+    if (actuator_terms) {
+        const auto build_rigid = [&](const char* filename) {
+            return arm.rigid().BuildProblem(ReadDatasetCsv((directory / filename).string()));
+        };
+        const BaseParameterBasis rigid_basis(build_rigid("calibration.csv").regressor);
+        const auto rigid_train = rigid_basis.ReduceProblem(build_rigid("train_optimized.csv"));
+        const auto rigid_holdout = rigid_basis.ReduceProblem(build_rigid("holdout.csv"));
+        SolverOptions options;
+        options.huber_delta = huber_delta;
+        const auto rigid_fit = Solve(rigid_train, options);
+        const auto comparison = ValidateParameters(rigid_holdout, rigid_fit.parameters);
+        std::cout << ",\"rigid_only_optimized_huber_holdout_rmse_nm\":" << comparison.rmse;
     }
     std::cout << "}\n";
 }
@@ -306,28 +366,39 @@ std::size_t ParseCount(std::string_view value, const char* label) {
         throw std::invalid_argument(std::string(label) + " must be a nonnegative integer");
     return count;
 }
+
+double ParseNonnegative(const char* value, const char* label) {
+    std::size_t end = 0;
+    const double result = std::stod(value, &end);
+    if (value[end] != '\0' || !std::isfinite(result) || result < 0.)
+        throw std::invalid_argument(std::string(label) + " must be finite and nonnegative");
+    return result;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
     try {
         std::cout << std::setprecision(std::numeric_limits<double>::max_digits10);
         const auto mode = argc > 1 ? std::string(argv[1]) : "";
-        if ((argc == 4 || argc == 6) && mode == "design") {
-            const auto samples = argc == 6 ? ParseCount(argv[4], "sample count") : kTrajectorySamples;
-            const auto evaluations = argc == 6 ? ParseCount(argv[5], "evaluation budget") : kDesignEvaluations;
-            Design(argv[2], argv[3], samples, evaluations);
-        } else if (argc == 5 && mode == "fit") {
-            std::size_t end = 0;
-            const double delta = std::stod(argv[4], &end);
-            if (argv[4][end] != '\0' || !std::isfinite(delta) || delta <= 0.)
-                throw std::invalid_argument("Huber delta must be finite and positive");
-            Fit(argv[2], argv[3], delta);
+        if ((argc == 4 || argc == 6 || argc == 7) && mode == "design") {
+            const auto samples = argc >= 6 ? ParseCount(argv[4], "sample count") : kTrajectorySamples;
+            const auto evaluations = argc >= 6 ? ParseCount(argv[5], "evaluation budget") : kDesignEvaluations;
+            if (argc == 7 && std::string_view(argv[6]) != "actuators")
+                throw std::invalid_argument("design only supports optional actuator terms");
+            Design(argv[2], argv[3], samples, evaluations, argc == 7);
+        } else if (argc >= 5 && mode == "fit") {
+            const double delta = ParseNonnegative(argv[4], "Huber delta");
+            if (delta == 0.) throw std::invalid_argument("Huber delta must be positive");
+            std::vector<double> drive_parameters;
+            for (int index = 5; index < argc; ++index)
+                drive_parameters.push_back(ParseNonnegative(argv[index], "drive parameter"));
+            Fit(argv[2], argv[3], delta, drive_parameters);
         } else if ((argc == 5 || argc == 6) && mode == "preprocess") {
             ProcessRaw(argv[2], argv[3], ParseCount(argv[4], "raw smoothing window"),
                        argc == 6 ? argv[5] : "moving-average");
         } else {
-            std::cerr << "usage: arm_identification design NOMINAL_URDF DIRECTORY [SAMPLES EVALUATIONS]\n"
-                         "       arm_identification fit NOMINAL_URDF DIRECTORY HUBER_DELTA_NM\n"
+            std::cerr << "usage: arm_identification design NOMINAL_URDF DIRECTORY [SAMPLES EVALUATIONS [actuators]]\n"
+                         "       arm_identification fit NOMINAL_URDF DIRECTORY HUBER_DELTA_NM [J1 B1 ...]\n"
                          "       arm_identification preprocess RAW_CSV PROCESSED_CSV WINDOW [METHOD]\n";
             return 2;
         }

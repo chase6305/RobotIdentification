@@ -205,8 +205,16 @@ def run_arm(name, args):
     directory.mkdir()
     nominal_path = directory / "nominal.urdf"
     write_urdf(nominal, nominal_path)
+    drive_parameters = None
+    design_options = []
+    if args.actuator_scale > 0.0:
+        effort_fraction = effort / np.max(effort)
+        drive_parameters = args.actuator_scale * np.column_stack(
+            (0.04 * effort_fraction, 0.02 + 0.05 * effort_fraction))
+        design_options.append("actuators")
     design = run_cpp(args.executable, "design", nominal_path, directory,
-                     args.sample_count, args.design_evaluations)
+                     args.sample_count, args.design_evaluations,
+                     *design_options)
     result = {
         "urdf": arm.urdf,
         "urdf_sha256": hashlib.sha256(source_bytes).hexdigest(),
@@ -227,12 +235,24 @@ def run_arm(name, args):
         split: read_motion(directory / f"{split}_states.csv", arm.joints)
         for split in ("baseline", "optimized", "holdout")
     }
-    plant = ArmDynamics.from_urdf(truth_path, arm.joints)
+    plant = ArmDynamics.from_urdf(truth_path, arm.joints, drive_parameters)
+    drive_options = []
+    if drive_parameters is not None:
+        drive_options = drive_parameters.ravel().tolist()
+        result["actuators"] = {
+            name: {
+                "armature_kg_m2": float(armature),
+                "viscous_nm_s_per_rad": float(viscous)
+            } for name, (armature, viscous) in zip(arm.joints, drive_parameters)
+        }
+        mujoco.mj_saveModel(plant.model, str(directory / "truth.mjb"))
     acquisition = {}
     if args.acquisition == "rollout":
         controller = ArmDynamics.from_urdf(nominal_path, arm.joints)
         labels, acquisition = rollout(plant, controller, motions,
-                                      design["references"], effort)
+                                      design["references"], effort,
+                                      args.timestamp_jitter_ms / 1000,
+                                      args.seed)
     else:
         labels = inverse_dynamics(plant, motions, effort)
     dof = len(arm.joints)
@@ -268,7 +288,7 @@ def run_arm(name, args):
     write_dataset(directory / "holdout.csv", labels["holdout"],
                   dataset_header(arm.joints))
     fit = run_cpp(args.executable, "fit", nominal_path, directory,
-                  args.huber_delta_nm)
+                  args.huber_delta_nm, *drive_options)
 
     result.update({
         "payload_parent": terminal,
@@ -328,6 +348,11 @@ def main():
         "fit with simulated derivatives or estimate them from recorder-format CSV"
     )
     parser.add_argument(
+        "--timestamp-jitter-ms",
+        type=float,
+        default=0.0,
+        help="maximum forward-simulation acquisition jitter in milliseconds")
+    parser.add_argument(
         "--encoder-noise-rad",
         type=float,
         default=5e-5,
@@ -349,6 +374,11 @@ def main():
                         type=float,
                         default=0.35,
                         help="added terminal payload in truth model")
+    parser.add_argument(
+        "--actuator-scale",
+        type=float,
+        default=0.0,
+        help="scale of synthetic rotor inertia and viscous joint friction")
     parser.add_argument("--torque-noise-nm",
                         type=float,
                         default=0.02,
@@ -362,8 +392,9 @@ def main():
                         default=0.06,
                         help="Huber threshold")
     args = parser.parse_args()
-    for field in ("payload_kg", "torque_noise_nm", "outlier_nm",
-                  "encoder_noise_rad", "huber_delta_nm"):
+    for field in ("payload_kg", "actuator_scale", "torque_noise_nm",
+                  "outlier_nm", "encoder_noise_rad", "timestamp_jitter_ms",
+                  "huber_delta_nm"):
         value = getattr(args, field)
         if not math.isfinite(value) or value < 0.0 or (field == "huber_delta_nm"
                                                        and value == 0.0):
@@ -378,6 +409,8 @@ def main():
         parser.error("--raw-window must be positive and odd")
     if args.raw_estimator == "local-cubic" and args.raw_window < 5:
         parser.error("local-cubic requires --raw-window of at least five")
+    if args.timestamp_jitter_ms > 0.0 and args.acquisition != "rollout":
+        parser.error("--timestamp-jitter-ms requires --acquisition rollout")
     args.executable = args.executable.resolve()
     robots = ARMS if args.robot == "both" else (args.robot,)
     try:
@@ -398,12 +431,14 @@ def main():
             "fit_input": args.fit_input,
             "seed": args.seed,
             "payload_kg": args.payload_kg,
+            "actuator_scale": args.actuator_scale,
             "payload_box_size_m": PAYLOAD_SIZE_METERS,
             "payload_center_xyz_m": [
                 float(value) for value in PAYLOAD_CENTER_XYZ.split()
             ],
             "torque_noise_nm": args.torque_noise_nm,
             "encoder_noise_rad": args.encoder_noise_rad,
+            "timestamp_jitter_ms": args.timestamp_jitter_ms,
             "raw_window": args.raw_window,
             "raw_estimator": args.raw_estimator,
             "outlier_nm": args.outlier_nm,

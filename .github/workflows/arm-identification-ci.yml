@@ -56,11 +56,16 @@ jobs:
           python benchmarks/arm_identification/check_experiment.py \
             build/arms-rollout-clean/report.json build/arms-rollout-noisy-*/report.json
           run_experiment --acquisition rollout --fit-input raw --raw-estimator local-cubic \
-            --raw-window 9 --output build/arms-rollout-raw
+            --raw-window 9 --timestamp-jitter-ms 2 --output build/arms-rollout-raw
+          run_experiment --actuator-scale 1 --torque-noise-nm 0 --outlier-nm 0 --output build/arms-drive-clean
+          run_experiment --acquisition rollout --actuator-scale 1 --fit-input raw --raw-estimator local-cubic \
+            --raw-window 9 --timestamp-jitter-ms 2 --output build/arms-drive-raw
           run_experiment --design-only --sample-count 161 --design-evaluations 120 --output build/arms-points
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_raw_preprocessing.py \
             build/arm-identification/benchmark/arm_identification build/arms-rollout-raw/report.json
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_points.py build/arms-points
+          build/arm-identification/venv/bin/python benchmarks/arm_identification/check_drive.py \
+            build/arms-drive-clean build/arms-drive-raw
       - uses: actions/upload-artifact@v4
         if: always()
         with:

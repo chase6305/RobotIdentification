@@ -18,8 +18,20 @@ class ArmDynamics:
     dofs: np.ndarray
 
     @classmethod
-    def from_urdf(cls, urdf, joints):
-        model = mujoco.MjModel.from_xml_path(str(urdf))
+    def from_urdf(cls, urdf, joints, drive_parameters=None):
+        if drive_parameters is None:
+            model = mujoco.MjModel.from_xml_path(str(urdf))
+        else:
+            spec = mujoco.MjSpec.from_file(str(urdf))
+            for name, (armature, damping) in zip(joints,
+                                                 drive_parameters,
+                                                 strict=True):
+                joint = spec.joint(name)
+                if joint is None:
+                    raise ValueError(f"expected hinge joint {name} in {urdf}")
+                joint.armature = armature
+                joint.damping[0] = damping
+            model = spec.compile()
         model.opt.gravity[:] = (0.0, 0.0, -9.81)
         joint_ids = [
             mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
@@ -79,17 +91,25 @@ def harmonic_states(coefficients, time):
     return position, velocity, acceleration
 
 
-def rollout(plant, controller, motions, references, effort_limits):
+def rollout(plant,
+            controller,
+            motions,
+            references,
+            effort_limits,
+            jitter_seconds=0.0,
+            seed=0):
     labels = {}
     diagnostics = {}
     for name, motion in motions.items():
+        noise_seed = np.random.SeedSequence([seed, 2, int(name == "holdout")])
         labels[name], diagnostics[name] = _rollout_motion(
-            plant, controller, motion, references[name], effort_limits, name)
+            plant, controller, motion, references[name], effort_limits, name,
+            jitter_seconds, noise_seed)
     return labels, diagnostics
 
 
-def _rollout_motion(plant, controller, motion, reference, effort_limits, name):
-    dof = len(plant.dofs)
+def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
+                    jitter_seconds, noise_seed):
     sample_seconds = motion[:, 0]
     duration = sample_seconds[-1]
     interval = duration / (len(motion) - 1)
@@ -102,6 +122,18 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name):
     substeps = math.ceil(interval / MAX_STEP_SECONDS)
     step_count = substeps * (len(motion) - 1)
     step_seconds = duration / step_count
+    if jitter_seconds >= 0.5 * interval:
+        raise ValueError(
+            f"{name} timestamp jitter must be below half the sampling interval")
+    nominal_steps = np.arange(len(motion)) * substeps
+    jitter_steps = math.floor(jitter_seconds / step_seconds)
+    generator = np.random.default_rng(noise_seed)
+    sample_steps = nominal_steps.copy()
+    sample_steps[1:-1] += generator.integers(-jitter_steps,
+                                             jitter_steps + 1,
+                                             size=len(motion) - 2)
+    measured_times = sample_seconds + step_seconds * (sample_steps -
+                                                      nominal_steps)
     reference_states = harmonic_states(
         reference, np.linspace(0.0, duration, step_count + 1))
     label_positions, label_velocities, label_accelerations, label_torques = np.split(
@@ -115,6 +147,7 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name):
     plant_data.qvel[plant.dofs] = reference_states[1][0]
     peak_effort = 0.0
     saturation_steps = 0
+    row = 0
     for step, (q_ref, dq_ref, ddq_ref) in enumerate(zip(*reference_states)):
         position = plant_data.qpos[plant.positions]
         velocity = plant_data.qvel[plant.dofs]
@@ -148,23 +181,27 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name):
             raise ValueError(
                 f"{name} MuJoCo constraint or integration warning at t={time:.6g} s"
             )
-        if step % substeps == 0:
-            row = step // substeps
+        if row < len(sample_steps) and step == sample_steps[row]:
             label_positions[row] = position
             label_velocities[row] = velocity
             # During Euler stepping qacc still describes the pre-update state.
             label_accelerations[row] = plant_data.qacc[plant.dofs]
             label_torques[row] = torque
-    labels = np.column_stack((sample_seconds, label_positions, label_velocities,
+            row += 1
+    labels = np.column_stack((measured_times, label_positions, label_velocities,
                               label_accelerations, label_torques))
+    if row != len(motion):
+        raise ValueError(f"{name} did not capture every requested sample")
     if not np.isfinite(labels).all():
         raise ValueError(f"{name} generated non-finite joint samples")
-    tracking_error = label_positions - motion[:, 1:1 + dof]
+    tracking_error = label_positions - reference_states[0][sample_steps]
     return labels, {
         "simulation_step_s":
             step_seconds,
         "integration_steps":
             step_count,
+        "max_timestamp_jitter_s":
+            float(np.max(np.abs(measured_times - sample_seconds))),
         "saturation_steps":
             saturation_steps,
         "peak_effort_fraction":

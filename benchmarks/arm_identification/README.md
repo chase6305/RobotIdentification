@@ -1,6 +1,6 @@
 # MuJoCo arm identification
 
-This experiment uses the left arm of EngineAI PM01 (5 joints, fixed torso, fixed elbow end retained) and the left arm of OpenArm (7 joints, fixed base, detachable gripper omitted). The runner reads the two URDFs from a local [HumanoidAssets checkout](https://github.com/chase6305/HumanoidAssets/tree/067393d2b63b7ffa5b022e847ef2f4436799ad70) and generates mesh-free URDFs in the output directory. The extracted models preserve the joint frames, axes, limits, and moving-link inertias. There are no contacts, passive joint forces, or drive dynamics in the experiment.
+This experiment uses the left arm of EngineAI PM01 (5 joints, fixed torso, fixed elbow end retained) and the left arm of OpenArm (7 joints, fixed base, detachable gripper omitted). The runner reads the two URDFs from a local [HumanoidAssets checkout](https://github.com/chase6305/HumanoidAssets/tree/067393d2b63b7ffa5b022e847ef2f4436799ad70) and generates mesh-free URDFs in the output directory. The extracted models preserve the joint frames, axes, limits, and moving-link inertias. The default plant uses rigid-body dynamics in free space.
 
 ## Run
 
@@ -23,10 +23,14 @@ Run the forward simulation and fit using the recorder-format position and torque
 
 ```bash
 ./scripts/run_arm_identification.sh --acquisition rollout --fit-input raw \
-  --raw-estimator local-cubic --raw-window 9 --output build/arm-raw
+  --raw-estimator local-cubic --raw-window 9 --timestamp-jitter-ms 2 --output build/arm-raw
 ```
 
 The local cubic estimator fits position against centered, scaled timestamps in each window and evaluates its first and second derivatives at the center. A nine-point window discards four points at either end and preserves each retained timestamp and torque. `--raw-estimator moving-average` selects the core's centered smoothing and finite differences. The independent holdout uses clean simulated derivatives in both cases.
+
+`--timestamp-jitter-ms` shifts the capture times within the requested bound on the MuJoCo integration grid. The CSV records the actual times. The two training trajectories share the same sample offsets, and the holdout uses an independent seed.
+
+Add `--actuator-scale 1` to the command to test synthetic reflected rotor inertia and linear viscous friction. The plant uses per-joint armature `0.04 r kg·m²` and damping `(0.02 + 0.05 r) N·m·s/rad`, where `r` is each joint's URDF effort limit divided by the largest effort limit on that arm. The scale multiplies both terms. In this mode, `truth.mjb` contains the compiled MuJoCo plant. The fit adds columns for each joint's acceleration and velocity, and the report compares against a rigid-only model fitted to the same samples. The base-parameter rank determines which combinations can be identified. See the [MuJoCo joint model reference](https://mujoco.readthedocs.io/en/stable/XMLreference.html#body-joint).
 
 An existing core and Pinocchio installation can also build the benchmark with `cmake -S benchmarks/arm_identification -B build/arm-bench` and `cmake --build build/arm-bench --parallel 2`. In that case, run `run_experiment.py` with `--executable build/arm-bench/arm_identification` and a Python environment containing MuJoCo and NumPy. See the [standalone installation guide](../../README_EN.md#standalone-build).
 
