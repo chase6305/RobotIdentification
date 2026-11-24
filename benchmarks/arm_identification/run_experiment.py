@@ -40,7 +40,7 @@ ARMS = {
              "WRIST_ROLL_L_J7")),
 }
 PAYLOAD_SIZE_METERS = (0.06, 0.05, 0.04)
-PAYLOAD_CENTER_XYZ = "0.05 0 -0.07"
+PAYLOAD_CENTER_METERS = (0.05, 0.0, -0.07)
 OUTLIER_PROBABILITY = 0.01
 FOURIER_ESTIMATORS = ("periodic-fourier", "periodic-fourier-huber")
 RAW_ESTIMATORS = ("moving-average", "local-cubic", *FOURIER_ESTIMATORS)
@@ -102,16 +102,17 @@ def extract_arm(source, arm, name):
     return robot, terminal, np.asarray(effort_limits)
 
 
-def add_payload(robot, terminal, mass):
+def add_payload(robot, terminal, mass, size, center):
     if mass == 0.0:
         return
-    x, y, z = PAYLOAD_SIZE_METERS
+    x, y, z = size
     diagonal = [
         mass * (y * y + z * z) / 12.0, mass * (x * x + z * z) / 12.0,
         mass * (x * x + y * y) / 12.0
     ]
-    add_payload_inertia(robot, terminal, mass, PAYLOAD_CENTER_XYZ,
-                        np.diag(diagonal))
+    if not all(math.isfinite(value) and value > 0.0 for value in diagonal):
+        raise ValueError("payload box inertia must be finite and positive")
+    add_payload_inertia(robot, terminal, mass, center, np.diag(diagonal))
 
 
 def add_payload_inertia(robot, terminal, mass, center, matrix):
@@ -123,7 +124,7 @@ def add_payload_inertia(robot, terminal, mass, center, matrix):
                           type="fixed")
     ET.SubElement(joint, "parent", link=terminal)
     ET.SubElement(joint, "child", link="experiment_payload")
-    ET.SubElement(joint, "origin", xyz=center, rpy="0 0 0")
+    ET.SubElement(joint, "origin", xyz=" ".join(map(str, center)), rpy="0 0 0")
 
 
 def set_link_inertia(link, mass, matrix, center=None):
@@ -251,8 +252,8 @@ def export_mujoco_model(urdf,
 def export_payload(candidate, nominal, terminal, directory, joints,
                    drive_parameters, holdout, dense_holdout, effort):
     estimated = copy.deepcopy(nominal)
-    center = " ".join(map(str, candidate["center_m"]))
-    add_payload_inertia(estimated, terminal, candidate["mass_kg"], center,
+    add_payload_inertia(estimated, terminal, candidate["mass_kg"],
+                        candidate["center_m"],
                         np.asarray(candidate["inertia_at_center_kg_m2"]))
     urdf = directory / "identified_payload.urdf"
     write_urdf(estimated, urdf)
@@ -265,6 +266,31 @@ def export_payload(candidate, nominal, terminal, directory, joints,
            candidate["holdout_rmse_nm"]) > 1e-7:
         raise ValueError(
             "exported payload disagrees with the native holdout prediction")
+
+
+def payload_reference_errors(fit, truth_path):
+    model = ET.parse(truth_path).getroot()
+    payload = model.find("./link[@name='experiment_payload']/inertial")
+    mass = float(
+        payload.find("mass").attrib["value"]) if payload is not None else 0.0
+    errors = {"mass_absolute_error_kg": abs(fit["estimated_mass_kg"] - mass)}
+    candidate = fit["physical_candidate"]
+    if payload is not None and candidate is not None:
+        mount = model.find("./joint[@name='experiment_payload_mount']/origin")
+        center = np.asarray(
+            [float(value) for value in mount.attrib["xyz"].split()])
+        tensor = payload.find("inertia").attrib
+        ixx, ixy, ixz, iyy, iyz, izz = (float(tensor[key])
+                                        for key in ("ixx", "ixy", "ixz", "iyy",
+                                                    "iyz", "izz"))
+        inertia = np.asarray([[ixx, ixy, ixz], [ixy, iyy, iyz], [ixz, iyz,
+                                                                 izz]])
+        errors["center_distance_error_m"] = float(
+            np.linalg.norm(np.asarray(candidate["center_m"]) - center))
+        errors["inertia_frobenius_error_kg_m2"] = float(
+            np.linalg.norm(
+                np.asarray(candidate["inertia_at_center_kg_m2"]) - inertia))
+    return errors
 
 
 def export_identified_arm(fit, nominal, directory, joints, holdout,
@@ -349,11 +375,15 @@ def fit_captured_arm(args, directory, metadata, holdout, dense_holdout):
     if args.estimate_payload or args.estimate_arm:
         nominal = ET.parse(nominal_path).getroot()
         effort = np.asarray(metadata["joint_effort_limits_nm"])
-        payload = fit.get("payload_fit", {}).get("physical_candidate")
-        if payload is not None:
-            export_payload(payload, nominal, metadata["payload_parent"],
-                           directory, joints, drive, holdout, dense_holdout,
-                           effort)
+        if args.estimate_payload:
+            payload = fit["payload_fit"]
+            payload["reference_errors"] = payload_reference_errors(
+                payload, directory / "truth.urdf")
+            candidate = payload["physical_candidate"]
+            if candidate is not None:
+                export_payload(candidate, nominal, metadata["payload_parent"],
+                               directory, joints, drive, holdout, dense_holdout,
+                               effort)
         if args.estimate_arm:
             export_identified_arm(fit, nominal, directory, joints, holdout,
                                   dense_holdout)
@@ -394,7 +424,8 @@ def run_arm(name, args):
 
     truth_path = directory / "truth.urdf"
     truth = copy.deepcopy(nominal)
-    add_payload(truth, terminal, args.payload_kg)
+    add_payload(truth, terminal, args.payload_kg, args.payload_size_m,
+                args.payload_center_m)
     write_urdf(truth, truth_path)
 
     motions = {
@@ -627,6 +658,18 @@ def main():
                         type=float,
                         default=0.35,
                         help="added terminal payload in truth model")
+    parser.add_argument("--payload-size-m",
+                        nargs=3,
+                        type=float,
+                        metavar=("X", "Y", "Z"),
+                        default=PAYLOAD_SIZE_METERS,
+                        help="simulated box side lengths in meters")
+    parser.add_argument("--payload-center-m",
+                        nargs=3,
+                        type=float,
+                        metavar=("X", "Y", "Z"),
+                        default=PAYLOAD_CENTER_METERS,
+                        help="simulated box center in the terminal joint frame")
     parser.add_argument(
         "--actuator-scale",
         type=float,
@@ -672,6 +715,12 @@ def main():
            args.huber_delta_nm) == 0.0:
         parser.error(
             "trajectory periods and the fixed Huber threshold must be positive")
+    if not all(
+            math.isfinite(value) and value > 0
+            for value in args.payload_size_m):
+        parser.error("--payload-size-m requires three finite positive lengths")
+    if not all(map(math.isfinite, args.payload_center_m)):
+        parser.error("--payload-center-m requires three finite coordinates")
     if args.capture_dropout >= 1.0:
         parser.error("--capture-dropout must be less than one")
     if args.seed < 0:
@@ -726,10 +775,8 @@ def main():
             "estimate_payload": args.estimate_payload,
             "estimate_arm": args.estimate_arm,
             "actuator_scale": args.actuator_scale,
-            "payload_box_size_m": PAYLOAD_SIZE_METERS,
-            "payload_center_xyz_m": [
-                float(value) for value in PAYLOAD_CENTER_XYZ.split()
-            ],
+            "payload_box_size_m": args.payload_size_m,
+            "payload_center_xyz_m": args.payload_center_m,
             "torque_noise_nm": args.torque_noise_nm,
             "encoder_noise_rad": args.encoder_noise_rad,
             "encoder_outlier_rad": args.encoder_outlier_rad,

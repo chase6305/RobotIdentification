@@ -58,6 +58,7 @@ jobs:
           run_experiment --acquisition rollout --fit-input raw --raw-estimator local-cubic \
             --raw-window 9 --timestamp-jitter-ms 2 --output build/arms-rollout-raw
           run_experiment --acquisition rollout --actuator-scale 1 --estimate-payload --estimate-arm --replay \
+            --payload-kg 0.61 --payload-size-m 0.08 0.05 0.10 --payload-center-m 0.08 -0.025 0.055 \
             --torque-noise-nm 0 --outlier-nm 0 --output build/arms-drive-clean
           ./scripts/run_arm_identification.sh --demo --assets-root build/HumanoidAssets --output build/arms-drive-raw
           run_experiment --acquisition rollout --actuator-scale 1 --fit-input raw --raw-estimator periodic-fourier \

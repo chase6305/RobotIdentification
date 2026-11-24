@@ -90,6 +90,9 @@ def check(directory, clean):
                                    rtol=0.0,
                                    atol=(1e-7 if clean else 0.005))
         inertia = np.asarray(payload["inertia_at_center_kg_m2"])
+        reference = fit["payload_fit"]["reference_errors"]
+        if clean and reference["inertia_frobenius_error_kg_m2"] > 1e-7:
+            raise ValueError(f"{name}: clean payload inertia was not recovered")
         central_moment = 0.5 * np.trace(inertia) * np.eye(3) - inertia
         if np.linalg.eigvalsh(central_moment).min() <= 0:
             raise ValueError(
