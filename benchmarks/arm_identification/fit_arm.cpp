@@ -587,10 +587,9 @@ void ProcessRaw(
         if (method == "moving-average") return EstimateMovingAverage(raw, size);
         if (method == "local-cubic") return arm_identification::EstimateLocalCubic(raw, size);
         if (method == "periodic-fourier" || method == "periodic-fourier-huber") {
-            auto estimate = arm_identification::EstimatePeriodicFourier(raw, size, method == "periodic-fourier-huber",
-                                                                        delay_seconds);
-            huber_delta = std::move(estimate.huber_delta_rad);
-            return std::move(estimate.dataset);
+            auto model = arm_identification::FitPeriodicFourier(raw, size, method == "periodic-fourier-huber");
+            huber_delta = std::move(model.huber_delta_rad);
+            return arm_identification::ReconstructPeriodicFourier(raw, model, delay_seconds);
         }
         throw std::invalid_argument(
             "raw method must be moving-average, local-cubic, periodic-fourier or periodic-fourier-huber");
@@ -645,13 +644,16 @@ void EstimateTorqueDelay(const char* nominal_urdf,
     const auto baseline = DelaySearchSamples(ReadRawDatasetCsv((directory / "train_baseline_raw.csv").string()));
     const auto optimized = DelaySearchSamples(ReadRawDatasetCsv((directory / "train_optimized_raw.csv").string()));
     const bool robust = method == "periodic-fourier-huber";
+    const auto baseline_model = arm_identification::FitPeriodicFourier(baseline, harmonics, robust);
+    const auto optimized_model = arm_identification::FitPeriodicFourier(optimized, harmonics, robust);
     SolverOptions options;
     options.huber_delta = huber_delta;
     options.max_iterations = 12;
     options.convergence_tolerance = 1e-6;
-    const auto build = [&](const RawDataset& raw, double seconds) {
-        const auto estimate = arm_identification::EstimatePeriodicFourier(raw, harmonics, robust, seconds);
-        return basis.ReduceProblem(arm.BuildProblem(estimate.dataset));
+    const auto build = [&](const RawDataset& raw, const arm_identification::PeriodicFourierModel& model,
+                           double seconds) {
+        const auto states = arm_identification::ReconstructPeriodicFourier(raw, model, seconds);
+        return basis.ReduceProblem(arm.BuildProblem(states));
     };
     constexpr int kSearchSteps = 20;
     constexpr int kCoarseStep = 5;
@@ -660,8 +662,8 @@ void EstimateTorqueDelay(const char* nominal_urdf,
     const auto score = [&](int index) {
         ++evaluations;
         const double seconds = milliseconds(index) / 1000.;
-        const auto a = build(baseline, seconds);
-        const auto b = build(optimized, seconds);
+        const auto a = build(baseline, baseline_model, seconds);
+        const auto b = build(optimized, optimized_model, seconds);
         const auto fit_a = Solve(a, options);
         const auto fit_b = Solve(b, options);
         if (fit_a.rank != basis.parameter_count() || fit_b.rank != basis.parameter_count())
