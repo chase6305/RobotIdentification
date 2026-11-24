@@ -123,23 +123,23 @@ def save_contact_free_mjcf(model, filename):
 
 def inverse_dynamics(plant, motions, effort_limits=None):
     data = mujoco.MjData(plant.model)
-    dof = len(plant.dofs)
     result = {}
     for name, motion in motions.items():
         labels = motion.copy()
-        for row in labels:
-            position, velocity, acceleration, _ = np.split(row[1:], 4)
-            torque = plant.inverse_torque(data, position, velocity,
-                                          acceleration)
+        joint_columns = np.split(labels[:, 1:], 4, axis=1)
+        for seconds, position, velocity, acceleration, torque in zip(
+                labels[:, 0], *joint_columns):
+            torque[:] = plant.inverse_torque(data, position, velocity,
+                                             acceleration)
             if data.nefc:
                 raise ValueError(
-                    f"active MuJoCo constraints in {name} at t={row[0]:.6g} s")
-            row[-dof:] = torque
-        if not np.isfinite(labels[:, -dof:]).all():
+                    f"active MuJoCo constraints in {name} at t={seconds:.6g} s")
+        torques = joint_columns[-1]
+        if not np.isfinite(torques).all():
             raise ValueError(
                 f"{name} inverse dynamics produced nonfinite torque")
         if effort_limits is not None and np.any(
-                np.abs(labels[:, -dof:]) > effort_limits):
+                np.abs(torques) > effort_limits):
             raise ValueError(
                 f"{name} inverse dynamics exceeded a URDF joint effort limit")
         result[name] = labels

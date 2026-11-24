@@ -4,7 +4,7 @@ This experiment uses the left arm of EngineAI PM01 (5 joints, fixed torso, fixed
 
 ## Run
 
-The launcher builds the C++ tools and creates an isolated Python environment using the pinned wheels for Pinocchio 4.1.0 and MuJoCo 3.13.0. On Ubuntu it needs a C++17 compiler, CMake, Eigen 3.4 (`libeigen3-dev`), and Python 3.10 with `venv`.
+The launcher builds the C++ tools and creates an isolated Python environment using the pinned wheels for Pinocchio 4.1.0 and MuJoCo 3.13.0. On Ubuntu it needs a C++17 compiler, CMake, Eigen 3.4 (`libeigen3-dev`), and Python with `venv`. Fresh launcher builds were verified with Python 3.10 and 3.12.
 
 The exported MJCF files were also reloaded and replayed using MuJoCo 4.0.1 on Python 3.12. The manual launcher below supports a separate simulator environment with an existing native benchmark build.
 
@@ -37,6 +37,8 @@ Run acquisition later from a saved reference plan. The runner verifies the asset
 ./scripts/run_arm_identification.sh --reference-plan build/arm-points \
   --acquisition rollout --output build/arm-planned-capture
 ```
+
+For a plan you intend to use with `--demo --reference-plan`, add `--actuator-scale 1` when generating the points so the plan includes drive parameters.
 
 Run the forward simulation and fit using the recorder-format position and torque measurements.
 
