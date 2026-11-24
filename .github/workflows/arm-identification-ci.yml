@@ -76,6 +76,11 @@ jobs:
             --encoder-outlier-rad 0.15 --output build/arms-encoder-spikes
           ./scripts/run_arm_identification.sh --refit build/arms-encoder-spikes \
             --raw-estimator periodic-fourier-huber --output build/arms-encoder-robust
+          ./scripts/run_arm_identification.sh --demo --assets-root build/HumanoidAssets \
+            --torque-delay-ms 8 --output build/arms-delayed-torque
+          ./scripts/run_arm_identification.sh --refit build/arms-delayed-torque \
+            --align-torque-ms 8 --output build/arms-delay-aligned
+          python benchmarks/arm_identification/check_delay.py build/arms-delayed-torque build/arms-delay-aligned
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_raw_preprocessing.py \
             build/arm-identification/benchmark/arm_identification build/arms-rollout-raw/report.json \
             build/arms-encoder-spikes/report.json build/arms-encoder-robust/report.json

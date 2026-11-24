@@ -232,7 +232,8 @@ def rollout(plant,
             effort_limits,
             jitter_seconds=0.0,
             seed=0,
-            replay=False):
+            replay=False,
+            torque_delay_seconds=0.0):
     labels = {}
     diagnostics = {}
     dense_holdout = None
@@ -240,14 +241,23 @@ def rollout(plant,
         noise_seed = np.random.SeedSequence([seed, 2, int(name == "holdout")])
         labels[name], diagnostics[name], dense = _rollout_motion(
             plant, controller, motion, references[name], effort_limits, name,
-            jitter_seconds, noise_seed, replay and name == "holdout")
+            jitter_seconds, noise_seed, replay and name == "holdout",
+            0.0 if name == "holdout" else torque_delay_seconds)
         if dense is not None:
             dense_holdout = dense
     return labels, diagnostics, dense_holdout
 
 
-def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
-                    jitter_seconds, noise_seed, save_dense):
+def _rollout_motion(plant,
+                    controller,
+                    motion,
+                    reference,
+                    effort_limits,
+                    name,
+                    jitter_seconds,
+                    noise_seed,
+                    save_dense,
+                    torque_delay_seconds=0.0):
     sample_seconds = motion[:, 0]
     duration = sample_seconds[-1]
     interval = duration / (len(motion) - 1)
@@ -263,6 +273,10 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
     if jitter_seconds >= 0.5 * interval:
         raise ValueError(
             f"{name} timestamp jitter must be below half the sampling interval")
+    if torque_delay_seconds and abs(torque_delay_seconds) >= min(
+            0.5 * duration, WARMUP_SECONDS):
+        raise ValueError(
+            f"{name} torque delay exceeds the valid capture interval")
     nominal_steps = np.arange(len(motion)) * substeps
     jitter_steps = math.floor(jitter_seconds / step_seconds)
     generator = np.random.default_rng(noise_seed)
@@ -273,11 +287,15 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
     measured_times = sample_seconds + step_seconds * (sample_steps -
                                                       nominal_steps)
     warmup_steps = math.ceil(WARMUP_SECONDS / step_seconds)
-    ticks = np.arange(-warmup_steps, step_count + 1)
+    final_step = step_count + max(
+        0, math.ceil(-torque_delay_seconds / step_seconds))
+    ticks = np.arange(-warmup_steps, final_step + 1)
     reference_states = harmonic_states(reference, ticks * step_seconds)
     label_positions, label_velocities, label_accelerations, label_torques = np.split(
         np.empty_like(motion[:, 1:]), 4, axis=1)
     dense = np.empty((step_count + 1, motion.shape[1])) if save_dense else None
+    torque_history = np.empty(
+        (len(ticks), len(effort_limits))) if torque_delay_seconds else None
 
     configure_integrator(plant.model, step_seconds)
     plant_data = mujoco.MjData(plant.model)
@@ -313,8 +331,10 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
         if (magnitude > effort_limits).any():
             torque = np.clip(command, negative_effort_limits, effort_limits)
             saturation_steps += 1
+        if torque_history is not None:
+            torque_history[index] = torque
         plant_data.qfrc_applied[plant.dofs] = torque
-        if step < step_count:
+        if step < final_step:
             mujoco.mj_step(plant.model, plant_data)
         else:
             mujoco.mj_forward(plant.model, plant_data)
@@ -322,7 +342,7 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
             raise ValueError(
                 f"{name} MuJoCo constraint or integration warning at t={time:.6g} s"
             )
-        if dense is not None and step >= 0:
+        if dense is not None and 0 <= step <= step_count:
             dense[step, 0] = time
             dense[step, 1:] = np.concatenate(
                 (position, velocity, plant_data.qacc[plant.dofs], torque))
@@ -333,6 +353,12 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
             label_accelerations[row] = plant_data.qacc[plant.dofs]
             label_torques[row] = torque
             row += 1
+    if torque_history is not None:
+        torque_indices = sample_steps + warmup_steps - torque_delay_seconds / step_seconds
+        all_indices = np.arange(len(ticks))
+        for joint in range(len(effort_limits)):
+            label_torques[:, joint] = np.interp(torque_indices, all_indices,
+                                                torque_history[:, joint])
     labels = np.column_stack((measured_times, label_positions, label_velocities,
                               label_accelerations, label_torques))
     if row != len(motion):
@@ -350,6 +376,8 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
             warmup_steps * step_seconds,
         "max_timestamp_jitter_s":
             float(np.max(np.abs(measured_times - sample_seconds))),
+        "torque_channel_delay_s":
+            torque_delay_seconds,
         "saturation_steps":
             saturation_steps,
         "peak_effort_fraction":

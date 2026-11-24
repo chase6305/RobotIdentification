@@ -47,7 +47,8 @@ robot_identification::Dataset EstimateLocalCubic(const robot_identification::Raw
 
 PeriodicFourierEstimate EstimatePeriodicFourier(const robot_identification::RawDataset& raw,
                                                 std::size_t harmonics,
-                                                bool robust) {
+                                                bool robust,
+                                                double torque_delay_seconds) {
     constexpr std::size_t maximum_harmonics = 32;
     const auto rows = raw.time_seconds.size();
     if (harmonics == 0 || harmonics > maximum_harmonics || static_cast<std::size_t>(rows) < 2 * harmonics + 2)
@@ -59,16 +60,21 @@ PeriodicFourierEstimate EstimatePeriodicFourier(const robot_identification::RawD
     const double fundamental = cycle_angle / period;
     if (!std::isfinite(period) || !std::isfinite(fundamental) || fundamental <= 0.)
         throw std::invalid_argument("periodic Fourier requires a representable sampling period");
+    if (!std::isfinite(torque_delay_seconds) || std::abs(torque_delay_seconds) >= .5 * period)
+        throw std::invalid_argument("torque delay must be smaller than half a capture period");
     const auto mode_count = static_cast<Eigen::Index>(harmonics);
     Eigen::MatrixXd design(rows, 2 * mode_count + 1);
     design.col(0).setOnes();
-    for (Eigen::Index row = 0; row < rows; ++row) {
-        const double angle = cycle_angle * ((raw.time_seconds[row] - origin) / period);
-        for (Eigen::Index mode = 1; mode <= mode_count; ++mode) {
-            design(row, 2 * mode - 1) = std::sin(mode * angle);
-            design(row, 2 * mode) = std::cos(mode * angle);
+    const auto set_phases = [&](double delay) {
+        for (Eigen::Index row = 0; row < rows; ++row) {
+            const double angle = cycle_angle * ((raw.time_seconds[row] - origin - delay) / period);
+            for (Eigen::Index mode = 1; mode <= mode_count; ++mode) {
+                design(row, 2 * mode - 1) = std::sin(mode * angle);
+                design(row, 2 * mode) = std::cos(mode * angle);
+            }
         }
-    }
+    };
+    set_phases(0.);
     const auto qr = design.colPivHouseholderQr();
     if (qr.rank() != design.cols())
         throw std::invalid_argument("periodic Fourier harmonics are rank deficient at these timestamps");
@@ -89,6 +95,8 @@ PeriodicFourierEstimate EstimatePeriodicFourier(const robot_identification::RawD
             coefficients.col(joint) = robot_identification::Solve(position_fit, options).parameters;
         }
     }
+    // A torque sample delayed by d at time t describes the state at t - d.
+    if (torque_delay_seconds != 0.) set_phases(torque_delay_seconds);
     robot_identification::Dataset output{raw.joint_names, {}};
     output.samples.reserve(rows);
     for (Eigen::Index row = 0; row < rows; ++row) {

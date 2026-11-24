@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 from pathlib import Path
 import shutil
 import sys
@@ -38,8 +39,9 @@ def refit_arm(args, source_report, name):
         processed[split] = run_cpp(args.executable, "preprocess",
                                    directory / f"train_{split}_raw.csv",
                                    processed_path, estimator_size,
-                                   args.raw_estimator)
-        if source_report["fit_input"] == "simulator":
+                                   args.raw_estimator, args.align_torque_ms)
+        if source_report[
+                "fit_input"] == "simulator" and not args.align_torque_ms:
             measured = read_motion(source / f"train_{split}.csv", joints)
             estimated = read_motion(processed_path, joints)
             processed[split].update(
@@ -64,12 +66,19 @@ def run(args):
         raise ValueError("the requested arm is missing from the capture")
     for name, default in (("raw_estimator", "periodic-fourier"),
                           ("raw_harmonics", 7), ("raw_window", 5),
-                          ("estimate_arm", False), ("estimate_payload", False)):
+                          ("estimate_arm", False), ("estimate_payload", False),
+                          ("align_torque_ms", 0.0)):
         if getattr(args, name) is None:
             setattr(args, name, source.get(name, default))
     if not args.huber_auto and args.huber_delta_nm is None:
         args.huber_auto = source.get("huber_auto", False)
         args.huber_delta_nm = source.get("huber_delta_nm", .06)
+    if not math.isfinite(args.align_torque_ms) or (args.align_torque_ms and
+                                                   args.raw_estimator
+                                                   not in FOURIER_ESTIMATORS):
+        raise ValueError(
+            "--align-torque-ms requires a finite delay and a periodic Fourier estimator"
+        )
     args.executable = args.executable.resolve(strict=True)
     args.output.mkdir(parents=True, exist_ok=False)
     report = dict(
@@ -83,6 +92,7 @@ def run(args):
         raw_estimator=args.raw_estimator,
         raw_harmonics=args.raw_harmonics,
         raw_window=args.raw_window,
+        align_torque_ms=args.align_torque_ms,
         huber_auto=args.huber_auto,
         huber_delta_nm=None if args.huber_auto else args.huber_delta_nm,
         estimate_arm=args.estimate_arm,
@@ -110,6 +120,10 @@ def main():
     parser.add_argument("--raw-estimator", choices=RAW_ESTIMATORS)
     parser.add_argument("--raw-window", type=int)
     parser.add_argument("--raw-harmonics", type=int)
+    parser.add_argument(
+        "--align-torque-ms",
+        type=float,
+        help="correct a known signed torque delay during raw Fourier fitting")
     parser.add_argument("--estimate-arm", action=argparse.BooleanOptionalAction)
     parser.add_argument("--estimate-payload",
                         action=argparse.BooleanOptionalAction)

@@ -577,14 +577,18 @@ Dataset EstimateMovingAverage(const RawDataset& raw, std::size_t window) {
     return PreprocessPositionAndTorque(raw, options);
 }
 
-void ProcessRaw(const char* input, const char* output, std::size_t size, std::string_view method) {
+void ProcessRaw(
+    const char* input, const char* output, std::size_t size, std::string_view method, double delay_seconds) {
     const auto raw = ReadRawDatasetCsv(input);
+    if (delay_seconds != 0. && method != "periodic-fourier" && method != "periodic-fourier-huber")
+        throw std::invalid_argument("torque delay alignment requires a periodic Fourier estimator");
     Eigen::VectorXd huber_delta;
     const auto process = [&] {
         if (method == "moving-average") return EstimateMovingAverage(raw, size);
         if (method == "local-cubic") return arm_identification::EstimateLocalCubic(raw, size);
         if (method == "periodic-fourier" || method == "periodic-fourier-huber") {
-            auto estimate = arm_identification::EstimatePeriodicFourier(raw, size, method == "periodic-fourier-huber");
+            auto estimate = arm_identification::EstimatePeriodicFourier(raw, size, method == "periodic-fourier-huber",
+                                                                        delay_seconds);
             huber_delta = std::move(estimate.huber_delta_rad);
             return std::move(estimate.dataset);
         }
@@ -610,11 +614,17 @@ std::size_t ParseCount(std::string_view value, const char* label) {
     return count;
 }
 
-double ParseNonnegative(const char* value, const char* label) {
+double ParseFinite(const char* value, const char* label) {
     std::size_t end = 0;
     const double result = std::stod(value, &end);
-    if (value[end] != '\0' || !std::isfinite(result) || result < 0.)
-        throw std::invalid_argument(std::string(label) + " must be finite and nonnegative");
+    if (value[end] != '\0' || !std::isfinite(result))
+        throw std::invalid_argument(std::string(label) + " must be finite");
+    return result;
+}
+
+double ParseNonnegative(const char* value, const char* label) {
+    const double result = ParseFinite(value, label);
+    if (result < 0.) throw std::invalid_argument(std::string(label) + " must be nonnegative");
     return result;
 }
 }  // namespace
@@ -658,15 +668,17 @@ int main(int argc, char** argv) {
             for (int index = first_drive_argument; index < argc; ++index)
                 drive_parameters.push_back(ParseNonnegative(argv[index], "drive parameter"));
             Fit(argv[2], argv[3], delta, drive_parameters, estimate_payload, estimate_physical_arm);
-        } else if ((argc == 5 || argc == 6) && mode == "preprocess") {
+        } else if (argc >= 5 && argc <= 7 && mode == "preprocess") {
             ProcessRaw(argv[2], argv[3], ParseCount(argv[4], "raw estimator size"),
-                       argc == 6 ? argv[5] : "moving-average");
+                       argc >= 6 ? argv[5] : "moving-average",
+                       argc == 7 ? ParseFinite(argv[6], "torque delay in milliseconds") / 1000. : 0.);
         } else {
             std::cerr << "usage: arm_identification design NOMINAL_URDF DIRECTORY "
                          "[SAMPLES EVALUATIONS [TRAIN_PERIOD_S HOLDOUT_PERIOD_S] [actuators]]\n"
                          "       arm_identification fit NOMINAL_URDF DIRECTORY HUBER_DELTA_NM_OR_AUTO "
                          "[payload] [physical] [J1 B1 ...]\n"
-                         "       arm_identification preprocess RAW_CSV PROCESSED_CSV WINDOW_OR_HARMONICS [METHOD]\n";
+                         "       arm_identification preprocess RAW_CSV PROCESSED_CSV WINDOW_OR_HARMONICS "
+                         "[METHOD [TORQUE_DELAY_MS]]\n";
             return 2;
         }
     } catch (const std::exception& error) {

@@ -446,7 +446,8 @@ def run_arm(name, args):
         controller = ArmDynamics.from_urdf(nominal_path, arm.joints)
         labels, acquisition, dense_holdout = rollout(
             plant, controller, motions, design["references"], effort,
-            args.timestamp_jitter_ms / 1000, args.seed, args.replay)
+            args.timestamp_jitter_ms / 1000, args.seed, args.replay,
+            args.torque_delay_ms / 1000)
     else:
         labels = inverse_dynamics(plant, motions, effort)
     if drive_parameters is not None or args.replay:
@@ -485,10 +486,11 @@ def run_arm(name, args):
         if args.fit_input == "raw":
             processed[split] = run_cpp(args.executable, "preprocess", raw_path,
                                        processed_path, estimator_size,
-                                       args.raw_estimator)
-            estimated = read_motion(processed_path, arm.joints)
-            processed[split].update(
-                differentiation_metrics(estimated, labels[split], dof))
+                                       args.raw_estimator, args.align_torque_ms)
+            if args.align_torque_ms == 0.0:
+                estimated = read_motion(processed_path, arm.joints)
+                processed[split].update(
+                    differentiation_metrics(estimated, labels[split], dof))
         else:
             write_dataset(processed_path, training, dataset_header(arm.joints))
     write_raw(directory / "holdout_raw.csv", labels["holdout"], arm.joints, 0.0)
@@ -619,6 +621,16 @@ def main():
         default=0.0,
         help="maximum forward-simulation acquisition jitter in milliseconds")
     parser.add_argument(
+        "--torque-delay-ms",
+        type=float,
+        default=0.0,
+        help="signed simulated offset of the training torque channel")
+    parser.add_argument(
+        "--align-torque-ms",
+        type=float,
+        default=0.0,
+        help="correct a known signed torque delay during raw Fourier fitting")
+    parser.add_argument(
         "--encoder-noise-rad",
         type=float,
         default=5e-5,
@@ -741,6 +753,17 @@ def main():
             "periodic Fourier estimators require at least 2h+2 samples")
     if args.timestamp_jitter_ms > 0.0 and args.acquisition != "rollout":
         parser.error("--timestamp-jitter-ms requires --acquisition rollout")
+    if not all(map(math.isfinite,
+                   (args.torque_delay_ms, args.align_torque_ms))):
+        parser.error("torque delay and alignment must be finite")
+    if args.torque_delay_ms and (args.acquisition != "rollout" or
+                                 args.design_only):
+        parser.error("--torque-delay-ms requires simulated rollout capture")
+    if args.align_torque_ms and (args.fit_input != "raw" or args.raw_estimator
+                                 not in FOURIER_ESTIMATORS or args.design_only):
+        parser.error(
+            "--align-torque-ms requires fitting raw data with a periodic Fourier estimator"
+        )
     if args.replay and (args.acquisition != "rollout" or args.design_only):
         parser.error(
             "--replay requires --acquisition rollout with simulation and fitting"
@@ -783,6 +806,8 @@ def main():
             "encoder_resolution_rad": args.encoder_resolution_rad,
             "capture_dropout": args.capture_dropout,
             "timestamp_jitter_ms": args.timestamp_jitter_ms,
+            "torque_delay_ms": args.torque_delay_ms,
+            "align_torque_ms": args.align_torque_ms,
             "raw_window": args.raw_window,
             "raw_estimator": args.raw_estimator,
             "raw_harmonics": args.raw_harmonics,

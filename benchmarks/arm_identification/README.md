@@ -55,6 +55,16 @@ Use `--refit` to try new preprocessing and solver settings on a saved capture. I
   --raw-window 17 --huber-auto --output build/arms-demo-refit
 ```
 
+To test alignment against a known torque latency, simulate the delay in the training channel and refit the same recorded data.
+
+```bash
+./scripts/run_arm_identification.sh --demo --torque-delay-ms 8 --output build/arms-delayed
+./scripts/run_arm_identification.sh --refit build/arms-delayed --align-torque-ms 8 \
+  --output build/arms-delay-aligned
+```
+
+A positive delay means that torque recorded at time `t` describes the arm at `t - d`. The Fourier estimator evaluates position and derivatives at `t - d`, keeping the original recorded time and torque value in the processed CSV. The alignment uses the periodic extension at the endpoints. The captured holdout stays synchronized and is shared across both fits.
+
 For a new acquisition, add `--actuator-scale 1` to test synthetic reflected rotor inertia and linear viscous friction. The plant uses per-joint armature `0.04 r kg·m²` and damping `(0.02 + 0.05 r) N·m·s/rad`, where `r` is each joint's URDF effort limit divided by the largest effort limit on that arm. The scale multiplies both terms. In this mode, `truth.mjb` contains the compiled MuJoCo plant. The fit adds columns for each joint's acceleration and velocity, and the report compares against a rigid-only model fitted to the same samples. The base-parameter rank determines which combinations can be identified. See the [MuJoCo joint model reference](https://mujoco.readthedocs.io/en/stable/XMLreference.html#body-joint).
 
 The actuator report recovers individually observable coefficients by solving for each full coordinate as a linear combination of base coordinates. All viscous coefficients are observable on both arms, and the first two rotor inertias appear as `null` individual estimates. The projected candidate uses the final Huber weighted least-squares metric to make the observable passive coefficients nonnegative within numerical tolerance. Its holdout and mass-matrix metrics are reported alongside the unconstrained fit.

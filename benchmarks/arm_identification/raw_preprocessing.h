@@ -15,6 +15,7 @@ struct PeriodicFourierEstimate {
 
 PeriodicFourierEstimate EstimatePeriodicFourier(const robot_identification::RawDataset& raw,
                                                 std::size_t harmonics,
-                                                bool robust);
+                                                bool robust,
+                                                double torque_delay_seconds = 0.);
 
 }  // namespace arm_identification
