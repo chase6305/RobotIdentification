@@ -90,6 +90,13 @@ jobs:
             build/arm-identification/benchmark/arm_identification build/arms-rollout-raw/report.json \
             build/arms-encoder-spikes/report.json build/arms-encoder-robust/report.json
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_points.py build/arms-points
+          run_experiment --reference-plan build/arms-points --acquisition rollout --fit-input raw \
+            --raw-estimator periodic-fourier --output build/arms-planned-capture
+          for arm in pm01 openarm; do
+            for split in baseline optimized holdout; do
+              cmp "build/arms-points/$arm/${split}_states.csv" "build/arms-planned-capture/$arm/${split}_states.csv"
+            done
+          done
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_capture.py build/arms-imperfect-capture
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_drive.py \
             build/arms-drive-clean build/arms-drive-raw

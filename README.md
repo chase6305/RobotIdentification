@@ -67,6 +67,8 @@ python3 -m pip install -r requirements-dev.txt
 ./scripts/run_arm_identification.sh --demo --output build/arms-demo
 ```
 
+用 `--design-only` 导出自动点位，再用 `--reference-plan` 读取该计划采集。`--refit` 可复用采集文件重新辨识。
+
 ## 离线工具
 
 ```bash

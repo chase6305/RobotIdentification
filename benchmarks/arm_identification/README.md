@@ -31,6 +31,13 @@ Export automatic points and their analytic trajectory coefficients before runnin
 
 Use `--training-period-s` and `--holdout-period-s` to set each cycle's duration. The design rescales the initial amplitude when a shorter period would exceed the configured velocity, acceleration, or jerk bounds. The generated CSVs and Fourier coefficients use the requested period and the report records the kinematic bounds.
 
+Run acquisition later from a saved reference plan. The runner verifies the asset hash, joint order, timestamps, and Fourier states, then uses the saved points, period, and regressor structure.
+
+```bash
+./scripts/run_arm_identification.sh --reference-plan build/arm-points \
+  --acquisition rollout --output build/arm-planned-capture
+```
+
 Run the forward simulation and fit using the recorder-format position and torque measurements.
 
 ```bash

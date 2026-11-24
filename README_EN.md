@@ -64,6 +64,8 @@ Generate simulated data for the HumanoidAssets PM01 left arm (5 axes) and OpenAr
 ./scripts/run_arm_identification.sh --demo --output build/arms-demo
 ```
 
+Export automatic points with `--design-only`, collect from the saved plan with `--reference-plan`, and rerun identification on the capture with `--refit`.
+
 ## Offline tools
 
 ```bash

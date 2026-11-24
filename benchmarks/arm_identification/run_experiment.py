@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -15,8 +16,9 @@ import xml.etree.ElementTree as ET
 import mujoco
 import numpy as np
 
-from simulation import (ArmDynamics, configure_integrator, inverse_dynamics,
-                        replay_windows, rollout, save_contact_free_mjcf)
+from simulation import (ArmDynamics, configure_integrator, harmonic_states,
+                        inverse_dynamics, replay_windows, rollout,
+                        save_contact_free_mjcf)
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,12 @@ PAYLOAD_CENTER_METERS = (0.05, 0.0, -0.07)
 OUTLIER_PROBABILITY = 0.01
 FOURIER_ESTIMATORS = ("periodic-fourier", "periodic-fourier-huber")
 RAW_ESTIMATORS = ("moving-average", "local-cubic", *FOURIER_ESTIMATORS)
+REFERENCE_DEFAULTS = {
+    "sample_count": 401,
+    "design_evaluations": 240,
+    "training_period_s": 8.0,
+    "holdout_period_s": 6.25,
+}
 
 
 def _required(element, path, label):
@@ -165,6 +173,75 @@ def read_motion(path, joints):
             not np.all(np.diff(motion[:, 0]) > 0)):
         raise ValueError(f"invalid motion samples in {path}")
     return motion
+
+
+def configure_reference_plan(args):
+    plan = None
+    if args.reference_plan is not None:
+        args.reference_plan = args.reference_plan.resolve(strict=True)
+        plan = json.loads(
+            (args.reference_plan / "report.json").read_text(encoding="utf-8"))
+        if not isinstance(plan, dict) or not isinstance(plan.get("robots"),
+                                                        dict):
+            raise ValueError("saved reference plan has no arm metadata")
+    for name, default in REFERENCE_DEFAULTS.items():
+        requested = getattr(args, name)
+        if plan is None:
+            if requested is None:
+                setattr(args, name, default)
+        else:
+            planned = plan.get(name, default)
+            valid_types = (int,) if isinstance(default, int) else (int, float)
+            if type(planned) not in valid_types or (requested is not None and
+                                                    planned != requested):
+                raise ValueError(
+                    f"--{name.replace('_', '-')} must agree with the saved reference plan"
+                )
+            setattr(args, name, type(default)(planned))
+    planned_scale = plan.get("actuator_scale", 0.0) if plan is not None else 0.0
+    if (type(planned_scale) not in (int, float) or
+            not math.isfinite(planned_scale) or planned_scale < 0.0):
+        raise ValueError("saved reference plan has an invalid actuator scale")
+    if args.actuator_scale is None:
+        args.actuator_scale = planned_scale
+    elif plan is not None and (args.actuator_scale > 0.0) != (planned_scale
+                                                              > 0.0):
+        raise ValueError(
+            "the reference plan must use the requested regressor structure")
+    return plan
+
+
+def copy_arm_reference_plan(args, name, directory, joints, source_hash):
+    record = args.reference_plan_report["robots"][name]
+    if record["urdf_sha256"] != source_hash or tuple(
+            record["joint_names"]) != joints:
+        raise ValueError(
+            f"{name}: saved reference plan uses a different URDF or joint order"
+        )
+    design = record["design"]
+    source = args.reference_plan / name
+    for split in ("baseline", "optimized", "holdout"):
+        filename = f"{split}_states.csv"
+        points = read_motion(source / filename, joints)
+        period = args.holdout_period_s if split == "holdout" else args.training_period_s
+        if len(points) != args.sample_count or not np.allclose(
+                points[:, 0],
+                np.linspace(0.0, period, args.sample_count),
+                rtol=0.0,
+                atol=1e-12):
+            raise ValueError(
+                f"{name}/{split}: saved timestamps disagree with the plan")
+        state = np.hstack(
+            harmonic_states(design["references"][split], points[:, 0]))
+        recorded = points[:, 1:-len(joints)]
+        if state.shape != recorded.shape or not np.allclose(
+                state, recorded, rtol=0.0, atol=1e-12):
+            raise ValueError(
+                f"{name}/{split}: saved states disagree with the Fourier coefficients"
+            )
+        shutil.copyfile(source / filename, directory / filename)
+    shutil.copyfile(source / "calibration.csv", directory / "calibration.csv")
+    return design
 
 
 def make_noise(shape, seed, standard_deviation, outlier_amplitude):
@@ -435,6 +512,7 @@ def select_torque_alignment(args, directory, metadata):
 def run_arm(name, args):
     arm = ARMS[name]
     source_bytes = (args.assets_root / arm.urdf).read_bytes()
+    source_hash = hashlib.sha256(source_bytes).hexdigest()
     nominal, terminal, effort = extract_arm(ET.fromstring(source_bytes), arm,
                                             name)
     directory = args.output / name
@@ -448,13 +526,17 @@ def run_arm(name, args):
         drive_parameters = args.actuator_scale * np.column_stack(
             (0.04 * effort_fraction, 0.02 + 0.05 * effort_fraction))
         design_options.append("actuators")
-    design = run_cpp(args.executable, "design", nominal_path, directory,
-                     args.sample_count, args.design_evaluations,
-                     args.training_period_s, args.holdout_period_s,
-                     *design_options)
+    if args.reference_plan_report is None:
+        design = run_cpp(args.executable, "design", nominal_path, directory,
+                         args.sample_count, args.design_evaluations,
+                         args.training_period_s, args.holdout_period_s,
+                         *design_options)
+    else:
+        design = copy_arm_reference_plan(args, name, directory, arm.joints,
+                                         source_hash)
     result = {
         "urdf": arm.urdf,
-        "urdf_sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "urdf_sha256": source_hash,
         "fixed_base": arm.base,
         "joint_names": arm.joints,
         "joint_effort_limits_nm": effort.tolist(),
@@ -628,23 +710,24 @@ def main():
         "--design-only",
         action="store_true",
         help="export automatic reference points without simulating or fitting")
+    parser.add_argument(
+        "--reference-plan",
+        type=Path,
+        help=
+        "reuse previously exported reference points and Fourier coefficients")
     parser.add_argument("--sample-count",
                         type=int,
-                        default=401,
                         help="number of reference points per trajectory")
     parser.add_argument("--design-evaluations",
                         type=int,
-                        default=240,
                         help="Fourier design search evaluation budget")
     parser.add_argument(
         "--training-period-s",
         type=float,
-        default=8.0,
         help="duration of each generated training cycle in seconds")
     parser.add_argument(
         "--holdout-period-s",
         type=float,
-        default=6.25,
         help="duration of the independent validation cycle in seconds")
     parser.add_argument(
         "--acquisition",
@@ -729,7 +812,6 @@ def main():
     parser.add_argument(
         "--actuator-scale",
         type=float,
-        default=0.0,
         help="scale of synthetic rotor inertia and viscous joint friction")
     parser.add_argument(
         "--estimate-payload",
@@ -759,6 +841,10 @@ def main():
         action="store_true",
         help="calibrate Huber threshold from training residuals")
     args = parser.parse_args()
+    try:
+        args.reference_plan_report = configure_reference_plan(args)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     for field in ("payload_kg", "actuator_scale", "torque_noise_nm",
                   "outlier_nm", "encoder_noise_rad", "timestamp_jitter_ms",
                   "huber_delta_nm", "training_period_s", "holdout_period_s",
@@ -825,6 +911,13 @@ def main():
         parser.error("--estimate-arm requires simulated torque")
     robots = ARMS if args.robot == "both" else (args.robot,)
     try:
+        if args.reference_plan_report is not None:
+            planned_robots = args.reference_plan_report["robots"]
+            if args.robot == "both":
+                robots = tuple(name for name in ARMS if name in planned_robots)
+            if not robots or any(name not in planned_robots for name in robots):
+                raise ValueError(
+                    "the saved reference plan does not cover the requested arm")
         for name in robots:
             if not (args.assets_root / ARMS[name].urdf).is_file():
                 raise ValueError(
@@ -832,12 +925,15 @@ def main():
         if not args.executable.is_file():
             raise ValueError(f"cannot find executable {args.executable}")
         args.output.mkdir(parents=True, exist_ok=False)
+        plan_path = str(
+            args.reference_plan) if args.reference_plan is not None else None
         report = {
             "mujoco_version": mujoco.__version__,
             "numpy_version": np.__version__,
             "acquisition": args.acquisition,
             "replay": args.replay,
             "design_only": args.design_only,
+            "reference_plan": plan_path,
             "sample_count": args.sample_count,
             "design_evaluations": args.design_evaluations,
             "training_period_s": args.training_period_s,
