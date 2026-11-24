@@ -71,8 +71,13 @@ jobs:
           run_experiment --acquisition rollout --actuator-scale 1 --training-period-s 4 --holdout-period-s 5.5 \
             --capture-dropout 0.12 --encoder-resolution-rad 0.0001 --fit-input raw \
             --raw-estimator periodic-fourier --timestamp-jitter-ms 2 --output build/arms-imperfect-capture
+          ./scripts/run_arm_identification.sh --demo --assets-root build/HumanoidAssets \
+            --encoder-outlier-rad 0.15 --output build/arms-encoder-spikes
+          ./scripts/run_arm_identification.sh --refit build/arms-encoder-spikes \
+            --raw-estimator periodic-fourier-huber --output build/arms-encoder-robust
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_raw_preprocessing.py \
-            build/arm-identification/benchmark/arm_identification build/arms-rollout-raw/report.json
+            build/arm-identification/benchmark/arm_identification build/arms-rollout-raw/report.json \
+            build/arms-encoder-spikes/report.json build/arms-encoder-robust/report.json
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_points.py build/arms-points
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_capture.py build/arms-imperfect-capture
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_drive.py \

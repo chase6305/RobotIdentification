@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <utility>
+
+#include "robust_scale.h"
 
 namespace arm_identification {
 
@@ -42,8 +45,9 @@ robot_identification::Dataset EstimateLocalCubic(const robot_identification::Raw
     return output;
 }
 
-robot_identification::Dataset EstimatePeriodicFourier(const robot_identification::RawDataset& raw,
-                                                      std::size_t harmonics) {
+PeriodicFourierEstimate EstimatePeriodicFourier(const robot_identification::RawDataset& raw,
+                                                std::size_t harmonics,
+                                                bool robust) {
     constexpr std::size_t maximum_harmonics = 32;
     const auto rows = raw.time_seconds.size();
     if (harmonics == 0 || harmonics > maximum_harmonics || static_cast<std::size_t>(rows) < 2 * harmonics + 2)
@@ -69,8 +73,22 @@ robot_identification::Dataset EstimatePeriodicFourier(const robot_identification
     if (qr.rank() != design.cols())
         throw std::invalid_argument("periodic Fourier harmonics are rank deficient at these timestamps");
     const auto offset = raw.position.row(0);
-    const Eigen::MatrixXd coefficients = qr.solve(raw.position.rowwise() - offset);
+    const Eigen::MatrixXd centered = raw.position.rowwise() - offset;
+    Eigen::MatrixXd coefficients = qr.solve(centered);
     const auto dof = raw.position.cols();
+    Eigen::VectorXd huber_delta(robust ? dof : 0);
+    if (robust) {
+        robot_identification::RegressionProblem position_fit{
+            design, {}, Eigen::VectorXd::Ones(rows), static_cast<std::size_t>(rows), 1};
+        for (Eigen::Index joint = 0; joint < dof; ++joint) {
+            position_fit.observation = centered.col(joint);
+            const Eigen::VectorXd residual = position_fit.observation - design * coefficients.col(joint);
+            huber_delta[joint] = HuberDeltaFromResiduals(residual, raw.position.col(joint).cwiseAbs().maxCoeff());
+            robot_identification::SolverOptions options;
+            options.huber_delta = huber_delta[joint];
+            coefficients.col(joint) = robot_identification::Solve(position_fit, options).parameters;
+        }
+    }
     robot_identification::Dataset output{raw.joint_names, {}};
     output.samples.reserve(rows);
     for (Eigen::Index row = 0; row < rows; ++row) {
@@ -88,7 +106,7 @@ robot_identification::Dataset EstimatePeriodicFourier(const robot_identification
         output.samples.push_back({raw.time_seconds[row], (offset + design.row(row) * coefficients).transpose(),
                                   velocity.transpose(), acceleration.transpose(), raw.torque.row(row).transpose()});
     }
-    return output;
+    return {std::move(output), std::move(huber_delta)};
 }
 
 }  // namespace arm_identification

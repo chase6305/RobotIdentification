@@ -20,6 +20,7 @@
 #include "payload_fit.h"
 #include "physical_arm_fit.h"
 #include "raw_preprocessing.h"
+#include "robust_scale.h"
 
 namespace {
 namespace fs = std::filesystem;
@@ -333,22 +334,6 @@ void WriteActuatorEstimates(const std::vector<std::string>& names,
     std::cout << ']';
 }
 
-double Median(const Eigen::VectorXd& values) {
-    std::vector<double> scratch(values.data(), values.data() + values.size());
-    const auto middle = scratch.begin() + scratch.size() / 2;
-    std::nth_element(scratch.begin(), middle, scratch.end());
-    if (scratch.size() % 2 != 0) return *middle;
-    return .5 * *std::max_element(scratch.begin(), middle) + .5 * *middle;
-}
-
-double EstimateHuberDelta(const RegressionProblem& train, const IdentificationResult& ols) {
-    const double residual_center = Median(ols.residual);
-    const double mad = Median((ols.residual.array() - residual_center).abs().matrix());
-    const double numerical_floor =
-        64 * std::numeric_limits<double>::epsilon() * std::max(1., train.observation.cwiseAbs().maxCoeff());
-    return std::max(numerical_floor, 1.345 * 1.4826 * mad);
-}
-
 void WriteFit(const IdentificationResult& result,
               const RegressionProblem& holdout,
               const Eigen::VectorXd& oracle,
@@ -472,7 +457,9 @@ void Fit(const char* nominal_urdf,
         if (!optimized || (!estimate_payload && !estimate_physical_arm)) full_train = {};
         const auto ols = Solve(train);
         SolverOptions options;
-        options.huber_delta = huber_delta ? *huber_delta : EstimateHuberDelta(train, ols);
+        options.huber_delta = huber_delta ? *huber_delta
+                                          : arm_identification::HuberDeltaFromResiduals(
+                                                ols.residual, train.observation.cwiseAbs().maxCoeff());
         auto robust = Solve(train, options);
         std::cout << ",\"" << name << "\":{\"ols\":";
         WriteFit(ols, holdout, oracle, 0., validation);
@@ -483,7 +470,9 @@ void Fit(const char* nominal_urdf,
             WriteTorquePrediction(holdout_data, holdout.regressor * robust.parameters,
                                   directory / "holdout_predicted_optimized_huber.csv");
             if (estimate_physical_arm) {
-                const double residual_scale = EstimateHuberDelta(train, robust) / 1.345;
+                const double residual_scale = arm_identification::HuberDeltaFromResiduals(
+                                                  robust.residual, train.observation.cwiseAbs().maxCoeff()) /
+                                              arm_identification::kHuberGaussianMultiplier;
                 physical_arm = arm_identification::FitPhysicalArm(full_train, robust.final_row_weights, full_nominal,
                                                                   model->nv, residual_scale);
             }
@@ -590,16 +579,26 @@ Dataset EstimateMovingAverage(const RawDataset& raw, std::size_t window) {
 
 void ProcessRaw(const char* input, const char* output, std::size_t size, std::string_view method) {
     const auto raw = ReadRawDatasetCsv(input);
+    Eigen::VectorXd huber_delta;
     const auto process = [&] {
         if (method == "moving-average") return EstimateMovingAverage(raw, size);
         if (method == "local-cubic") return arm_identification::EstimateLocalCubic(raw, size);
-        if (method == "periodic-fourier") return arm_identification::EstimatePeriodicFourier(raw, size);
-        throw std::invalid_argument("raw method must be moving-average, local-cubic or periodic-fourier");
+        if (method == "periodic-fourier" || method == "periodic-fourier-huber") {
+            auto estimate = arm_identification::EstimatePeriodicFourier(raw, size, method == "periodic-fourier-huber");
+            huber_delta = std::move(estimate.huber_delta_rad);
+            return std::move(estimate.dataset);
+        }
+        throw std::invalid_argument(
+            "raw method must be moving-average, local-cubic, periodic-fourier or periodic-fourier-huber");
     };
     const auto dataset = process();
     WriteDatasetCsv(dataset, output);
-    std::cout << "{\"input_samples\":" << raw.time_seconds.size() << ",\"used_samples\":" << dataset.samples.size()
-              << "}\n";
+    std::cout << "{\"input_samples\":" << raw.time_seconds.size() << ",\"used_samples\":" << dataset.samples.size();
+    if (huber_delta.size() != 0) {
+        std::cout << ",\"huber_delta_rad\":";
+        WriteVector(huber_delta);
+    }
+    std::cout << "}\n";
 }
 
 std::size_t ParseCount(std::string_view value, const char* label) {

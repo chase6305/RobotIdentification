@@ -42,6 +42,8 @@ The local cubic estimator fits position against centered, scaled timestamps in e
 
 `--raw-estimator periodic-fourier --raw-harmonics 7` fits the measured joint positions over one full capture period, then evaluates the derivatives analytically at the actual timestamps. It retains all position and torque samples and uses the first and last timestamps to determine the period. Use this estimator with steady periodic captures.
 
+`--raw-estimator periodic-fourier-huber` applies Huber weighting to each joint's encoder residuals before analytic differentiation. The report records each joint's threshold in radians. To test encoder spikes, set `--encoder-outlier-rad` to the impulse amplitude. Each training position has a 1% chance of an independently signed impulse, with the realization paired across the two training trajectories.
+
 `--timestamp-jitter-ms` shifts the capture times within the requested bound on the MuJoCo integration grid. The CSV records the actual times. The two training trajectories share the same sample offsets, and the holdout uses an independent seed.
 
 `--capture-dropout` sets the probability of losing each interior training sample, preserving the period endpoints. `--encoder-resolution-rad` rounds the raw positions to encoder increments. The training trajectories share the seeded dropout mask. These controls keep positions and torques synchronized at every retained timestamp.

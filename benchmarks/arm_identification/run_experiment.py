@@ -42,6 +42,8 @@ ARMS = {
 PAYLOAD_SIZE_METERS = (0.06, 0.05, 0.04)
 PAYLOAD_CENTER_XYZ = "0.05 0 -0.07"
 OUTLIER_PROBABILITY = 0.01
+FOURIER_ESTIMATORS = ("periodic-fourier", "periodic-fourier-huber")
+RAW_ESTIMATORS = ("moving-average", "local-cubic", *FOURIER_ESTIMATORS)
 
 
 def _required(element, path, label):
@@ -437,13 +439,11 @@ def run_arm(name, args):
     noise, outlier_count = make_noise(labels["baseline"][:, -dof:].shape,
                                       args.seed, args.torque_noise_nm,
                                       args.outlier_nm)
-    encoder_random = np.random.default_rng(
-        np.random.SeedSequence([args.seed, 1]))
-    encoder_noise = encoder_random.normal(0.0,
-                                          args.encoder_noise_rad,
-                                          size=noise.shape)
+    encoder_noise, encoder_outlier_count = make_noise(
+        noise.shape, np.random.SeedSequence([args.seed, 1]),
+        args.encoder_noise_rad, args.encoder_outlier_rad)
     processed = {}
-    estimator_size = args.raw_harmonics if args.raw_estimator == "periodic-fourier" else args.raw_window
+    estimator_size = args.raw_harmonics if args.raw_estimator in FOURIER_ESTIMATORS else args.raw_window
     for split in ("baseline", "optimized"):
         training = labels[split].copy()
         training[:, -dof:] += noise
@@ -476,6 +476,8 @@ def run_arm(name, args):
         },
         "outlier_count_per_training_trajectory":
             outlier_count,
+        "encoder_outlier_count_per_training_trajectory":
+            encoder_outlier_count,
         "acquisition":
             acquisition,
         "preprocessing":
@@ -590,6 +592,10 @@ def main():
         type=float,
         default=5e-5,
         help="training encoder noise standard deviation in recorded positions")
+    parser.add_argument("--encoder-outlier-rad",
+                        type=float,
+                        default=0.0,
+                        help="amplitude of randomly signed encoder outliers")
     parser.add_argument(
         "--encoder-resolution-rad",
         type=float,
@@ -606,14 +612,13 @@ def main():
                         help="positive odd smoothing window for raw input")
     parser.add_argument(
         "--raw-estimator",
-        choices=("moving-average", "local-cubic", "periodic-fourier"),
+        choices=RAW_ESTIMATORS,
         default="moving-average",
         help="position derivative estimator for recorder-format input")
-    parser.add_argument(
-        "--raw-harmonics",
-        type=int,
-        default=7,
-        help="harmonics fitted over one capture period for periodic-fourier")
+    parser.add_argument("--raw-harmonics",
+                        type=int,
+                        default=7,
+                        help="harmonics fitted over one capture period")
     parser.add_argument("--seed",
                         type=int,
                         default=20261124,
@@ -658,7 +663,8 @@ def main():
     for field in ("payload_kg", "actuator_scale", "torque_noise_nm",
                   "outlier_nm", "encoder_noise_rad", "timestamp_jitter_ms",
                   "huber_delta_nm", "training_period_s", "holdout_period_s",
-                  "encoder_resolution_rad", "capture_dropout"):
+                  "encoder_resolution_rad", "encoder_outlier_rad",
+                  "capture_dropout"):
         value = getattr(args, field)
         if not math.isfinite(value) or value < 0.0:
             parser.error(f"invalid --{field.replace('_', '-')} value")
@@ -680,9 +686,10 @@ def main():
         parser.error("local-cubic requires --raw-window of at least five")
     if not 1 <= args.raw_harmonics <= 32:
         parser.error("--raw-harmonics must be between 1 and 32")
-    if (args.fit_input == "raw" and args.raw_estimator == "periodic-fourier" and
+    if (args.fit_input == "raw" and args.raw_estimator in FOURIER_ESTIMATORS and
             args.sample_count < 2 * args.raw_harmonics + 2):
-        parser.error("periodic-fourier requires at least 2h+2 samples")
+        parser.error(
+            "periodic Fourier estimators require at least 2h+2 samples")
     if args.timestamp_jitter_ms > 0.0 and args.acquisition != "rollout":
         parser.error("--timestamp-jitter-ms requires --acquisition rollout")
     if args.replay and (args.acquisition != "rollout" or args.design_only):
@@ -725,6 +732,7 @@ def main():
             ],
             "torque_noise_nm": args.torque_noise_nm,
             "encoder_noise_rad": args.encoder_noise_rad,
+            "encoder_outlier_rad": args.encoder_outlier_rad,
             "encoder_resolution_rad": args.encoder_resolution_rad,
             "capture_dropout": args.capture_dropout,
             "timestamp_jitter_ms": args.timestamp_jitter_ms,

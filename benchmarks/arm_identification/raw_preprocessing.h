@@ -8,7 +8,13 @@ namespace arm_identification {
 robot_identification::Dataset EstimateLocalCubic(const robot_identification::RawDataset& raw, std::size_t window);
 
 // Fit harmonics over one complete period, from the first to the last timestamp.
-robot_identification::Dataset EstimatePeriodicFourier(const robot_identification::RawDataset& raw,
-                                                      std::size_t harmonics);
+struct PeriodicFourierEstimate {
+    robot_identification::Dataset dataset;
+    Eigen::VectorXd huber_delta_rad;
+};
+
+PeriodicFourierEstimate EstimatePeriodicFourier(const robot_identification::RawDataset& raw,
+                                                std::size_t harmonics,
+                                                bool robust);
 
 }  // namespace arm_identification

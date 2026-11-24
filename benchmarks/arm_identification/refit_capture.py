@@ -10,7 +10,8 @@ import xml.etree.ElementTree as ET
 import mujoco
 import numpy as np
 
-from run_experiment import (ARMS, differentiation_metrics, fit_captured_arm,
+from run_experiment import (ARMS, FOURIER_ESTIMATORS, RAW_ESTIMATORS,
+                            differentiation_metrics, fit_captured_arm,
                             print_summary, read_motion, run_cpp)
 
 
@@ -30,7 +31,7 @@ def refit_arm(args, source_report, name):
 
     joints = metadata["joint_names"]
     estimator_size = (args.raw_harmonics if args.raw_estimator
-                      == "periodic-fourier" else args.raw_window)
+                      in FOURIER_ESTIMATORS else args.raw_window)
     processed = {}
     for split in ("baseline", "optimized"):
         processed_path = directory / f"train_{split}.csv"
@@ -106,9 +107,7 @@ def main():
                         required=True,
                         help="new refit directory")
     parser.add_argument("--robot", choices=("both", *ARMS), default="both")
-    parser.add_argument("--raw-estimator",
-                        choices=("moving-average", "local-cubic",
-                                 "periodic-fourier"))
+    parser.add_argument("--raw-estimator", choices=RAW_ESTIMATORS)
     parser.add_argument("--raw-window", type=int)
     parser.add_argument("--raw-harmonics", type=int)
     parser.add_argument("--estimate-arm", action=argparse.BooleanOptionalAction)
