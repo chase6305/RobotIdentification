@@ -7,6 +7,8 @@ import sys
 import mujoco
 import numpy as np
 
+from run_experiment import read_motion
+
 
 def check(directory, clean):
     report = json.loads((directory / "report.json").read_text(encoding="utf-8"))
@@ -30,9 +32,24 @@ def check(directory, clean):
             )
         if not clean and report["fit_input"] != "raw":
             raise ValueError(f"{name}: expected a raw actuator experiment")
+        forward = estimated["forward_validation"]
+        if (not forward["mass_check_passed"] or
+                not forward["minimum_mass_eigenvalue_kg_m2"] > 0 or
+                not forward["holdout_acceleration_rmse_rad_s2"]
+                < (1e-8 if clean else 1.0)):
+            raise ValueError(f"{name}: invalid fitted forward predictions")
         model = mujoco.MjModel.from_binary_path(
             str(directory / name / "truth.mjb"))
         joints = robot["joint_names"]
+        observed = read_motion(directory / name / "holdout.csv", joints)
+        predicted = read_motion(
+            directory / name / "holdout_predicted_optimized_huber.csv", joints)
+        np.testing.assert_array_equal(predicted[:, :-dof], observed[:, :-dof])
+        rmse = np.sqrt(np.mean((predicted[:, -dof:] - observed[:, -dof:])**2))
+        np.testing.assert_allclose(rmse,
+                                   estimated["holdout_rmse_nm"],
+                                   rtol=1e-10,
+                                   atol=1e-12)
         addresses = model.jnt_dofadr[[
             model.joint(joint).id for joint in joints
         ]]

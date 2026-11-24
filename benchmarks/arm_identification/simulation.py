@@ -7,6 +7,7 @@ import mujoco
 import numpy as np
 
 MAX_STEP_SECONDS = 0.001
+WARMUP_SECONDS = 0.5
 POSITION_GAIN_S2 = 10000.0
 VELOCITY_GAIN_S = 200.0
 
@@ -134,8 +135,9 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
                                              size=len(motion) - 2)
     measured_times = sample_seconds + step_seconds * (sample_steps -
                                                       nominal_steps)
-    reference_states = harmonic_states(
-        reference, np.linspace(0.0, duration, step_count + 1))
+    warmup_steps = math.ceil(WARMUP_SECONDS / step_seconds)
+    ticks = np.arange(-warmup_steps, step_count + 1)
+    reference_states = harmonic_states(reference, ticks * step_seconds)
     label_positions, label_velocities, label_accelerations, label_torques = np.split(
         np.empty_like(motion[:, 1:]), 4, axis=1)
 
@@ -148,7 +150,8 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
     peak_effort = 0.0
     saturation_steps = 0
     row = 0
-    for step, (q_ref, dq_ref, ddq_ref) in enumerate(zip(*reference_states)):
+    for index, (q_ref, dq_ref, ddq_ref) in enumerate(zip(*reference_states)):
+        step = index - warmup_steps
         position = plant_data.qpos[plant.positions]
         velocity = plant_data.qvel[plant.dofs]
         desired_acceleration = (ddq_ref + POSITION_GAIN_S2 *
@@ -164,7 +167,7 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
         if control_data.nefc:
             raise ValueError(
                 f"{name} tracking reached a joint constraint at t={time:.6g} s")
-        if abs(plant_data.time - time) > 1e-9:
+        if abs(plant_data.time - index * step_seconds) > 1e-9:
             raise ValueError(
                 f"{name} simulation time became invalid at t={time:.6g} s")
         if np.any(command != torque):
@@ -194,12 +197,15 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
         raise ValueError(f"{name} did not capture every requested sample")
     if not np.isfinite(labels).all():
         raise ValueError(f"{name} generated non-finite joint samples")
-    tracking_error = label_positions - reference_states[0][sample_steps]
+    tracking_error = label_positions - reference_states[0][sample_steps +
+                                                           warmup_steps]
     return labels, {
         "simulation_step_s":
             step_seconds,
         "integration_steps":
             step_count,
+        "warmup_s":
+            warmup_steps * step_seconds,
         "max_timestamp_jitter_s":
             float(np.max(np.abs(measured_times - sample_seconds))),
         "saturation_steps":

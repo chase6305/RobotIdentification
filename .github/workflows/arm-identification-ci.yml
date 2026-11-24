@@ -66,9 +66,15 @@ jobs:
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_points.py build/arms-points
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_drive.py \
             build/arms-drive-clean build/arms-drive-raw
+          build/arm-identification/venv/bin/python benchmarks/arm_identification/compare_raw.py \
+            --executable build/arm-identification/benchmark/arm_identification \
+            --output build/arm-window-comparison.csv build/arms-rollout-noisy-11
+          test "$(wc -l < build/arm-window-comparison.csv)" -eq 25
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: arm-identification-reports
-          path: build/arms-*/report.json
+          path: |
+            build/arms-*/report.json
+            build/arm-window-comparison.csv
           if-no-files-found: ignore

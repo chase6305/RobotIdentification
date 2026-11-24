@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "forward_validation.h"
 #include "raw_preprocessing.h"
 
 namespace {
@@ -228,13 +229,30 @@ Eigen::VectorXd DynamicParameters(const pinocchio::Model& model, const std::vect
     return parameters;
 }
 
-void WriteFit(const RegressionProblem& train,
-              const RegressionProblem& holdout,
-              const Eigen::VectorXd& oracle,
-              double huber_delta) {
+void WriteForwardMetrics(const arm_identification::ForwardMetrics& forward) {
+    std::cout << "{\"mass_check_passed\":" << std::boolalpha << forward.mass.passed
+              << ",\"mass_samples\":" << forward.mass.tested << ",\"mass_failures\":" << forward.mass.failed
+              << ",\"minimum_mass_eigenvalue_kg_m2\":";
+    if (std::isfinite(forward.mass.minimum_eigenvalue))
+        std::cout << forward.mass.minimum_eigenvalue;
+    else
+        std::cout << "null";
+    std::cout << ",\"holdout_samples\":" << forward.holdout_samples << ",\"holdout_acceleration_rmse_rad_s2\":";
+    if (forward.holdout_acceleration_rmse)
+        std::cout << *forward.holdout_acceleration_rmse;
+    else
+        std::cout << "null";
+    std::cout << '}';
+}
+
+Eigen::VectorXd WriteFit(const RegressionProblem& train,
+                         const RegressionProblem& holdout,
+                         const Eigen::VectorXd& oracle,
+                         double huber_delta,
+                         const arm_identification::ForwardValidation& validation) {
     SolverOptions options;
     options.huber_delta = huber_delta;
-    const auto result = Solve(train, options);
+    auto result = Solve(train, options);
     if (result.rank != static_cast<std::size_t>(train.regressor.cols()))
         throw std::runtime_error("training regressor lost identifiable directions");
     const auto metrics = ValidateParameters(holdout, result.parameters);
@@ -251,7 +269,10 @@ void WriteFit(const RegressionProblem& train,
     WriteVector(per_joint);
     std::cout << ",\"parameters\":";
     WriteVector(result.parameters);
+    std::cout << ",\"forward_validation\":";
+    WriteForwardMetrics(validation.Evaluate(result.parameters));
     std::cout << '}';
+    return std::move(result.parameters);
 }
 
 void Fit(const char* nominal_urdf,
@@ -266,9 +287,11 @@ void Fit(const char* nominal_urdf,
     const auto build = [&](const char* filename) {
         return arm.BuildProblem(ReadDatasetCsv((directory / filename).string()));
     };
-    const auto calibration = build("calibration.csv");
+    const auto calibration_data = ReadDatasetCsv((directory / "calibration.csv").string());
+    const auto calibration = arm.BuildProblem(calibration_data);
     const BaseParameterBasis basis(calibration.regressor);
-    const auto full_holdout = build("holdout.csv");
+    const auto holdout_data = ReadDatasetCsv((directory / "holdout.csv").string());
+    const auto full_holdout = arm.BuildProblem(holdout_data);
     const auto holdout = basis.ReduceProblem(full_holdout);
     const auto nominal =
         basis.ToBaseParameters(DynamicParameters(*model, std::vector<double>(drive_parameters.size())));
@@ -287,6 +310,8 @@ void Fit(const char* nominal_urdf,
                   << ", reduction=" << reduction_error << '\n';
         throw std::runtime_error("clean holdout oracle check failed");
     }
+    const BaseParameterRegressor base(arm.backend(), basis);
+    const arm_identification::ForwardValidation validation(base, calibration_data, holdout_data);
 
     std::cout << "{\"pinocchio_version\":" << std::quoted(PINOCCHIO_VERSION)
               << ",\"full_parameter_count\":" << basis.full_parameter_count()
@@ -309,14 +334,24 @@ void Fit(const char* nominal_urdf,
     WriteMatrix(basis.full_to_base());
     std::cout << ",\"oracle_parameters\":";
     WriteVector(oracle);
+    std::cout << ",\"nominal_forward_validation\":";
+    WriteForwardMetrics(validation.Evaluate(nominal));
     for (const auto& name : {"baseline", "optimized"}) {
         const auto filename = std::string("train_") + name + ".csv";
         const auto train = basis.ReduceProblem(build(filename.c_str()));
         std::cout << ",\"" << name << "\":{\"ols\":";
-        WriteFit(train, holdout, oracle, 0.);
+        WriteFit(train, holdout, oracle, 0., validation);
         std::cout << ",\"huber\":";
-        WriteFit(train, holdout, oracle, huber_delta);
+        const auto parameters = WriteFit(train, holdout, oracle, huber_delta, validation);
         std::cout << '}';
+        if (std::string_view(name) == "optimized") {
+            const Eigen::VectorXd prediction = holdout.regressor * parameters;
+            auto predicted_data = holdout_data;
+            const auto dof = static_cast<Eigen::Index>(predicted_data.dof());
+            for (std::size_t sample = 0; sample < predicted_data.samples.size(); ++sample)
+                predicted_data.samples[sample].torque = prediction.segment(sample * dof, dof);
+            WriteDatasetCsv(predicted_data, (directory / "holdout_predicted_optimized_huber.csv").string());
+        }
     }
     if (actuator_terms) {
         const auto build_rigid = [&](const char* filename) {

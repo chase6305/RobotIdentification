@@ -42,6 +42,14 @@ def check_arm(name, dof, expected_rank, experiment, clean):
                 raise ValueError(
                     f"{name}/{trajectory}/{solver}: clean torque or base parameter recovery failed"
                 )
+            if clean:
+                forward = estimate["forward_validation"]
+                if (not forward["mass_check_passed"] or
+                        forward["mass_failures"] or
+                        not forward["holdout_acceleration_rmse_rad_s2"] < 1e-8):
+                    raise ValueError(
+                        f"{name}/{trajectory}/{solver}: clean forward prediction failed"
+                    )
     if not clean and not experiment["outlier_count_per_training_trajectory"]:
         raise ValueError(f"{name}: missing training outliers")
 
