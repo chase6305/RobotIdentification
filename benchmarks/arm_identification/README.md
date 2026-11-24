@@ -16,7 +16,7 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
   --output build/arm-experiment
 ```
 
-Run with `--torque-noise-nm 0 --outlier-nm 0` and a new output directory for the clean control. Use `--payload-kg 0` for a matched-model control, or `--robot pm01` / `--robot openarm` for a single case. The GitHub Actions workflow builds against Pinocchio 2.7.0 and checks both pinned assets with and without torque contamination. It uploads both reports.
+Run with `--torque-noise-nm 0 --outlier-nm 0` and a new output directory for the clean control. Use `--payload-kg 0` for a matched-model control, or `--robot pm01` / `--robot openarm` for a single case. The GitHub Actions workflow builds against Pinocchio 2.7.0 and uploads reports for a clean control and five noisy seeds. See the [arm identification workflow](../../.github/workflows/arm-identification-ci.yml).
 
 ## Protocol
 
@@ -27,4 +27,13 @@ Run with `--torque-noise-nm 0 --outlier-nm 0` and a new output directory for the
 
 `report.json` records source URDF hashes, tool versions, joint order, design scores, ranks, condition numbers, effort fractions, and holdout errors in N·m. It also includes the zero-based selected regressor columns, normalization scales, full-to-base mapping, and fitted and oracle base coordinates. Full coordinates repeat the Pinocchio order `mass, mcx, mcy, mcz, Ixx, Ixy, Iyy, Ixz, Iyz, Izz` for each joint, with inertia about the corresponding joint-frame origin. The per-arm directories contain both temporary models and processed CSVs matching the core dataset contract. The `*_states.csv` files are kinematic inputs with placeholder zero torque. The `train_*.csv` and `holdout.csv` files carry labels.
 
-These results characterize rigid-body inverse dynamics along prescribed trajectories in simulation. They do not establish hardware identification accuracy or torque-controlled tracking performance.
+## Reference results
+
+Holdout torque RMSE in N·m, with fitted results reported as medians over the CI noise seeds `20261124, 11, 29, 47, 71`.
+
+| Left arm | Base / full coordinates | Unloaded nominal | Baseline OLS | Baseline Huber | Optimized OLS | Optimized Huber |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| PM01 | 33 / 50 | 0.41340 | 0.04383 | 0.01110 | 0.01216 | 0.00390 |
+| OpenArm | 43 / 70 | 0.23947 | 0.03789 | 0.01160 | 0.01109 | 0.00337 |
+
+In the clean control, the relative error against the known base coordinates is about `1.04e-8` for PM01 and `6.54e-9` for OpenArm. These figures characterize rigid-body inverse dynamics along prescribed trajectories in simulation.

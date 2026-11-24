@@ -6,12 +6,11 @@ from statistics import median
 import sys
 
 
-def check_arm(name, dof, experiment, clean):
+def check_arm(name, dof, expected_rank, experiment, clean):
     fit, design = experiment["fit"], experiment["design"]
     rank = fit["base_parameter_count"]
     if (len(experiment["joint_names"]) != dof or
-            fit["full_parameter_count"] != 10 * dof or
-            not 0 < rank < fit["full_parameter_count"] or
+            fit["full_parameter_count"] != 10 * dof or rank != expected_rank or
             not fit["oracle_holdout_max_absolute_error_nm"] <= 1e-7 or
             not fit["reduced_oracle_max_difference_nm"] <= 1e-8 or
             not fit["nominal_holdout_rmse_nm"] > 0.1 or
@@ -31,9 +30,10 @@ def check_arm(name, dof, experiment, clean):
                 raise ValueError(
                     f"{name}/{trajectory}/{solver}: fit rank or joint metrics mismatch"
                 )
-            if clean and not estimate["holdout_rmse_nm"] < 1e-7:
+            if clean and (not estimate["holdout_rmse_nm"] < 1e-7 or
+                          not estimate["relative_base_error"] < 1e-6):
                 raise ValueError(
-                    f"{name}/{trajectory}/{solver}: clean torque recovery failed"
+                    f"{name}/{trajectory}/{solver}: clean torque or base parameter recovery failed"
                 )
     if not clean and not experiment["outlier_count_per_training_trajectory"]:
         raise ValueError(f"{name}: missing training outliers")
@@ -42,12 +42,12 @@ def check_arm(name, dof, experiment, clean):
 def check(clean_report, noisy_reports):
     if len({report["seed"] for report in noisy_reports}) != len(noisy_reports):
         raise ValueError("noise seeds must be distinct")
-    for name, dof in (("pm01", 5), ("openarm", 7)):
+    for name, dof, expected_rank in (("pm01", 5, 33), ("openarm", 7, 43)):
         clean = clean_report["robots"][name]
-        check_arm(name, dof, clean, clean=True)
+        check_arm(name, dof, expected_rank, clean, clean=True)
         noisy_arms = [report["robots"][name] for report in noisy_reports]
         for experiment in noisy_arms:
-            check_arm(name, dof, experiment, clean=False)
+            check_arm(name, dof, expected_rank, experiment, clean=False)
         medians = {
             (trajectory, solver):
                 median(experiment["fit"][trajectory][solver]["holdout_rmse_nm"]
@@ -57,9 +57,10 @@ def check(clean_report, noisy_reports):
         }
         nominal = clean["fit"]["nominal_holdout_rmse_nm"]
         if (not medians["optimized", "huber"] < medians["optimized", "ols"] or
-                not medians["optimized", "huber"] < 0.1 * nominal):
+                not medians["optimized", "huber"] < medians["baseline", "huber"]
+                or not medians["optimized", "huber"] < 0.1 * nominal):
             raise ValueError(
-                f"{name}: optimized Huber did not reject outliers or improve on nominal"
+                f"{name}: optimized Huber did not improve on the comparison fits"
             )
         print(
             f"{name}: rank {clean['fit']['base_parameter_count']}, nominal {nominal:.6g} N m"
