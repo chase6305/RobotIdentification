@@ -98,5 +98,6 @@ jobs:
           path: |
             build/arms-drive-raw/*/identified_*.urdf
             build/arms-drive-raw/*/identified_*.mjb
+            build/arms-drive-raw/*/identified_*.xml
             build/arms-drive-raw/report.json
           if-no-files-found: error

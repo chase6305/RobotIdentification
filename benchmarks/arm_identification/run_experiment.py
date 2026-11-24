@@ -16,7 +16,7 @@ import mujoco
 import numpy as np
 
 from simulation import (ArmDynamics, configure_integrator, inverse_dynamics,
-                        replay_windows, rollout)
+                        replay_windows, rollout, save_contact_free_mjcf)
 
 
 @dataclass(frozen=True)
@@ -217,21 +217,46 @@ def differentiation_metrics(estimated, measured, dof):
     }
 
 
+def export_mujoco_model(urdf,
+                        joints,
+                        drive,
+                        holdout,
+                        dense_holdout,
+                        candidate,
+                        effort=None):
+    binary = urdf.with_suffix(".mjb")
+    text = urdf.with_suffix(".xml")
+    model = ArmDynamics.from_urdf(urdf, joints, drive)
+    if dense_holdout is not None:
+        configure_integrator(model.model,
+                             dense_holdout[1, 0] - dense_holdout[0, 0])
+    mujoco.mj_saveModel(model.model, str(binary))
+    save_contact_free_mjcf(model.model, text)
+    reloaded = ArmDynamics.from_mjb(binary, joints)
+    text_model = ArmDynamics.from_mjcf(text, joints)
+    motions = {"holdout": holdout}
+    binary_torque = inverse_dynamics(reloaded, motions,
+                                     effort)["holdout"][:, -len(joints):]
+    text_torque = inverse_dynamics(text_model, motions,
+                                   effort)["holdout"][:, -len(joints):]
+    difference = float(np.max(np.abs(binary_torque - text_torque)))
+    if difference > 1e-10:
+        raise ValueError(f"{text} and {binary} disagree on holdout torque")
+    candidate["mjcf_binary_max_difference_nm"] = difference
+    return reloaded, binary_torque
+
+
 def export_payload(candidate, nominal, terminal, directory, joints,
-                   drive_parameters, holdout, effort):
+                   drive_parameters, holdout, dense_holdout, effort):
     estimated = copy.deepcopy(nominal)
     center = " ".join(map(str, candidate["center_m"]))
     add_payload_inertia(estimated, terminal, candidate["mass_kg"], center,
                         np.asarray(candidate["inertia_at_center_kg_m2"]))
     urdf = directory / "identified_payload.urdf"
-    binary = directory / "identified_payload.mjb"
     write_urdf(estimated, urdf)
-    model = ArmDynamics.from_urdf(urdf, joints, drive_parameters)
-    mujoco.mj_saveModel(model.model, str(binary))
-    reloaded = ArmDynamics.from_mjb(binary, joints)
-    predicted = inverse_dynamics(reloaded, {"holdout": holdout},
-                                 effort)["holdout"]
-    torque_error = predicted[:, -len(joints):] - holdout[:, -len(joints):]
+    _, predicted = export_mujoco_model(urdf, joints, drive_parameters, holdout,
+                                       dense_holdout, candidate, effort)
+    torque_error = predicted - holdout[:, -len(joints):]
     candidate["reloaded_mujoco_holdout_rmse_nm"] = float(
         np.sqrt(np.mean(torque_error**2)))
     if abs(candidate["reloaded_mujoco_holdout_rmse_nm"] -
@@ -270,16 +295,9 @@ def export_identified_arm(fit, nominal, directory, joints, holdout,
     drive = parameters[10 * dof:]
     drive = drive.reshape(dof, 2) if drive.size else None
     urdf = directory / "identified_arm.urdf"
-    binary = directory / "identified_arm.mjb"
     write_urdf(estimated, urdf)
-    model = ArmDynamics.from_urdf(urdf, joints, drive)
-    if dense_holdout is not None:
-        configure_integrator(model.model,
-                             dense_holdout[1, 0] - dense_holdout[0, 0])
-    mujoco.mj_saveModel(model.model, str(binary))
-    reloaded = ArmDynamics.from_mjb(binary, joints)
-    predicted = inverse_dynamics(reloaded,
-                                 {"holdout": holdout})["holdout"][:, -dof:]
+    reloaded, predicted = export_mujoco_model(urdf, joints, drive, holdout,
+                                              dense_holdout, candidate)
     native = read_motion(directory / "holdout_predicted_physical_arm.csv",
                          joints)[:, -dof:]
     candidate["reloaded_mujoco_holdout_rmse_nm"] = float(
@@ -427,7 +445,7 @@ def run_arm(name, args):
             "physical_candidate"] is not None:
         export_payload(fit["payload_fit"]["physical_candidate"], nominal,
                        terminal, directory, arm.joints, drive_parameters,
-                       labels["holdout"], effort)
+                       labels["holdout"], dense_holdout, effort)
     if args.estimate_arm:
         export_identified_arm(fit, nominal, directory, arm.joints,
                               labels["holdout"], dense_holdout)

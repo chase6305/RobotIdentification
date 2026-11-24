@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import math
+import xml.etree.ElementTree as ET
 
 import mujoco
 import numpy as np
@@ -42,6 +43,11 @@ class ArmDynamics:
                                 joints, filename)
 
     @classmethod
+    def from_mjcf(cls, filename, joints):
+        return cls._named_model(mujoco.MjModel.from_xml_path(str(filename)),
+                                joints, filename)
+
+    @classmethod
     def _named_model(cls, model, joints, filename):
         joint_ids = [
             mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
@@ -62,6 +68,56 @@ class ArmDynamics:
         data.qacc[self.dofs] = acceleration
         mujoco.mj_inverse(self.model, data)
         return data.qfrc_inverse[self.dofs]
+
+
+def save_contact_free_mjcf(model, filename):
+
+    def vector(values):
+        return " ".join(map(str, values))
+
+    xml = ET.Element("mujoco", model=filename.stem)
+    ET.SubElement(xml, "compiler", angle="radian", inertiafromgeom="false")
+    option = ET.SubElement(xml,
+                           "option",
+                           timestep=str(model.opt.timestep),
+                           gravity=vector(model.opt.gravity),
+                           integrator="Euler")
+    if model.opt.disableflags & int(mujoco.mjtDisableBit.mjDSBL_EULERDAMP):
+        ET.SubElement(option, "flag", eulerdamp="disable")
+    bodies = [ET.SubElement(xml, "worldbody")]
+    for index in range(1, model.nbody):
+        body = ET.SubElement(bodies[model.body_parentid[index]],
+                             "body",
+                             name=model.body(index).name,
+                             pos=vector(model.body_pos[index]),
+                             quat=vector(model.body_quat[index]))
+        bodies.append(body)
+        if model.body_mass[index] > 0.0:
+            ET.SubElement(body,
+                          "inertial",
+                          mass=str(model.body_mass[index]),
+                          pos=vector(model.body_ipos[index]),
+                          quat=vector(model.body_iquat[index]),
+                          diaginertia=vector(model.body_inertia[index]))
+        first = model.body_jntadr[index]
+        for joint in range(first, first + model.body_jntnum[index]):
+            dof = model.jnt_dofadr[joint]
+            element = ET.SubElement(body,
+                                    "joint",
+                                    name=model.joint(joint).name,
+                                    type="hinge",
+                                    pos=vector(model.jnt_pos[joint]),
+                                    axis=vector(model.jnt_axis[joint]),
+                                    armature=str(model.dof_armature[dof]),
+                                    damping=str(model.dof_damping[dof]))
+            if model.jnt_limited[joint]:
+                element.set("range", vector(model.jnt_range[joint]))
+            if model.jnt_actfrclimited[joint]:
+                element.set("actuatorfrcrange",
+                            vector(model.jnt_actfrcrange[joint]))
+    # Preserve fitted double-precision values when round-tripping to text.
+    ET.indent(xml, space="  ")
+    ET.ElementTree(xml).write(filename, encoding="utf-8", xml_declaration=True)
 
 
 def inverse_dynamics(plant, motions, effort_limits=None):

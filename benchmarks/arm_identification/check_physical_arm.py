@@ -12,7 +12,8 @@ def check_case(directory, maximum_torque_rmse, maximum_position_rmse):
         if (not fit["converged"] or
                 not fit["forward_validation"]["mass_check_passed"] or
                 fit["holdout_rmse_nm"] >= maximum_torque_rmse or
-                fit["reloaded_max_difference_nm"] > 1e-7):
+                fit["reloaded_max_difference_nm"] > 1e-7 or
+                fit["mjcf_binary_max_difference_nm"] > 1e-10):
             raise ValueError(f"{name}: physical arm fit exceeded tolerance")
         if arm["fit"]["full_parameter_count"] != len(fit["full_parameters"]):
             raise ValueError(f"{name}: full arm parameters are incomplete")
@@ -21,6 +22,7 @@ def check_case(directory, maximum_torque_rmse, maximum_position_rmse):
                 replay["position_rmse_rad"] >= maximum_position_rmse):
             raise ValueError(f"{name}: physical arm replay exceeded tolerance")
         for filename in ("identified_arm.urdf", "identified_arm.mjb",
+                         "identified_arm.xml",
                          "holdout_predicted_physical_arm.csv"):
             if (directory / name / filename).stat().st_size == 0:
                 raise ValueError(f"{name}: {filename} is empty")
