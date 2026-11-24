@@ -64,10 +64,15 @@ jobs:
           run_experiment --acquisition rollout --actuator-scale 1 --fit-input raw --raw-estimator periodic-fourier \
             --design-evaluations 240 --huber-auto --torque-noise-nm 0.08 --timestamp-jitter-ms 2 \
             --output build/arms-drive-high-noise
-          run_experiment --design-only --sample-count 161 --design-evaluations 120 --output build/arms-points
+          run_experiment --design-only --sample-count 161 --design-evaluations 120 \
+            --training-period-s 3.5 --holdout-period-s 5.5 --output build/arms-points
+          run_experiment --acquisition rollout --actuator-scale 1 --training-period-s 4 --holdout-period-s 5.5 \
+            --capture-dropout 0.12 --encoder-resolution-rad 0.0001 --fit-input raw \
+            --raw-estimator periodic-fourier --timestamp-jitter-ms 2 --output build/arms-imperfect-capture
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_raw_preprocessing.py \
             build/arm-identification/benchmark/arm_identification build/arms-rollout-raw/report.json
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_points.py build/arms-points
+          build/arm-identification/venv/bin/python benchmarks/arm_identification/check_capture.py build/arms-imperfect-capture
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_drive.py \
             build/arms-drive-clean build/arms-drive-raw
           python benchmarks/arm_identification/check_huber.py build/arms-drive-high-noise/report.json

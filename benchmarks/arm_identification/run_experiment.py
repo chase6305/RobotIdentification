@@ -185,10 +185,12 @@ def write_dataset(path, labels, header):
                comments="")
 
 
-def write_raw(path, labels, joints, encoder_noise):
+def write_raw(path, labels, joints, encoder_noise, encoder_resolution=0.0):
     dof = len(joints)
-    observations = np.column_stack(
-        (labels[:, 0], labels[:, 1:1 + dof] + encoder_noise, labels[:, -dof:]))
+    positions = labels[:, 1:1 + dof] + encoder_noise
+    if encoder_resolution:
+        positions = encoder_resolution * np.rint(positions / encoder_resolution)
+    observations = np.column_stack((labels[:, 0], positions, labels[:, -dof:]))
     write_dataset(path, observations, dataset_header(joints, ("q", "tau")))
 
 
@@ -246,6 +248,7 @@ def run_arm(name, args):
         design_options.append("actuators")
     design = run_cpp(args.executable, "design", nominal_path, directory,
                      args.sample_count, args.design_evaluations,
+                     args.training_period_s, args.holdout_period_s,
                      *design_options)
     result = {
         "urdf": arm.urdf,
@@ -293,6 +296,17 @@ def run_arm(name, args):
         raise ValueError(
             "baseline and optimized trajectories must have the same sample count"
         )
+    if args.capture_dropout:
+        capture_random = np.random.default_rng(
+            np.random.SeedSequence([args.seed, 3]))
+        keep = capture_random.random(len(
+            labels["baseline"])) >= args.capture_dropout
+        keep[[0, -1]] = True
+        if np.count_nonzero(keep) < 3:
+            raise ValueError(
+                "capture dropout left fewer than three training samples")
+        for split in ("baseline", "optimized"):
+            labels[split] = labels[split][keep]
     noise, outlier_count = make_noise(labels["baseline"][:, -dof:].shape,
                                       args.seed, args.torque_noise_nm,
                                       args.outlier_nm)
@@ -308,7 +322,8 @@ def run_arm(name, args):
         training[:, -dof:] += noise
         raw_path = directory / f"train_{split}_raw.csv"
         processed_path = directory / f"train_{split}.csv"
-        write_raw(raw_path, training, arm.joints, encoder_noise)
+        write_raw(raw_path, training, arm.joints, encoder_noise,
+                  args.encoder_resolution_rad)
         if args.fit_input == "raw":
             processed[split] = run_cpp(args.executable, "preprocess", raw_path,
                                        processed_path, estimator_size,
@@ -379,6 +394,16 @@ def main():
                         default=240,
                         help="Fourier design search evaluation budget")
     parser.add_argument(
+        "--training-period-s",
+        type=float,
+        default=8.0,
+        help="duration of each generated training cycle in seconds")
+    parser.add_argument(
+        "--holdout-period-s",
+        type=float,
+        default=6.25,
+        help="duration of the independent validation cycle in seconds")
+    parser.add_argument(
         "--acquisition",
         choices=("inverse", "rollout"),
         default="inverse",
@@ -405,6 +430,16 @@ def main():
         type=float,
         default=5e-5,
         help="training encoder noise standard deviation in recorded positions")
+    parser.add_argument(
+        "--encoder-resolution-rad",
+        type=float,
+        default=0.0,
+        help="quantization step for recorded training positions")
+    parser.add_argument(
+        "--capture-dropout",
+        type=float,
+        default=0.0,
+        help="probability of losing an interior training sample")
     parser.add_argument("--raw-window",
                         type=int,
                         default=5,
@@ -458,11 +493,17 @@ def main():
     args = parser.parse_args()
     for field in ("payload_kg", "actuator_scale", "torque_noise_nm",
                   "outlier_nm", "encoder_noise_rad", "timestamp_jitter_ms",
-                  "huber_delta_nm"):
+                  "huber_delta_nm", "training_period_s", "holdout_period_s",
+                  "encoder_resolution_rad", "capture_dropout"):
         value = getattr(args, field)
-        if not math.isfinite(value) or value < 0.0 or (field == "huber_delta_nm"
-                                                       and value == 0.0):
+        if not math.isfinite(value) or value < 0.0:
             parser.error(f"invalid --{field.replace('_', '-')} value")
+    if min(args.training_period_s, args.holdout_period_s,
+           args.huber_delta_nm) == 0.0:
+        parser.error(
+            "trajectory periods and the fixed Huber threshold must be positive")
+    if args.capture_dropout >= 1.0:
+        parser.error("--capture-dropout must be less than one")
     if args.seed < 0:
         parser.error("--seed must be nonnegative")
     if args.sample_count < 3:
@@ -504,6 +545,8 @@ def main():
             "design_only": args.design_only,
             "sample_count": args.sample_count,
             "design_evaluations": args.design_evaluations,
+            "training_period_s": args.training_period_s,
+            "holdout_period_s": args.holdout_period_s,
             "fit_input": args.fit_input,
             "seed": args.seed,
             "payload_kg": args.payload_kg,
@@ -515,6 +558,8 @@ def main():
             ],
             "torque_noise_nm": args.torque_noise_nm,
             "encoder_noise_rad": args.encoder_noise_rad,
+            "encoder_resolution_rad": args.encoder_resolution_rad,
+            "capture_dropout": args.capture_dropout,
             "timestamp_jitter_ms": args.timestamp_jitter_ms,
             "raw_window": args.raw_window,
             "raw_estimator": args.raw_estimator,

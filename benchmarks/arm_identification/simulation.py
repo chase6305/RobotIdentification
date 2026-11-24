@@ -162,7 +162,8 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
     control_data = mujoco.MjData(controller.model)
     plant_data.qpos[plant.positions] = reference_states[0][0]
     plant_data.qvel[plant.dofs] = reference_states[1][0]
-    peak_effort = 0.0
+    peak_command = np.zeros_like(effort_limits)
+    negative_effort_limits = -effort_limits
     saturation_steps = 0
     row = 0
     for index, (q_ref, dq_ref, ddq_ref) in enumerate(zip(*reference_states)):
@@ -174,7 +175,6 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
                                 (dq_ref - velocity))
         command = controller.inverse_torque(control_data, position, velocity,
                                             desired_acceleration)
-        torque = np.clip(command, -effort_limits, effort_limits)
         time = step * step_seconds
         if not np.isfinite(command).all():
             raise ValueError(
@@ -185,17 +185,18 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
         if abs(plant_data.time - index * step_seconds) > 1e-9:
             raise ValueError(
                 f"{name} simulation time became invalid at t={time:.6g} s")
-        if np.any(command != torque):
+        magnitude = np.abs(command)
+        np.maximum(peak_command, magnitude, out=peak_command)
+        torque = command
+        if (magnitude > effort_limits).any():
+            torque = np.clip(command, negative_effort_limits, effort_limits)
             saturation_steps += 1
-        peak_effort = max(peak_effort,
-                          float(np.max(np.abs(torque) / effort_limits)))
         plant_data.qfrc_applied[plant.dofs] = torque
         if step < step_count:
-            mujoco.mj_step1(plant.model, plant_data)
-            mujoco.mj_step2(plant.model, plant_data)
+            mujoco.mj_step(plant.model, plant_data)
         else:
             mujoco.mj_forward(plant.model, plant_data)
-        if plant_data.nefc or np.any(plant_data.warning.number):
+        if plant_data.nefc or plant_data.warning.number.any():
             raise ValueError(
                 f"{name} MuJoCo constraint or integration warning at t={time:.6g} s"
             )
@@ -230,7 +231,9 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
         "saturation_steps":
             saturation_steps,
         "peak_effort_fraction":
-            peak_effort,
+            float(
+                (np.minimum(peak_command, effort_limits) / effort_limits).max()
+            ),
         "position_tracking_rmse_rad":
             float(np.sqrt(np.mean(tracking_error**2))),
         "joint_position_tracking_rmse_rad":

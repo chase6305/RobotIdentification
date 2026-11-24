@@ -27,6 +27,8 @@ using robot_identification_pinocchio::PinocchioRegressor;
 
 constexpr std::size_t kTrajectorySamples = 401;
 constexpr std::size_t kDesignEvaluations = 240;
+constexpr double kTrainingPeriodSeconds = 8.;
+constexpr double kHoldoutPeriodSeconds = 6.25;
 constexpr double kGravity = 9.81;
 // MuJoCo diagonalizes the source URDF's full inertia tensors on import.
 constexpr double kOracleToleranceNm = 1e-7;
@@ -94,11 +96,11 @@ Dataset Calibration(const pinocchio::Model& model, const ExcitationLimits& limit
     return dataset;
 }
 
-HarmonicDesign SeedDesign(const ExcitationLimits& limits, bool holdout) {
+HarmonicDesign SeedDesign(const ExcitationLimits& limits, bool holdout, double period_seconds) {
     const Eigen::VectorXd center = (limits.minimum_position + limits.maximum_position) / 2.;
     const Eigen::VectorXd radius = (limits.maximum_position - limits.minimum_position) / 2.;
     HarmonicDesign design;
-    design.fundamental_frequency_hz = holdout ? .16 : .125;
+    design.fundamental_frequency_hz = 1. / period_seconds;
     design.offset = center;
     design.sin_coefficients.resize(center.size(), 3);
     design.cos_coefficients.resize(center.size(), 3);
@@ -110,6 +112,17 @@ HarmonicDesign SeedDesign(const ExcitationLimits& limits, bool holdout) {
             const double amplitude = (holdout ? .52 : .36) * radius[joint] / (harmonic + 2);
             design.sin_coefficients(joint, harmonic) = amplitude * std::cos(phase);
             design.cos_coefficients(joint, harmonic) = amplitude * std::sin(phase);
+        }
+    }
+    const auto bounds = design.trajectory().ConservativeBounds();
+    for (Eigen::Index joint = 0; joint < center.size(); ++joint) {
+        const double scale = std::min({1., limits.maximum_velocity[joint] / bounds.maximum_absolute_velocity[joint],
+                                       limits.maximum_acceleration[joint] / bounds.maximum_absolute_acceleration[joint],
+                                       limits.maximum_jerk[joint] / bounds.maximum_absolute_jerk[joint]});
+        if (scale < 1.) {
+            // Leave slack for rounding when the requested period increases derivative bounds.
+            design.sin_coefficients.row(joint) *= .95 * scale;
+            design.cos_coefficients.row(joint) *= .95 * scale;
         }
     }
     return design;
@@ -173,9 +186,11 @@ void Design(const char* nominal_urdf,
             const fs::path& directory,
             std::size_t samples,
             std::size_t evaluations,
+            double training_period,
+            double holdout_period,
             bool actuator_terms) {
-    if (samples < 3 || evaluations == 0)
-        throw std::invalid_argument("design requires at least three samples and one evaluation");
+    if (samples < 3 || evaluations == 0 || training_period <= 0. || holdout_period <= 0.)
+        throw std::invalid_argument("design requires at least three samples, one evaluation and positive periods");
     const auto model = LoadModel(nominal_urdf);
     const ArmRegression arm(model, actuator_terms);
     const Eigen::VectorXd margin = .05 * (model->upperPositionLimit - model->lowerPositionLimit);
@@ -191,8 +206,8 @@ void Design(const char* nominal_urdf,
     const auto full = arm.BuildProblem(calibration);
     const BaseParameterBasis basis(full.regressor);
     const BaseParameterRegressor base(arm.backend(), basis);
-    const auto baseline = SeedDesign(limits, false);
-    const auto holdout = SeedDesign(limits, true);
+    const auto baseline = SeedDesign(limits, false, training_period);
+    const auto holdout = SeedDesign(limits, true, holdout_period);
     ExcitationDesignOptions options;
     options.duration_seconds = baseline.trajectory().period_seconds();
     options.sample_count = std::min<std::size_t>(101, samples);
@@ -218,6 +233,16 @@ void Design(const char* nominal_urdf,
     WriteReference(result.design);
     std::cout << ",\"holdout\":";
     WriteReference(holdout);
+    std::cout << "},\"kinematic_limits\":{\"minimum_position_rad\":";
+    WriteVector(limits.minimum_position);
+    std::cout << ",\"maximum_position_rad\":";
+    WriteVector(limits.maximum_position);
+    std::cout << ",\"maximum_velocity_rad_s\":";
+    WriteVector(limits.maximum_velocity);
+    std::cout << ",\"maximum_acceleration_rad_s2\":";
+    WriteVector(limits.maximum_acceleration);
+    std::cout << ",\"maximum_jerk_rad_s3\":";
+    WriteVector(limits.maximum_jerk);
     std::cout << "}}\n";
 }
 
@@ -556,12 +581,19 @@ int main(int argc, char** argv) {
     try {
         std::cout << std::setprecision(std::numeric_limits<double>::max_digits10);
         const auto mode = argc > 1 ? std::string(argv[1]) : "";
-        if ((argc == 4 || argc == 6 || argc == 7) && mode == "design") {
-            const auto samples = argc >= 6 ? ParseCount(argv[4], "sample count") : kTrajectorySamples;
-            const auto evaluations = argc >= 6 ? ParseCount(argv[5], "evaluation budget") : kDesignEvaluations;
-            if (argc == 7 && std::string_view(argv[6]) != "actuators")
-                throw std::invalid_argument("design only supports optional actuator terms");
-            Design(argv[2], argv[3], samples, evaluations, argc == 7);
+        if (argc >= 4 && mode == "design") {
+            const bool actuators = argc >= 7 && std::string_view(argv[argc - 1]) == "actuators";
+            const int design_arguments = argc - actuators;
+            if (design_arguments != 4 && design_arguments != 6 && design_arguments != 8)
+                throw std::invalid_argument("design requires samples and evaluations before optional periods");
+            const auto samples = design_arguments >= 6 ? ParseCount(argv[4], "sample count") : kTrajectorySamples;
+            const auto evaluations =
+                design_arguments >= 6 ? ParseCount(argv[5], "evaluation budget") : kDesignEvaluations;
+            const double training_period =
+                design_arguments == 8 ? ParseNonnegative(argv[6], "training period") : kTrainingPeriodSeconds;
+            const double holdout_period =
+                design_arguments == 8 ? ParseNonnegative(argv[7], "holdout period") : kHoldoutPeriodSeconds;
+            Design(argv[2], argv[3], samples, evaluations, training_period, holdout_period, actuators);
         } else if (argc >= 5 && mode == "fit") {
             std::optional<double> delta;
             if (std::string_view(argv[4]) != "auto") {
@@ -577,7 +609,8 @@ int main(int argc, char** argv) {
             ProcessRaw(argv[2], argv[3], ParseCount(argv[4], "raw estimator size"),
                        argc == 6 ? argv[5] : "moving-average");
         } else {
-            std::cerr << "usage: arm_identification design NOMINAL_URDF DIRECTORY [SAMPLES EVALUATIONS [actuators]]\n"
+            std::cerr << "usage: arm_identification design NOMINAL_URDF DIRECTORY "
+                         "[SAMPLES EVALUATIONS [TRAIN_PERIOD_S HOLDOUT_PERIOD_S] [actuators]]\n"
                          "       arm_identification fit NOMINAL_URDF DIRECTORY HUBER_DELTA_NM_OR_AUTO "
                          "[payload] [J1 B1 ...]\n"
                          "       arm_identification preprocess RAW_CSV PROCESSED_CSV WINDOW_OR_HARMONICS [METHOD]\n";

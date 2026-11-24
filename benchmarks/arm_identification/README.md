@@ -19,6 +19,8 @@ Export automatic points and their analytic trajectory coefficients before runnin
 ./scripts/run_arm_identification.sh --design-only --sample-count 401 --output build/arm-points
 ```
 
+Use `--training-period-s` and `--holdout-period-s` to set each cycle's duration. The design rescales the initial amplitude when a shorter period would exceed the configured velocity, acceleration, or jerk bounds. The generated CSVs and Fourier coefficients use the requested period and the report records the kinematic bounds.
+
 Run the forward simulation and fit using the recorder-format position and torque measurements.
 
 ```bash
@@ -31,6 +33,8 @@ The local cubic estimator fits position against centered, scaled timestamps in e
 `--raw-estimator periodic-fourier --raw-harmonics 7` fits the measured joint positions over one full capture period, then evaluates the derivatives analytically at the actual timestamps. It retains all position and torque samples and uses the first and last timestamps to determine the period. Use this estimator with steady periodic captures.
 
 `--timestamp-jitter-ms` shifts the capture times within the requested bound on the MuJoCo integration grid. The CSV records the actual times. The two training trajectories share the same sample offsets, and the holdout uses an independent seed.
+
+`--capture-dropout` sets the probability of losing each interior training sample, preserving the period endpoints. `--encoder-resolution-rad` rounds the raw positions to encoder increments. The training trajectories share the seeded dropout mask. These controls keep positions and torques synchronized at every retained timestamp.
 
 Add `--actuator-scale 1` to the command to test synthetic reflected rotor inertia and linear viscous friction. The plant uses per-joint armature `0.04 r kg·m²` and damping `(0.02 + 0.05 r) N·m·s/rad`, where `r` is each joint's URDF effort limit divided by the largest effort limit on that arm. The scale multiplies both terms. In this mode, `truth.mjb` contains the compiled MuJoCo plant. The fit adds columns for each joint's acceleration and velocity, and the report compares against a rigid-only model fitted to the same samples. The base-parameter rank determines which combinations can be identified. See the [MuJoCo joint model reference](https://mujoco.readthedocs.io/en/stable/XMLreference.html#body-joint).
 

@@ -61,12 +61,20 @@ def compare_arm(executable, case, report, name, source, estimator_sizes):
                         report["seed"],
                     "samples":
                         report["sample_count"],
+                    "captured_training_samples":
+                        source["samples"]["optimized"],
+                    "training_period_s":
+                        report.get("training_period_s", 8.0),
                     "payload_kg":
                         report["payload_kg"],
                     "actuator_scale":
                         report["actuator_scale"],
                     "encoder_noise_rad":
                         report["encoder_noise_rad"],
+                    "encoder_resolution_rad":
+                        report.get("encoder_resolution_rad", 0.0),
+                    "capture_dropout":
+                        report.get("capture_dropout", 0.0),
                     "timestamp_jitter_ms":
                         report["timestamp_jitter_ms"],
                     "method":
