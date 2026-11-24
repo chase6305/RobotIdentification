@@ -77,9 +77,9 @@ jobs:
           ./scripts/run_arm_identification.sh --refit build/arms-encoder-spikes \
             --raw-estimator periodic-fourier-huber --output build/arms-encoder-robust
           ./scripts/run_arm_identification.sh --demo --assets-root build/HumanoidAssets \
-            --torque-delay-ms 8 --output build/arms-delayed-torque
+            --torque-delay-ms 8.3 --output build/arms-delayed-torque
           ./scripts/run_arm_identification.sh --refit build/arms-delayed-torque \
-            --align-torque-ms 8 --output build/arms-delay-aligned
+            --align-torque-ms 8.3 --output build/arms-delay-aligned
           ./scripts/run_arm_identification.sh --refit build/arms-delayed-torque \
             --search-torque-delay-ms 20 --output build/arms-delay-searched
           ./scripts/run_arm_identification.sh --refit build/arms-drive-raw \

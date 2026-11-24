@@ -9,6 +9,7 @@ import numpy as np
 
 MAX_STEP_SECONDS = 0.001
 WARMUP_SECONDS = 3.0
+REFERENCE_CHUNK_STEPS = 16384
 POSITION_GAIN_S2 = 10000.0
 VELOCITY_GAIN_S = 200.0
 
@@ -225,6 +226,13 @@ def harmonic_states(coefficients, time):
     return position, velocity, acceleration
 
 
+def _reference_samples(coefficients, first, last, step_seconds):
+    for start in range(first, last + 1, REFERENCE_CHUNK_STEPS):
+        end = min(last + 1, start + REFERENCE_CHUNK_STEPS)
+        time = np.arange(start, end) * step_seconds
+        yield from zip(*harmonic_states(coefficients, time))
+
+
 def rollout(plant,
             controller,
             motions,
@@ -289,24 +297,36 @@ def _rollout_motion(plant,
     warmup_steps = math.ceil(WARMUP_SECONDS / step_seconds)
     final_step = step_count + max(
         0, math.ceil(-torque_delay_seconds / step_seconds))
-    ticks = np.arange(-warmup_steps, final_step + 1)
-    reference_states = harmonic_states(reference, ticks * step_seconds)
+    references = _reference_samples(reference, -warmup_steps, final_step,
+                                    step_seconds)
+    total_steps = warmup_steps + final_step
+    # Repeated time additions accumulate roundoff on long trajectories.
+    clock_tolerance = max(
+        1e-9, 4 * np.finfo(float).eps * total_steps**2 * step_seconds)
     label_positions, label_velocities, label_accelerations, label_torques = np.split(
         np.empty_like(motion[:, 1:]), 4, axis=1)
+    sampled_reference_positions = np.empty_like(label_positions)
     dense = np.empty((step_count + 1, motion.shape[1])) if save_dense else None
-    torque_history = np.empty(
-        (len(ticks), len(effort_limits))) if torque_delay_seconds else None
+    delayed_torque_steps = None
+    torque_row = 0
+    if torque_delay_seconds:
+        indices = sample_steps + warmup_steps - torque_delay_seconds / step_seconds
+        indices = np.clip(indices, 0, final_step + warmup_steps)
+        delayed_torque_steps = np.ceil(indices).astype(np.int64)
+        torque_fraction = indices - (delayed_torque_steps - 1)
+        previous_torque = np.zeros_like(effort_limits)
 
     configure_integrator(plant.model, step_seconds)
     plant_data = mujoco.MjData(plant.model)
     control_data = mujoco.MjData(controller.model)
-    plant_data.qpos[plant.positions] = reference_states[0][0]
-    plant_data.qvel[plant.dofs] = reference_states[1][0]
     peak_command = np.zeros_like(effort_limits)
     negative_effort_limits = -effort_limits
     saturation_steps = 0
     row = 0
-    for index, (q_ref, dq_ref, ddq_ref) in enumerate(zip(*reference_states)):
+    for index, (q_ref, dq_ref, ddq_ref) in enumerate(references):
+        if index == 0:
+            plant_data.qpos[plant.positions] = q_ref
+            plant_data.qvel[plant.dofs] = dq_ref
         step = index - warmup_steps
         position = plant_data.qpos[plant.positions]
         velocity = plant_data.qvel[plant.dofs]
@@ -322,7 +342,9 @@ def _rollout_motion(plant,
         if control_data.nefc:
             raise ValueError(
                 f"{name} tracking reached a joint constraint at t={time:.6g} s")
-        if abs(plant_data.time - index * step_seconds) > 1e-9:
+        expected_time = index * step_seconds
+        clock_error = abs(plant_data.time - expected_time)
+        if not math.isfinite(clock_error) or clock_error > clock_tolerance:
             raise ValueError(
                 f"{name} simulation time became invalid at t={time:.6g} s")
         magnitude = np.abs(command)
@@ -331,8 +353,17 @@ def _rollout_motion(plant,
         if (magnitude > effort_limits).any():
             torque = np.clip(command, negative_effort_limits, effort_limits)
             saturation_steps += 1
-        if torque_history is not None:
-            torque_history[index] = torque
+        if delayed_torque_steps is not None:
+            if torque_row < len(
+                    sample_steps) and index == delayed_torque_steps[torque_row]:
+                fraction = torque_fraction[torque_row]
+                if fraction == 1.0:
+                    label_torques[torque_row] = torque
+                else:
+                    label_torques[torque_row] = previous_torque + fraction * (
+                        torque - previous_torque)
+                torque_row += 1
+            previous_torque[:] = torque
         plant_data.qfrc_applied[plant.dofs] = torque
         if step < final_step:
             mujoco.mj_step(plant.model, plant_data)
@@ -351,22 +382,18 @@ def _rollout_motion(plant,
             label_velocities[row] = velocity
             # During Euler stepping qacc still describes the pre-update state.
             label_accelerations[row] = plant_data.qacc[plant.dofs]
-            label_torques[row] = torque
+            sampled_reference_positions[row] = q_ref
+            if delayed_torque_steps is None:
+                label_torques[row] = torque
             row += 1
-    if torque_history is not None:
-        torque_indices = sample_steps + warmup_steps - torque_delay_seconds / step_seconds
-        all_indices = np.arange(len(ticks))
-        for joint in range(len(effort_limits)):
-            label_torques[:, joint] = np.interp(torque_indices, all_indices,
-                                                torque_history[:, joint])
+    if row != len(motion) or (delayed_torque_steps is not None and
+                              torque_row != len(motion)):
+        raise ValueError(f"{name} did not capture every requested sample")
     labels = np.column_stack((measured_times, label_positions, label_velocities,
                               label_accelerations, label_torques))
-    if row != len(motion):
-        raise ValueError(f"{name} did not capture every requested sample")
     if not np.isfinite(labels).all():
         raise ValueError(f"{name} generated non-finite joint samples")
-    tracking_error = label_positions - reference_states[0][sample_steps +
-                                                           warmup_steps]
+    tracking_error = label_positions - sampled_reference_positions
     diagnostics = {
         "simulation_step_s":
             step_seconds,
