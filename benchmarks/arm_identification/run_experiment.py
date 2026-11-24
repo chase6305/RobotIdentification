@@ -15,6 +15,8 @@ import xml.etree.ElementTree as ET
 import mujoco
 import numpy as np
 
+from simulation import ArmDynamics, inverse_dynamics, rollout
+
 
 @dataclass(frozen=True)
 class Arm:
@@ -145,42 +147,6 @@ def read_motion(path, joints):
     return motion
 
 
-def inverse_dynamics(urdf, joints, motions, effort_limits):
-    model = mujoco.MjModel.from_xml_path(str(urdf))
-    model.opt.gravity[:] = (0.0, 0.0, -9.81)
-    joint_ids = [
-        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
-        for name in joints
-    ]
-    dof = len(joints)
-    if (model.nq != dof or model.nv != dof or
-            any(index < 0 for index in joint_ids) or
-            np.any(model.jnt_type[joint_ids] != mujoco.mjtJoint.mjJNT_HINGE)):
-        raise ValueError(
-            f"expected exactly the requested hinge joints in {urdf}")
-    qpos = model.jnt_qposadr[joint_ids]
-    qvel = model.jnt_dofadr[joint_ids]
-    data = mujoco.MjData(model)
-    result = {}
-    for name, motion in motions.items():
-        labels = motion.copy()
-        for row in labels:
-            data.qpos[qpos] = row[1:1 + dof]
-            data.qvel[qvel] = row[1 + dof:1 + 2 * dof]
-            data.qacc[qvel] = row[1 + 2 * dof:1 + 3 * dof]
-            mujoco.mj_inverse(model, data)
-            if data.nefc:
-                raise ValueError(
-                    f"active MuJoCo constraints in {name} at t={row[0]:.6g} s")
-            row[-dof:] = data.qfrc_inverse[qvel]
-        torque_ratio = np.abs(labels[:, -dof:]) / effort_limits
-        if not np.isfinite(torque_ratio).all() or np.any(torque_ratio > 1.0):
-            raise ValueError(
-                f"{name} inverse dynamics exceeded a URDF joint effort limit")
-        result[name] = labels
-    return result
-
-
 def make_noise(shape, seed, standard_deviation, outlier_amplitude):
     random = np.random.default_rng(seed)
     gaussian = random.normal(0.0, standard_deviation, size=shape)
@@ -231,7 +197,14 @@ def run_arm(name, args):
         split: read_motion(directory / f"{split}_states.csv", arm.joints)
         for split in ("baseline", "optimized", "holdout")
     }
-    labels = inverse_dynamics(truth_path, arm.joints, motions, effort)
+    plant = ArmDynamics.from_urdf(truth_path, arm.joints)
+    acquisition = {}
+    if args.acquisition == "rollout":
+        controller = ArmDynamics.from_urdf(nominal_path, arm.joints)
+        labels, acquisition = rollout(plant, controller, motions,
+                                      design["references"], effort)
+    else:
+        labels = inverse_dynamics(plant, motions, effort)
     dof = len(arm.joints)
     if labels["baseline"].shape != labels["optimized"].shape:
         raise ValueError(
@@ -263,6 +236,7 @@ def run_arm(name, args):
             for split, dataset in labels.items()
         },
         "outlier_count_per_training_trajectory": outlier_count,
+        "acquisition": acquisition,
         "design": design,
         "fit": fit,
     }
@@ -283,6 +257,12 @@ def main():
                         type=Path,
                         help="new directory for datasets and report.json")
     parser.add_argument("--robot", choices=("both", *ARMS), default="both")
+    parser.add_argument(
+        "--acquisition",
+        choices=("inverse", "rollout"),
+        default="inverse",
+        help=
+        "prescribed-state inverse dynamics or torque-driven forward simulation")
     parser.add_argument("--seed",
                         type=int,
                         default=20261124,
@@ -325,6 +305,7 @@ def main():
         report = {
             "mujoco_version": mujoco.__version__,
             "numpy_version": np.__version__,
+            "acquisition": args.acquisition,
             "seed": args.seed,
             "payload_kg": args.payload_kg,
             "payload_box_size_m": PAYLOAD_SIZE_METERS,

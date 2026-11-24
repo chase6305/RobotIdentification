@@ -103,18 +103,53 @@ void WriteQuality(const ExcitationDesignQuality& quality) {
               << ",\"mean_log_information\":" << quality.mean_log_information << '}';
 }
 
+template <typename Vector>
+void WriteVector(const Vector& values) {
+    std::cout << '[';
+    for (std::size_t index = 0; index < static_cast<std::size_t>(values.size()); ++index) {
+        if (index != 0) std::cout << ',';
+        std::cout << values[index];
+    }
+    std::cout << ']';
+}
+
+void WriteMatrix(const Eigen::MatrixXd& values) {
+    std::cout << '[';
+    for (Eigen::Index index = 0; index < values.rows(); ++index) {
+        if (index != 0) std::cout << ',';
+        WriteVector(values.row(index));
+    }
+    std::cout << ']';
+}
+
+void WriteReference(const HarmonicDesign& design) {
+    std::cout << "{\"frequency_hz\":" << design.fundamental_frequency_hz << ",\"offset_rad\":";
+    WriteVector(design.offset);
+    std::cout << ",\"sin_rad\":";
+    WriteMatrix(design.sin_coefficients);
+    std::cout << ",\"cos_rad\":";
+    WriteMatrix(design.cos_coefficients);
+    std::cout << '}';
+}
+
 void Design(const char* nominal_urdf, const fs::path& directory) {
     const auto model = LoadModel(nominal_urdf);
     const auto backend = std::make_shared<PinocchioRegressor>(model);
     const Eigen::VectorXd margin = .05 * (model->upperPositionLimit - model->lowerPositionLimit);
+#if PINOCCHIO_VERSION_AT_LEAST(4, 0, 0)
+    const auto& velocity_limit = model->upperVelocityLimit;
+#else
+    const auto& velocity_limit = model->velocityLimit;
+#endif
     const ExcitationLimits limits{model->lowerPositionLimit + margin, model->upperPositionLimit - margin,
-                                  (.8 * model->velocityLimit).cwiseMin(4.), Eigen::VectorXd::Constant(model->nv, 25.),
+                                  (.8 * velocity_limit).cwiseMin(4.), Eigen::VectorXd::Constant(model->nv, 25.),
                                   Eigen::VectorXd::Constant(model->nv, 160.)};
     const auto calibration = Calibration(*model, limits);
     const auto full = backend->BuildProblem(calibration);
     const BaseParameterBasis basis(full.regressor);
     const BaseParameterRegressor base(backend, basis);
     const auto baseline = SeedDesign(limits, false);
+    const auto holdout = SeedDesign(limits, true);
     ExcitationDesignOptions options;
     options.duration_seconds = baseline.trajectory().period_seconds();
     options.sample_count = 101;
@@ -127,14 +162,19 @@ void Design(const char* nominal_urdf, const fs::path& directory) {
     WriteDatasetCsv(calibration, (directory / "calibration.csv").string());
     WriteMotion(baseline.trajectory(), limits, calibration.joint_names, directory / "baseline_states.csv");
     WriteMotion(result.design.trajectory(), limits, calibration.joint_names, directory / "optimized_states.csv");
-    WriteMotion(SeedDesign(limits, true).trajectory(), limits, calibration.joint_names,
-                directory / "holdout_states.csv");
+    WriteMotion(holdout.trajectory(), limits, calibration.joint_names, directory / "holdout_states.csv");
     std::cout << "{\"baseline\":";
     WriteQuality(result.initial_quality);
     std::cout << ",\"optimized\":";
     WriteQuality(result.quality);
     std::cout << ",\"evaluations\":" << result.evaluations << ",\"accepted_steps\":" << result.accepted_steps
-              << ",\"converged\":" << std::boolalpha << result.converged << "}\n";
+              << ",\"converged\":" << std::boolalpha << result.converged << ",\"references\":{\"baseline\":";
+    WriteReference(baseline);
+    std::cout << ",\"optimized\":";
+    WriteReference(result.design);
+    std::cout << ",\"holdout\":";
+    WriteReference(holdout);
+    std::cout << "}}\n";
 }
 
 Eigen::VectorXd DynamicParameters(const pinocchio::Model& model) {
@@ -142,16 +182,6 @@ Eigen::VectorXd DynamicParameters(const pinocchio::Model& model) {
     for (int joint = 1; joint < model.njoints; ++joint)
         parameters.segment<10>(10 * (joint - 1)) = model.inertias[joint].toDynamicParameters();
     return parameters;
-}
-
-template <typename Vector>
-void WriteVector(const Vector& values) {
-    std::cout << '[';
-    for (std::size_t index = 0; index < static_cast<std::size_t>(values.size()); ++index) {
-        if (index != 0) std::cout << ',';
-        std::cout << values[index];
-    }
-    std::cout << ']';
 }
 
 void WriteFit(const RegressionProblem& train,
@@ -218,12 +248,8 @@ void Fit(const char* nominal_urdf, const fs::path& directory, double huber_delta
     WriteVector(basis.selected_columns());
     std::cout << ",\"column_scales\":";
     WriteVector(basis.column_scales());
-    std::cout << ",\"full_to_base\":[";
-    for (Eigen::Index index = 0; index < basis.full_to_base().rows(); ++index) {
-        if (index != 0) std::cout << ',';
-        WriteVector(basis.full_to_base().row(index));
-    }
-    std::cout << ']';
+    std::cout << ",\"full_to_base\":";
+    WriteMatrix(basis.full_to_base());
     std::cout << ",\"oracle_parameters\":";
     WriteVector(oracle);
     for (const auto& name : {"baseline", "optimized"}) {

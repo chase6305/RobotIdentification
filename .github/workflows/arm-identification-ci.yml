@@ -6,6 +6,7 @@ on:
       - benchmarks/arm_identification/**
       - robot_identification/**
       - robot_identification_pinocchio/**
+      - scripts/run_arm_identification.sh
   workflow_dispatch:
 jobs:
   mujoco-arms:
@@ -34,38 +35,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Install native and Python dependencies
+      - name: Install Eigen
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeigen3-dev liburdfdom-headers-dev
-          python -m pip install numpy==1.26.4 mujoco==3.13.0 pin==2.7.0 \
-            cmeel-boost==1.83.0 cmeel-urdfdom==3.1.1.1 hpp-fcl==2.4.4 eigenpy==3.5.1
-          pin_prefix="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib") + "/cmeel.prefix")')"
-          echo "CMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/build/install:$pin_prefix" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$pin_prefix/lib" >> "$GITHUB_ENV"
-      - name: Build the C++ identification pipeline
-        run: |
-          cmake -S robot_identification -B build/core -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release
-          cmake --build build/core --parallel 2
-          cmake --install build/core --prefix "$GITHUB_WORKSPACE/build/install"
-          cmake -S robot_identification_pinocchio -B build/pinocchio -DBUILD_TESTING=OFF \
-            -DCMAKE_BUILD_TYPE=Release "-DPython3_EXECUTABLE=$(command -v python)"
-          cmake --build build/pinocchio --parallel 2
-          cmake --install build/pinocchio --prefix "$GITHUB_WORKSPACE/build/install"
-          cmake -S benchmarks/arm_identification -B build/arm-bench -DCMAKE_BUILD_TYPE=Release \
-            "-DPython3_EXECUTABLE=$(command -v python)"
-          cmake --build build/arm-bench --parallel 2
-      - name: Verify identification on both arms
+          sudo apt-get install -y libeigen3-dev
+      - name: Build and verify identification on both arms
         run: |
           run_experiment() {
-            python benchmarks/arm_identification/run_experiment.py \
-              --assets-root build/HumanoidAssets --executable build/arm-bench/arm_identification "$@"
+            ./scripts/run_arm_identification.sh --assets-root build/HumanoidAssets "$@"
           }
           run_experiment --output build/arms-clean --torque-noise-nm 0 --outlier-nm 0
           for seed in 20261124 11 29 47 71; do
             run_experiment --output "build/arms-noisy-$seed" --seed "$seed"
           done
           python benchmarks/arm_identification/check_experiment.py build/arms-clean/report.json build/arms-noisy-*/report.json
+          run_experiment --acquisition rollout --output build/arms-rollout-clean --torque-noise-nm 0 --outlier-nm 0
+          for seed in 11 71; do
+            run_experiment --acquisition rollout --output "build/arms-rollout-noisy-$seed" --seed "$seed"
+          done
+          python benchmarks/arm_identification/check_experiment.py \
+            build/arms-rollout-clean/report.json build/arms-rollout-noisy-*/report.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
