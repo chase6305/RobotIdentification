@@ -11,6 +11,7 @@ if [[ ${1:-} == -h || ${1:-} == --help || $# == 0 ]]; then
   cat <<'EOF'
 Usage: ./scripts/run_arm_identification.sh --output DIRECTORY [experiment options]
        ./scripts/run_arm_identification.sh --demo [--output DIRECTORY]
+       ./scripts/run_arm_identification.sh --refit CAPTURE_DIRECTORY --output DIRECTORY [fit options]
        ./scripts/run_arm_identification.sh --build-only
 
 This builds the optional C++ benchmark and runs the two arms in HumanoidAssets.
@@ -20,18 +21,23 @@ to run one arm. Pass --acquisition rollout for torque-driven simulation
 or --design-only to export automatic reference points.
 The demo runs capture, raw-data fitting, forward replay, and model export.
 Use a new output directory for each experiment. The demo creates one by default.
+The refit reads a saved capture and reruns preprocessing and fitting.
 
 PYTHON selects the base interpreter. ARM_IDENTIFICATION_BUILD_DIR selects the
 directory for the virtual environment and native build products.
 EOF
   exit 0
 fi
+ENTRY="run_experiment.py"
 if [[ "$1" == --demo ]]; then
   shift
   demo_output="$ROOT_DIR/build/arm-demo-$(date +%Y%m%d-%H%M%S)-$$"
   set -- --acquisition rollout --fit-input raw --raw-estimator periodic-fourier \
     --timestamp-jitter-ms 2 --actuator-scale 1 --replay --estimate-payload --estimate-arm \
     --summary --output "$demo_output" "$@"
+elif [[ "$1" == --refit ]]; then
+  shift
+  ENTRY="refit_capture.py"
 fi
 if [[ "$WORKERS" != 1 && "$WORKERS" != 2 ]]; then
   echo "CMAKE_BUILD_PARALLEL_LEVEL must be 1 or 2" >&2
@@ -100,5 +106,8 @@ if [[ $# == 1 && "$1" == --build-only ]]; then
 fi
 PIN_PREFIX="$("$VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib") + "/cmeel.prefix")')"
 export LD_LIBRARY_PATH="$PIN_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "$VENV/bin/python" "$BENCHMARK_DIR/run_experiment.py" \
-  --assets-root "$ROOT_DIR/../HumanoidAssets" --executable "$BUILD_DIR/benchmark/arm_identification" "$@"
+if [[ "$ENTRY" == run_experiment.py ]]; then
+  set -- --assets-root "$ROOT_DIR/../HumanoidAssets" "$@"
+fi
+exec "$VENV/bin/python" "$BENCHMARK_DIR/$ENTRY" \
+  --executable "$BUILD_DIR/benchmark/arm_identification" "$@"

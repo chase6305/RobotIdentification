@@ -80,6 +80,12 @@ jobs:
           python benchmarks/arm_identification/check_huber.py build/arms-drive-high-noise/report.json
           python benchmarks/arm_identification/check_physical_arm.py \
             build/arms-drive-clean build/arms-drive-raw build/arms-physical-high-noise
+          ./scripts/run_arm_identification.sh --refit build/arms-drive-raw --output build/arms-refit
+          for arm in pm01 openarm; do
+            cmp "build/arms-drive-raw/$arm/train_optimized_raw.csv" "build/arms-refit/$arm/train_optimized_raw.csv"
+            cmp "build/arms-drive-raw/$arm/holdout_predicted_physical_arm.csv" \
+              "build/arms-refit/$arm/holdout_predicted_physical_arm.csv"
+          done
           build/arm-identification/venv/bin/python benchmarks/arm_identification/compare_raw.py \
             --executable build/arm-identification/benchmark/arm_identification \
             --output build/arm-window-comparison.csv build/arms-rollout-noisy-11

@@ -46,7 +46,14 @@ The local cubic estimator fits position against centered, scaled timestamps in e
 
 `--capture-dropout` sets the probability of losing each interior training sample, preserving the period endpoints. `--encoder-resolution-rad` rounds the raw positions to encoder increments. The training trajectories share the seeded dropout mask. These controls keep positions and torques synchronized at every retained timestamp.
 
-Add `--actuator-scale 1` to the command to test synthetic reflected rotor inertia and linear viscous friction. The plant uses per-joint armature `0.04 r kg·m²` and damping `(0.02 + 0.05 r) N·m·s/rad`, where `r` is each joint's URDF effort limit divided by the largest effort limit on that arm. The scale multiplies both terms. In this mode, `truth.mjb` contains the compiled MuJoCo plant. The fit adds columns for each joint's acceleration and velocity, and the report compares against a rigid-only model fitted to the same samples. The base-parameter rank determines which combinations can be identified. See the [MuJoCo joint model reference](https://mujoco.readthedocs.io/en/stable/XMLreference.html#body-joint).
+Use `--refit` to try new preprocessing and solver settings on a saved capture. It copies the inputs used by the fit, then creates a new report and exports in the requested directory. The original acquisition settings, Huber threshold, and model export choices carry over unless you override them. `--refit` uses the recorded position and torque samples and skips trajectory design and data collection.
+
+```bash
+./scripts/run_arm_identification.sh --refit build/arms-demo --raw-estimator local-cubic \
+  --raw-window 17 --huber-auto --output build/arms-demo-refit
+```
+
+For a new acquisition, add `--actuator-scale 1` to test synthetic reflected rotor inertia and linear viscous friction. The plant uses per-joint armature `0.04 r kg·m²` and damping `(0.02 + 0.05 r) N·m·s/rad`, where `r` is each joint's URDF effort limit divided by the largest effort limit on that arm. The scale multiplies both terms. In this mode, `truth.mjb` contains the compiled MuJoCo plant. The fit adds columns for each joint's acceleration and velocity, and the report compares against a rigid-only model fitted to the same samples. The base-parameter rank determines which combinations can be identified. See the [MuJoCo joint model reference](https://mujoco.readthedocs.io/en/stable/XMLreference.html#body-joint).
 
 The actuator report recovers individually observable coefficients by solving for each full coordinate as a linear combination of base coordinates. All viscous coefficients are observable on both arms, and the first two rotor inertias appear as `null` individual estimates. The projected candidate uses the final Huber weighted least-squares metric to make the observable passive coefficients nonnegative within numerical tolerance. Its holdout and mass-matrix metrics are reported alongside the unconstrained fit.
 

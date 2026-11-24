@@ -324,6 +324,40 @@ def export_identified_arm(fit, nominal, directory, joints, holdout,
                 "exported arm disagrees with the native replay position error")
 
 
+def fit_captured_arm(args, directory, metadata, holdout, dense_holdout):
+    nominal_path = directory / "nominal.urdf"
+    joints = metadata["joint_names"]
+    actuators = metadata.get("actuators")
+    drive = None
+    drive_options = []
+    if actuators:
+        drive = np.asarray([[
+            actuators[name]["armature_kg_m2"],
+            actuators[name]["viscous_nm_s_per_rad"]
+        ] for name in joints])
+        drive_options = drive.ravel().tolist()
+    options = []
+    if args.estimate_payload:
+        options.append("payload")
+    if args.estimate_arm:
+        options.append("physical")
+    huber = "auto" if args.huber_auto else args.huber_delta_nm
+    fit = run_cpp(args.executable, "fit", nominal_path, directory, huber,
+                  *options, *drive_options)
+    if args.estimate_payload or args.estimate_arm:
+        nominal = ET.parse(nominal_path).getroot()
+        effort = np.asarray(metadata["joint_effort_limits_nm"])
+        payload = fit.get("payload_fit", {}).get("physical_candidate")
+        if payload is not None:
+            export_payload(payload, nominal, metadata["payload_parent"],
+                           directory, joints, drive, holdout, dense_holdout,
+                           effort)
+        if args.estimate_arm:
+            export_identified_arm(fit, nominal, directory, joints, holdout,
+                                  dense_holdout)
+    return fit
+
+
 def run_arm(name, args):
     arm = ARMS[name]
     source_bytes = (args.assets_root / arm.urdf).read_bytes()
@@ -350,6 +384,7 @@ def run_arm(name, args):
         "fixed_base": arm.base,
         "joint_names": arm.joints,
         "joint_effort_limits_nm": effort.tolist(),
+        "payload_parent": terminal,
         "design": design,
     }
     if args.design_only:
@@ -365,9 +400,7 @@ def run_arm(name, args):
         for split in ("baseline", "optimized", "holdout")
     }
     plant = ArmDynamics.from_urdf(truth_path, arm.joints, drive_parameters)
-    drive_options = []
     if drive_parameters is not None:
-        drive_options = drive_parameters.ravel().tolist()
         result["actuators"] = {
             name: {
                 "armature_kg_m2": float(armature),
@@ -433,25 +466,7 @@ def run_arm(name, args):
     if dense_holdout is not None:
         write_dataset(directory / "holdout_dense.csv", dense_holdout,
                       dataset_header(arm.joints))
-    fit_options = []
-    if args.estimate_payload:
-        fit_options.append("payload")
-    if args.estimate_arm:
-        fit_options.append("physical")
-    huber = "auto" if args.huber_auto else args.huber_delta_nm
-    fit = run_cpp(args.executable, "fit", nominal_path, directory, huber,
-                  *fit_options, *drive_options)
-    if args.estimate_payload and fit["payload_fit"][
-            "physical_candidate"] is not None:
-        export_payload(fit["payload_fit"]["physical_candidate"], nominal,
-                       terminal, directory, arm.joints, drive_parameters,
-                       labels["holdout"], dense_holdout, effort)
-    if args.estimate_arm:
-        export_identified_arm(fit, nominal, directory, arm.joints,
-                              labels["holdout"], dense_holdout)
-
     result.update({
-        "payload_parent": terminal,
         "samples": {
             split: len(dataset) for split, dataset in labels.items()
         },
@@ -459,10 +474,15 @@ def run_arm(name, args):
             split: float(np.max(np.abs(dataset[:, -dof:]) / effort))
             for split, dataset in labels.items()
         },
-        "outlier_count_per_training_trajectory": outlier_count,
-        "acquisition": acquisition,
-        "preprocessing": processed,
-        "fit": fit,
+        "outlier_count_per_training_trajectory":
+            outlier_count,
+        "acquisition":
+            acquisition,
+        "preprocessing":
+            processed,
+        "fit":
+            fit_captured_arm(args, directory, result, labels["holdout"],
+                             dense_holdout),
     })
     return result
 
