@@ -1,0 +1,76 @@
+name: arm-identification-ci
+on:
+  pull_request:
+    paths:
+      - .github/workflows/arm-identification-ci.yml
+      - benchmarks/CMakeLists.txt
+      - benchmarks/arm_identification/**
+      - robot_identification/**
+      - robot_identification_pinocchio/**
+  workflow_dispatch:
+jobs:
+  mujoco-arms:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      CTEST_PARALLEL_LEVEL: '1'
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      NUMEXPR_NUM_THREADS: '1'
+      MAX_JOBS: '2'
+      RAYON_NUM_THREADS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: chase6305/HumanoidAssets
+          ref: 067393d2b63b7ffa5b022e847ef2f4436799ad70
+          path: build/HumanoidAssets
+          sparse-checkout: |
+            /Engineai_PM01/urdf/robot.urdf
+            /OpenArm/left_arm.urdf
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install native and Python dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev liburdfdom-headers-dev
+          python -m pip install numpy==1.26.4 mujoco==3.13.0 pin==2.7.0 \
+            cmeel-boost==1.83.0 cmeel-urdfdom==3.1.1.1 hpp-fcl==2.4.4 eigenpy==3.5.1
+          pin_prefix="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib") + "/cmeel.prefix")')"
+          echo "CMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/build/install:$pin_prefix" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$pin_prefix/lib" >> "$GITHUB_ENV"
+      - name: Build the C++ identification pipeline
+        run: |
+          cmake -S robot_identification -B build/core -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/core --parallel 2
+          cmake --install build/core --prefix "$GITHUB_WORKSPACE/build/install"
+          cmake -S robot_identification_pinocchio -B build/pinocchio -DBUILD_TESTING=OFF \
+            -DCMAKE_BUILD_TYPE=Release "-DPython3_EXECUTABLE=$(command -v python)"
+          cmake --build build/pinocchio --parallel 2
+          cmake --install build/pinocchio --prefix "$GITHUB_WORKSPACE/build/install"
+          cmake -S benchmarks -B build/benchmarks -DCMAKE_BUILD_TYPE=Release \
+            -DROBOT_IDENTIFICATION_BENCH_PINOCCHIO=ON "-DPython3_EXECUTABLE=$(command -v python)"
+          cmake --build build/benchmarks --parallel 2 --target arm_identification
+      - name: Verify identification on both arms
+        run: |
+          for scenario in clean noisy; do
+            options=()
+            if [[ "$scenario" == clean ]]; then
+              options=(--torque-noise-nm 0 --outlier-nm 0)
+            fi
+            python benchmarks/arm_identification/run_experiment.py \
+              --assets-root build/HumanoidAssets --executable build/benchmarks/arm_identification \
+              --output "build/arms-$scenario" "${options[@]}"
+          done
+          python benchmarks/arm_identification/check_experiment.py build/arms-clean/report.json build/arms-noisy/report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm-identification-reports
+          path: build/arms-*/report.json
+          if-no-files-found: ignore

@@ -59,6 +59,10 @@ python3 -m pip install -r requirements-dev.txt
 
 合成求解与 Pinocchio 批量组装性能可用[独立基准程序](benchmarks/README.md)复现。
 
+## MuJoCo 手臂辨识实验
+
+从 HumanoidAssets 的 PM01 左臂（5 轴）和 OpenArm 左臂（7 轴）生成仿真数据，使用 Pinocchio 回归和现有 C++ 求解器估计可辨识的惯性组合，并在独立轨迹上验证力矩预测。参见[实验说明与复现命令](benchmarks/arm_identification/README.md)。
+
 ## 离线工具
 
 ```bash
