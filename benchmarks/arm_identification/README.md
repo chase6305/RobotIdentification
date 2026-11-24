@@ -136,11 +136,13 @@ benchmark_dir=build/arm-identification
 
 ## Reference results
 
+Before column normalization, the benchmark zeros calibration columns below 64 machine epsilons times the largest calibration entry. It checks the same columns against this bound in subsequent regressors. This removes two numerical directions in the PM01 root inertia and keeps the reported rank stable across simulator versions.
+
 Prescribed-state inverse dynamics holdout torque RMSE in N·m, with fitted results reported as medians over the CI noise seeds `20261124, 11, 29, 47, 71`.
 
 | Left arm | Base / full coordinates | Unloaded nominal | Baseline OLS | Baseline Huber | Optimized OLS | Optimized Huber |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| PM01 | 33 / 50 | 0.41340 | 0.04383 | 0.01110 | 0.01216 | 0.00390 |
+| PM01 | 31 / 50 | 0.41340 | 0.04355 | 0.01103 | 0.01234 | 0.00431 |
 | OpenArm | 43 / 70 | 0.23947 | 0.03789 | 0.01160 | 0.01109 | 0.00337 |
 
 In the clean control, the relative error against the known base coordinates is about `1.04e-8` for PM01 and `6.54e-9` for OpenArm. These figures characterize rigid-body inverse dynamics along prescribed trajectories in simulation.
@@ -149,9 +151,9 @@ The default torque-driven demo uses the constrained whole-arm model for the foll
 
 | Left arm | Holdout torque RMSE [N·m] | Reloaded replay position RMSE [rad] | Fitted payload [kg] |
 | --- | ---: | ---: | ---: |
-| PM01 | 0.00373 | 0.000108 | 0.350844 |
+| PM01 | 0.00382 | 0.000100 | 0.351138 |
 | OpenArm | 0.00406 | 0.000606 | 0.350644 |
 
-All 1,024 workspace states met the effort constraints for both demo arms. Their identified-model torque RMSE was `0.01641 N·m` for PM01 and `0.03714 N·m` for OpenArm.
+All 1,024 workspace states met the effort constraints for both demo arms. Their identified-model torque RMSE was `0.01143 N·m` for PM01 and `0.03714 N·m` for OpenArm.
 
 At torque noise `0.20 N·m` and encoder noise `0.0008 rad`, the OpenArm median holdout torque RMSE over six seeds was `0.05235 N·m` for optimized Huber and `0.02119 N·m` for the constrained model. The reloaded constrained model finished all 16 replay windows on each seed.

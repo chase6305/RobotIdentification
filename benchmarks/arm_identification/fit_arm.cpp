@@ -47,7 +47,7 @@ std::vector<std::string> JointNames(const pinocchio::Model& model) {
     return {model.names.begin() + 1, model.names.end()};
 }
 
-class ArmRegression {
+class ArmRegression final : public RegressorBackend {
 public:
     ArmRegression(std::shared_ptr<const pinocchio::Model> model, bool actuator_terms)
         : rigid_(std::make_shared<PinocchioRegressor>(std::move(model))), backend_(rigid_) {
@@ -59,19 +59,48 @@ public:
         }
     }
 
-    [[nodiscard]] const auto& backend() const { return backend_; }
-    [[nodiscard]] const PinocchioRegressor& rigid() const { return *rigid_; }
+    [[nodiscard]] std::size_t parameter_count() const noexcept override { return backend_->parameter_count(); }
+    [[nodiscard]] std::vector<std::string> parameter_names() const override { return backend_->parameter_names(); }
+
+    [[nodiscard]] Eigen::MatrixXd Compute(const Sample& sample) const override {
+        auto regressor = backend_->Compute(sample);
+        ClearRoundoffColumns(regressor);
+        return regressor;
+    }
 
     [[nodiscard]] RegressionProblem BuildProblem(const Dataset& dataset) const {
-        if (backend_ == rigid_) return rigid_->BuildProblem(dataset);
         if (dataset.joint_names != JointNames(rigid_->model()))
             throw std::invalid_argument("dataset joint names do not match the loaded arm");
-        return BuildRegressionProblem(dataset, *backend_);
+        auto problem = backend_ == rigid_ ? rigid_->BuildProblem(dataset) : BuildRegressionProblem(dataset, *backend_);
+        ClearRoundoffColumns(problem.regressor);
+        return problem;
+    }
+
+    [[nodiscard]] RegressionProblem Calibrate(const Dataset& dataset) {
+        auto problem = BuildProblem(dataset);
+        const Eigen::RowVectorXd scales = problem.regressor.cwiseAbs().colwise().maxCoeff();
+        // Pinocchio can return roundoff in structurally zero inertia columns.
+        // Unit column normalization would amplify those values into apparent rank.
+        roundoff_tolerance_ = 64. * std::numeric_limits<double>::epsilon() * scales.maxCoeff();
+        for (Eigen::Index column = 0; column < scales.size(); ++column)
+            if (scales[column] <= roundoff_tolerance_) roundoff_columns_.push_back(column);
+        ClearRoundoffColumns(problem.regressor);
+        return problem;
     }
 
 private:
+    void ClearRoundoffColumns(Eigen::MatrixXd& regressor) const {
+        for (const auto column : roundoff_columns_) {
+            if (regressor.col(column).cwiseAbs().maxCoeff() > roundoff_tolerance_)
+                throw std::runtime_error("a calibration-zero regressor column exceeds the roundoff bound");
+            regressor.col(column).setZero();
+        }
+    }
+
     std::shared_ptr<const PinocchioRegressor> rigid_;
     std::shared_ptr<const RegressorBackend> backend_;
+    std::vector<Eigen::Index> roundoff_columns_;
+    double roundoff_tolerance_ = 0.;
 };
 
 Dataset Calibration(const pinocchio::Model& model, const ExcitationLimits& limits) {
@@ -194,7 +223,7 @@ void Design(const char* nominal_urdf,
     if (samples < 3 || evaluations == 0 || training_period <= 0. || holdout_period <= 0.)
         throw std::invalid_argument("design requires at least three samples, one evaluation and positive periods");
     const auto model = LoadModel(nominal_urdf);
-    const ArmRegression arm(model, actuator_terms);
+    const auto arm = std::make_shared<ArmRegression>(model, actuator_terms);
     const Eigen::VectorXd margin = .05 * (model->upperPositionLimit - model->lowerPositionLimit);
 #if PINOCCHIO_VERSION_AT_LEAST(4, 0, 0)
     const auto& velocity_limit = model->upperVelocityLimit;
@@ -205,9 +234,9 @@ void Design(const char* nominal_urdf,
                                   (.8 * velocity_limit).cwiseMin(4.), Eigen::VectorXd::Constant(model->nv, 25.),
                                   Eigen::VectorXd::Constant(model->nv, 160.)};
     const auto calibration = Calibration(*model, limits);
-    const auto full = arm.BuildProblem(calibration);
+    const auto full = arm->Calibrate(calibration);
     const BaseParameterBasis basis(full.regressor);
-    const BaseParameterRegressor base(arm.backend(), basis);
+    const BaseParameterRegressor base(arm, basis);
     const auto baseline = SeedDesign(limits, false, training_period);
     const auto holdout = SeedDesign(limits, true, holdout_period);
     ExcitationDesignOptions options;
@@ -377,15 +406,15 @@ void Fit(const char* nominal_urdf,
     const bool actuator_terms = !drive_parameters.empty();
     if (actuator_terms && drive_parameters.size() != static_cast<std::size_t>(2 * model->nv))
         throw std::invalid_argument("expected one armature and damping pair per joint");
-    const ArmRegression arm(model, actuator_terms);
+    const auto arm = std::make_shared<ArmRegression>(model, actuator_terms);
     const auto build = [&](const char* filename) {
-        return arm.BuildProblem(ReadDatasetCsv((directory / filename).string()));
+        return arm->BuildProblem(ReadDatasetCsv((directory / filename).string()));
     };
     const auto calibration_data = ReadDatasetCsv((directory / "calibration.csv").string());
-    const auto calibration = arm.BuildProblem(calibration_data);
+    const auto calibration = arm->Calibrate(calibration_data);
     const BaseParameterBasis basis(calibration.regressor);
     const auto holdout_data = ReadDatasetCsv((directory / "holdout.csv").string());
-    auto full_holdout = arm.BuildProblem(holdout_data);
+    auto full_holdout = arm->BuildProblem(holdout_data);
     const auto holdout = basis.ReduceProblem(full_holdout);
     const auto full_nominal = DynamicParameters(*model, std::vector<double>(drive_parameters.size()));
     const auto nominal = basis.ToBaseParameters(full_nominal);
@@ -413,7 +442,7 @@ void Fit(const char* nominal_urdf,
         payload_holdout = arm_identification::PayloadRegression(full_holdout, payload_prior, payload_column);
     }
     full_holdout = {};
-    const BaseParameterRegressor base(arm.backend(), basis);
+    const BaseParameterRegressor base(arm, basis);
     const arm_identification::ForwardValidation validation(base, calibration_data, holdout_data);
 
     std::cout << "{\"pinocchio_version\":" << std::quoted(PINOCCHIO_VERSION)
@@ -424,7 +453,7 @@ void Fit(const char* nominal_urdf,
               << ",\"nominal_holdout_rmse_nm\":" << nominal_rmse
               << ",\"oracle_holdout_max_absolute_error_nm\":" << engine_error
               << ",\"reduced_oracle_max_difference_nm\":" << reduction_error << ",\"parameter_names\":[";
-    const auto parameter_names = arm.backend()->parameter_names();
+    const auto parameter_names = arm->parameter_names();
     for (std::size_t index = 0; index < parameter_names.size(); ++index) {
         if (index != 0) std::cout << ',';
         std::cout << std::quoted(parameter_names[index]);
@@ -549,12 +578,11 @@ void Fit(const char* nominal_urdf,
             std::cout << "null";
         }
         std::cout << '}';
-        const auto build_rigid = [&](const char* filename) {
-            return arm.rigid().BuildProblem(ReadDatasetCsv((directory / filename).string()));
-        };
-        const BaseParameterBasis rigid_basis(build_rigid("calibration.csv").regressor);
-        const auto rigid_train = rigid_basis.ReduceProblem(build_rigid("train_optimized.csv"));
-        const auto rigid_holdout = rigid_basis.ReduceProblem(build_rigid("holdout.csv"));
+        ArmRegression rigid_arm(model, false);
+        const BaseParameterBasis rigid_basis(rigid_arm.Calibrate(calibration_data).regressor);
+        const auto rigid_train = rigid_basis.ReduceProblem(
+            rigid_arm.BuildProblem(ReadDatasetCsv((directory / "train_optimized.csv").string())));
+        const auto rigid_holdout = rigid_basis.ReduceProblem(rigid_arm.BuildProblem(holdout_data));
         SolverOptions options;
         options.huber_delta = optimized_delta;
         const auto rigid_fit = Solve(rigid_train, options);
@@ -638,8 +666,8 @@ void EstimateTorqueDelay(const char* nominal_urdf,
         throw std::invalid_argument("torque delay search requires a periodic Fourier estimator");
     if (maximum_delay_ms <= 0. || huber_delta <= 0.)
         throw std::invalid_argument("torque delay search requires a positive bound and Huber threshold");
-    const ArmRegression arm(LoadModel(nominal_urdf), actuator_terms);
-    const auto calibration = arm.BuildProblem(ReadDatasetCsv((directory / "calibration.csv").string()));
+    ArmRegression arm(LoadModel(nominal_urdf), actuator_terms);
+    const auto calibration = arm.Calibrate(ReadDatasetCsv((directory / "calibration.csv").string()));
     const BaseParameterBasis basis(calibration.regressor);
     const auto baseline = DelaySearchSamples(ReadRawDatasetCsv((directory / "train_baseline_raw.csv").string()));
     const auto optimized = DelaySearchSamples(ReadRawDatasetCsv((directory / "train_optimized_raw.csv").string()));

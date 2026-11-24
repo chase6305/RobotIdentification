@@ -57,7 +57,7 @@ def check_arm(name, dof, expected_rank, experiment, clean):
 def check(clean_report, noisy_reports):
     if len({report["seed"] for report in noisy_reports}) != len(noisy_reports):
         raise ValueError("noise seeds must be distinct")
-    for name, dof, expected_rank in (("pm01", 5, 33), ("openarm", 7, 43)):
+    for name, dof, expected_rank in (("pm01", 5, 31), ("openarm", 7, 43)):
         clean = clean_report["robots"][name]
         check_arm(name, dof, expected_rank, clean, clean=True)
         noisy_arms = [report["robots"][name] for report in noisy_reports]

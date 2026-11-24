@@ -12,7 +12,7 @@ from capture_io import read_motion
 
 def check(directory, clean):
     report = json.loads((directory / "report.json").read_text(encoding="utf-8"))
-    for name, dof, rank in (("pm01", 5, 41), ("openarm", 7, 55)):
+    for name, dof, rank in (("pm01", 5, 39), ("openarm", 7, 55)):
         robot = report["robots"][name]
         fit = robot["fit"]
         estimated = fit["optimized"]["huber"]

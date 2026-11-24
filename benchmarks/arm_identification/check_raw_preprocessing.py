@@ -99,7 +99,7 @@ def check_report(path):
     report = json.loads(Path(path).read_text(encoding="utf-8"))
     if report["fit_input"] != "raw" or report["raw_estimator"] != "local-cubic":
         raise ValueError("expected a raw local-cubic arm experiment")
-    for arm, rank in (("pm01", 33), ("openarm", 43)):
+    for arm, rank in (("pm01", 31), ("openarm", 43)):
         data = report["robots"][arm]
         for motion, acquisition in data["acquisition"].items():
             if not 0 < acquisition["max_timestamp_jitter_s"] <= report[
