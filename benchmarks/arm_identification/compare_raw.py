@@ -30,6 +30,8 @@ def compare_arm(executable, case, report, name, source, estimator_sizes):
         for joint in joints
         for field in ("armature_kg_m2", "viscous_nm_s_per_rad")
     ] if actuators else []
+    huber = "auto" if report.get("huber_auto",
+                                 False) else report["huber_delta_nm"]
     with tempfile.TemporaryDirectory() as temporary:
         replay = Path(temporary)
         for filename in ("nominal.urdf", "truth.urdf", "calibration.csv",
@@ -48,7 +50,7 @@ def compare_arm(executable, case, report, name, source, estimator_sizes):
                         read_motion(processed, joints), measured[split],
                         len(joints))
                 fit = run_cpp(executable, "fit", replay / "nominal.urdf",
-                              replay, report["huber_delta_nm"], *drive_options)
+                              replay, huber, *drive_options)
                 fitted = fit["optimized"]["huber"]
                 yield {
                     "case":

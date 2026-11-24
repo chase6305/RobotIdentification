@@ -325,8 +325,9 @@ def run_arm(name, args):
         write_dataset(directory / "holdout_dense.csv", dense_holdout,
                       dataset_header(arm.joints))
     payload_options = ["payload"] if args.estimate_payload else []
-    fit = run_cpp(args.executable, "fit", nominal_path, directory,
-                  args.huber_delta_nm, *payload_options, *drive_options)
+    huber = "auto" if args.huber_auto else args.huber_delta_nm
+    fit = run_cpp(args.executable, "fit", nominal_path, directory, huber,
+                  *payload_options, *drive_options)
     if args.estimate_payload and fit["payload_fit"][
             "physical_candidate"] is not None:
         export_payload(fit["payload_fit"]["physical_candidate"], nominal,
@@ -445,10 +446,15 @@ def main():
                         type=float,
                         default=0.75,
                         help="training outlier magnitude")
-    parser.add_argument("--huber-delta-nm",
-                        type=float,
-                        default=0.06,
-                        help="Huber threshold")
+    huber_group = parser.add_mutually_exclusive_group()
+    huber_group.add_argument("--huber-delta-nm",
+                             type=float,
+                             default=0.06,
+                             help="fixed Huber threshold")
+    huber_group.add_argument(
+        "--huber-auto",
+        action="store_true",
+        help="calibrate Huber threshold from training residuals")
     args = parser.parse_args()
     for field in ("payload_kg", "actuator_scale", "torque_noise_nm",
                   "outlier_nm", "encoder_noise_rad", "timestamp_jitter_ms",
@@ -515,7 +521,8 @@ def main():
             "raw_harmonics": args.raw_harmonics,
             "outlier_nm": args.outlier_nm,
             "outlier_probability": OUTLIER_PROBABILITY,
-            "huber_delta_nm": args.huber_delta_nm,
+            "huber_delta_nm": None if args.huber_auto else args.huber_delta_nm,
+            "huber_auto": args.huber_auto,
             "robots": {
                 name: run_arm(name, args) for name in robots
             },

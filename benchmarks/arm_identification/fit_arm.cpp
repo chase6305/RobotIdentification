@@ -16,6 +16,7 @@
 #include <string_view>
 
 #include "forward_validation.h"
+#include "observable_parameters.h"
 #include "payload_fit.h"
 #include "raw_preprocessing.h"
 
@@ -279,15 +280,55 @@ void WritePayloadFit(const arm_identification::PayloadFit& payload) {
     std::cout << '}';
 }
 
-Eigen::VectorXd WriteFit(const RegressionProblem& train,
-                         const RegressionProblem& holdout,
-                         const Eigen::VectorXd& oracle,
-                         double huber_delta,
-                         const arm_identification::ForwardValidation& validation) {
-    SolverOptions options;
-    options.huber_delta = huber_delta;
-    auto result = Solve(train, options);
-    if (result.rank != static_cast<std::size_t>(train.regressor.cols()))
+void WriteActuatorEstimates(const std::vector<std::string>& names,
+                            const std::vector<double>& configured,
+                            const std::vector<std::optional<Eigen::VectorXd>>& coordinates,
+                            const Eigen::VectorXd& parameters,
+                            const Eigen::MatrixXd* covariance) {
+    const auto first = names.size() - configured.size();
+    std::cout << '[';
+    for (std::size_t index = 0; index < configured.size(); ++index) {
+        if (index != 0) std::cout << ',';
+        std::cout << "{\"name\":" << std::quoted(names[first + index]) << ",\"configured\":" << configured[index]
+                  << ",\"estimate\":";
+        if (coordinates[index]) {
+            const auto& weights = *coordinates[index];
+            std::cout << weights.dot(parameters) << ",\"standard_deviation\":";
+            const double variance = covariance ? weights.dot(*covariance * weights) : -1.;
+            if (variance >= 0. && std::isfinite(variance))
+                std::cout << std::sqrt(variance);
+            else
+                std::cout << "null";
+        } else {
+            std::cout << "null,\"standard_deviation\":null";
+        }
+        std::cout << '}';
+    }
+    std::cout << ']';
+}
+
+double Median(const Eigen::VectorXd& values) {
+    std::vector<double> scratch(values.data(), values.data() + values.size());
+    const auto middle = scratch.begin() + scratch.size() / 2;
+    std::nth_element(scratch.begin(), middle, scratch.end());
+    if (scratch.size() % 2 != 0) return *middle;
+    return .5 * *std::max_element(scratch.begin(), middle) + .5 * *middle;
+}
+
+double EstimateHuberDelta(const RegressionProblem& train, const IdentificationResult& ols) {
+    const double residual_center = Median(ols.residual);
+    const double mad = Median((ols.residual.array() - residual_center).abs().matrix());
+    const double numerical_floor =
+        64 * std::numeric_limits<double>::epsilon() * std::max(1., train.observation.cwiseAbs().maxCoeff());
+    return std::max(numerical_floor, 1.345 * 1.4826 * mad);
+}
+
+void WriteFit(const IdentificationResult& result,
+              const RegressionProblem& holdout,
+              const Eigen::VectorXd& oracle,
+              double huber_delta,
+              const arm_identification::ForwardValidation& validation) {
+    if (result.rank != static_cast<std::size_t>(holdout.regressor.cols()))
         throw std::runtime_error("training regressor lost identifiable directions");
     const auto metrics = ValidateParameters(holdout, result.parameters);
     const Eigen::VectorXd residual = holdout.observation - holdout.regressor * result.parameters;
@@ -298,20 +339,19 @@ Eigen::VectorXd WriteFit(const RegressionProblem& train,
               << ",\"train_rmse_nm\":" << result.rmse << ",\"holdout_rmse_nm\":" << metrics.rmse
               << ",\"holdout_max_absolute_error_nm\":" << metrics.max_absolute_error
               << ",\"holdout_normalized_rmse\":" << metrics.normalized_rmse << ",\"relative_base_error\":" << base_error
-              << ",\"iterations\":" << result.iterations << ",\"converged\":" << std::boolalpha << result.converged
-              << ",\"holdout_joint_rmse_nm\":";
+              << ",\"huber_delta_nm\":" << huber_delta << ",\"iterations\":" << result.iterations
+              << ",\"converged\":" << std::boolalpha << result.converged << ",\"holdout_joint_rmse_nm\":";
     WriteVector(per_joint);
     std::cout << ",\"parameters\":";
     WriteVector(result.parameters);
     std::cout << ",\"forward_validation\":";
     WriteForwardMetrics(validation.Evaluate(result.parameters));
     std::cout << '}';
-    return std::move(result.parameters);
 }
 
 void Fit(const char* nominal_urdf,
          const fs::path& directory,
-         double huber_delta,
+         std::optional<double> huber_delta,
          const std::vector<double>& drive_parameters,
          bool estimate_payload) {
     const auto model = LoadModel(nominal_urdf);
@@ -371,29 +411,46 @@ void Fit(const char* nominal_urdf,
     WriteVector(oracle);
     std::cout << ",\"nominal_forward_validation\":";
     WriteForwardMetrics(validation.Evaluate(nominal));
+    std::vector<std::optional<Eigen::VectorXd>> drive_coordinates;
+    if (actuator_terms)
+        drive_coordinates = arm_identification::ObservableCoordinates(
+            basis.full_to_base(), basis.full_parameter_count() - drive_parameters.size(), drive_parameters.size());
     Eigen::VectorXd optimized_parameters;
+    Eigen::MatrixXd optimized_covariance;
+    arm_identification::DriveProjection drive_projection;
+    double optimized_delta = 0.;
     std::optional<arm_identification::PayloadFit> payload;
     for (const auto& name : {"baseline", "optimized"}) {
         const auto filename = std::string("train_") + name + ".csv";
         const auto full_train = build(filename.c_str());
         const auto train = basis.ReduceProblem(full_train);
+        const auto ols = Solve(train);
+        SolverOptions options;
+        options.huber_delta = huber_delta ? *huber_delta : EstimateHuberDelta(train, ols);
+        auto robust = Solve(train, options);
         std::cout << ",\"" << name << "\":{\"ols\":";
-        WriteFit(train, holdout, oracle, 0., validation);
+        WriteFit(ols, holdout, oracle, 0., validation);
         std::cout << ",\"huber\":";
-        auto parameters = WriteFit(train, holdout, oracle, huber_delta, validation);
+        WriteFit(robust, holdout, oracle, options.huber_delta, validation);
         std::cout << '}';
         if (std::string_view(name) == "optimized") {
-            const Eigen::VectorXd prediction = holdout.regressor * parameters;
+            const Eigen::VectorXd prediction = holdout.regressor * robust.parameters;
             auto predicted_data = holdout_data;
             const auto dof = static_cast<Eigen::Index>(predicted_data.dof());
             for (std::size_t sample = 0; sample < predicted_data.samples.size(); ++sample)
                 predicted_data.samples[sample].torque = prediction.segment(sample * dof, dof);
             WriteDatasetCsv(predicted_data, (directory / "holdout_predicted_optimized_huber.csv").string());
-            optimized_parameters = std::move(parameters);
+            if (actuator_terms) {
+                drive_projection = arm_identification::ProjectNonnegativeDrive(
+                    train.regressor, robust.final_row_weights, robust.parameters, drive_coordinates);
+                optimized_covariance = std::move(robust.covariance);
+            }
+            optimized_parameters = std::move(robust.parameters);
+            optimized_delta = options.huber_delta;
             if (estimate_payload)
                 payload = arm_identification::FitPayload(full_train, full_holdout,
                                                          DynamicParameters(*model, drive_parameters),
-                                                         10 * (model->njoints - 2), huber_delta);
+                                                         10 * (model->njoints - 2), optimized_delta);
         }
     }
     if (payload) {
@@ -416,6 +473,25 @@ void Fit(const char* nominal_urdf,
         std::cout << '}';
     }
     if (actuator_terms) {
+        std::cout << ",\"optimized_huber_actuator_parameters\":";
+        WriteActuatorEstimates(parameter_names, drive_parameters, drive_coordinates, optimized_parameters,
+                               &optimized_covariance);
+        std::cout << ",\"nonnegative_actuator_projection\":{\"negative_terms_before\":"
+                  << drive_projection.negative_before << ",\"candidate\":";
+        if (drive_projection.parameters) {
+            const auto& projected = *drive_projection.parameters;
+            const auto metrics = ValidateParameters(holdout, projected);
+            std::cout << "{\"holdout_rmse_nm\":" << metrics.rmse << ",\"parameters\":";
+            WriteVector(projected);
+            std::cout << ",\"actuator_parameters\":";
+            WriteActuatorEstimates(parameter_names, drive_parameters, drive_coordinates, projected, nullptr);
+            std::cout << ",\"forward_validation\":";
+            WriteForwardMetrics(validation.Evaluate(projected));
+            std::cout << '}';
+        } else {
+            std::cout << "null";
+        }
+        std::cout << '}';
         const auto build_rigid = [&](const char* filename) {
             return arm.rigid().BuildProblem(ReadDatasetCsv((directory / filename).string()));
         };
@@ -423,7 +499,7 @@ void Fit(const char* nominal_urdf,
         const auto rigid_train = rigid_basis.ReduceProblem(build_rigid("train_optimized.csv"));
         const auto rigid_holdout = rigid_basis.ReduceProblem(build_rigid("holdout.csv"));
         SolverOptions options;
-        options.huber_delta = huber_delta;
+        options.huber_delta = optimized_delta;
         const auto rigid_fit = Solve(rigid_train, options);
         const auto comparison = ValidateParameters(rigid_holdout, rigid_fit.parameters);
         std::cout << ",\"rigid_only_optimized_huber_holdout_rmse_nm\":" << comparison.rmse;
@@ -487,8 +563,11 @@ int main(int argc, char** argv) {
                 throw std::invalid_argument("design only supports optional actuator terms");
             Design(argv[2], argv[3], samples, evaluations, argc == 7);
         } else if (argc >= 5 && mode == "fit") {
-            const double delta = ParseNonnegative(argv[4], "Huber delta");
-            if (delta == 0.) throw std::invalid_argument("Huber delta must be positive");
+            std::optional<double> delta;
+            if (std::string_view(argv[4]) != "auto") {
+                delta = ParseNonnegative(argv[4], "Huber delta");
+                if (*delta == 0.) throw std::invalid_argument("Huber delta must be positive");
+            }
             const bool estimate_payload = argc > 5 && std::string_view(argv[5]) == "payload";
             std::vector<double> drive_parameters;
             for (int index = estimate_payload ? 6 : 5; index < argc; ++index)
@@ -499,7 +578,8 @@ int main(int argc, char** argv) {
                        argc == 6 ? argv[5] : "moving-average");
         } else {
             std::cerr << "usage: arm_identification design NOMINAL_URDF DIRECTORY [SAMPLES EVALUATIONS [actuators]]\n"
-                         "       arm_identification fit NOMINAL_URDF DIRECTORY HUBER_DELTA_NM [payload] [J1 B1 ...]\n"
+                         "       arm_identification fit NOMINAL_URDF DIRECTORY HUBER_DELTA_NM_OR_AUTO "
+                         "[payload] [J1 B1 ...]\n"
                          "       arm_identification preprocess RAW_CSV PROCESSED_CSV WINDOW_OR_HARMONICS [METHOD]\n";
             return 2;
         }

@@ -65,6 +65,16 @@ def check(directory, clean):
         addresses = model.jnt_dofadr[[
             model.joint(joint).id for joint in joints
         ]]
+        terms = fit["optimized_huber_actuator_parameters"]
+        for index, term in enumerate(terms):
+            ambiguous = index in (0, 2)
+            if (term["estimate"] is None) != ambiguous:
+                raise ValueError(
+                    f"{name}: incorrect individual observability for {term['name']}"
+                )
+            if clean and not ambiguous and abs(term["estimate"] -
+                                               term["configured"]) > 1e-8:
+                raise ValueError(f"{name}: clean drive term was not recovered")
         for values, field in ((model.dof_armature, "armature_kg_m2"),
                               (model.dof_damping, "viscous_nm_s_per_rad")):
             expected = [robot["actuators"][joint][field] for joint in joints]
