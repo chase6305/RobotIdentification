@@ -53,6 +53,8 @@ The local cubic estimator fits position against centered, scaled timestamps in e
 
 `--timestamp-jitter-ms` shifts the capture times within the requested bound on the MuJoCo integration grid. The CSV records the actual times. The two training trajectories share the same sample offsets, and the holdout uses an independent seed.
 
+The demo uses `--timestamp-jitter-ms auto`, which requests up to 2 ms and reduces that bound for shorter intervals. The report records the resulting bound and the actual jitter on the integration grid. An explicit numeric value keeps the requested bound fixed.
+
 `--capture-dropout` sets the probability of losing each interior training sample, preserving the period endpoints. `--encoder-resolution-rad` rounds the raw positions to encoder increments. The training trajectories share the seeded dropout mask. These controls keep positions and torques synchronized at every retained timestamp.
 
 Use `--refit` to try new preprocessing and solver settings on a saved capture. It copies the inputs used by the fit, then creates a new report and exports in the requested directory. The original acquisition settings, Huber threshold, and model export choices carry over unless you override them. `--refit` uses the recorded position and torque samples and skips trajectory design and data collection.

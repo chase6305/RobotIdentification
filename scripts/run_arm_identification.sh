@@ -33,7 +33,7 @@ if [[ "$1" == --demo ]]; then
   shift
   demo_output="$ROOT_DIR/build/arm-demo-$(date +%Y%m%d-%H%M%S)-$$"
   set -- --acquisition rollout --fit-input raw --raw-estimator periodic-fourier \
-    --timestamp-jitter-ms 2 --actuator-scale 1 --replay --estimate-payload --estimate-arm \
+    --timestamp-jitter-ms auto --actuator-scale 1 --replay --estimate-payload --estimate-arm \
     --summary --output "$demo_output" "$@"
 elif [[ "$1" == --refit ]]; then
   shift

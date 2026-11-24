@@ -222,7 +222,9 @@ def copy_arm_reference_plan(args, name, directory, joints, source_hash):
     source = args.reference_plan / name
     for split in ("baseline", "optimized", "holdout"):
         filename = f"{split}_states.csv"
-        points = read_motion(source / filename, joints)
+        destination = directory / filename
+        shutil.copyfile(source / filename, destination)
+        points = read_motion(destination, joints)
         period = args.holdout_period_s if split == "holdout" else args.training_period_s
         if len(points) != args.sample_count or not np.allclose(
                 points[:, 0],
@@ -239,8 +241,8 @@ def copy_arm_reference_plan(args, name, directory, joints, source_hash):
             raise ValueError(
                 f"{name}/{split}: saved states disagree with the Fourier coefficients"
             )
-        shutil.copyfile(source / filename, directory / filename)
     shutil.copyfile(source / "calibration.csv", directory / "calibration.csv")
+    read_motion(directory / "calibration.csv", joints)
     return design
 
 
@@ -697,6 +699,10 @@ def print_summary(report):
             file=sys.stderr)
 
 
+def parse_jitter(value):
+    return value if value == "auto" else float(value)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets-root",
@@ -757,9 +763,11 @@ def main():
     )
     parser.add_argument(
         "--timestamp-jitter-ms",
-        type=float,
+        type=parse_jitter,
         default=0.0,
-        help="maximum forward-simulation acquisition jitter in milliseconds")
+        help=
+        "capture jitter in milliseconds, or auto for up to 2 ms within the sampling interval"
+    )
     parser.add_argument(
         "--torque-delay-ms",
         type=float,
@@ -855,8 +863,8 @@ def main():
     except (OSError, ValueError) as error:
         parser.error(str(error))
     for field in ("payload_kg", "actuator_scale", "torque_noise_nm",
-                  "outlier_nm", "encoder_noise_rad", "timestamp_jitter_ms",
-                  "huber_delta_nm", "training_period_s", "holdout_period_s",
+                  "outlier_nm", "encoder_noise_rad", "huber_delta_nm",
+                  "training_period_s", "holdout_period_s",
                   "encoder_resolution_rad", "encoder_outlier_rad",
                   "capture_dropout"):
         value = getattr(args, field)
@@ -878,6 +886,14 @@ def main():
         parser.error("--seed must be nonnegative")
     if args.sample_count < 3:
         parser.error("--sample-count must be at least three")
+    jitter_limit = 500 * (min(args.training_period_s, args.holdout_period_s) /
+                          (args.sample_count - 1))
+    if args.timestamp_jitter_ms == "auto":
+        args.timestamp_jitter_ms = min(2.0, 0.8 * jitter_limit)
+    if not math.isfinite(
+            args.timestamp_jitter_ms) or args.timestamp_jitter_ms < 0.0:
+        parser.error(
+            "--timestamp-jitter-ms must be nonnegative and finite or auto")
     if args.design_evaluations < 1:
         parser.error("--design-evaluations must be positive")
     if args.raw_window <= 0 or args.raw_window % 2 == 0:
@@ -892,6 +908,10 @@ def main():
             "periodic Fourier estimators require at least 2h+2 samples")
     if args.timestamp_jitter_ms > 0.0 and args.acquisition != "rollout":
         parser.error("--timestamp-jitter-ms requires --acquisition rollout")
+    if not args.design_only and args.timestamp_jitter_ms >= jitter_limit:
+        parser.error(
+            f"--timestamp-jitter-ms must be below {jitter_limit:.6g} ms at this sample spacing"
+        )
     if not math.isfinite(
             args.torque_delay_ms) or (args.align_torque_ms is not None and
                                       not math.isfinite(args.align_torque_ms)):

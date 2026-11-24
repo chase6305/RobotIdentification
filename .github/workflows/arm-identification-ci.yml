@@ -69,9 +69,9 @@ jobs:
             --output build/arms-physical-high-noise
           run_experiment --design-only --sample-count 161 --design-evaluations 120 \
             --training-period-s 3.5 --holdout-period-s 5.5 --output build/arms-points
-          run_experiment --acquisition rollout --actuator-scale 1 --training-period-s 4 --holdout-period-s 5.5 \
+          run_experiment --acquisition rollout --actuator-scale 1 --sample-count 1001 --training-period-s 4 --holdout-period-s 5.5 \
             --capture-dropout 0.12 --encoder-resolution-rad 0.0001 --fit-input raw \
-            --raw-estimator periodic-fourier --timestamp-jitter-ms 2 --output build/arms-imperfect-capture
+            --raw-estimator periodic-fourier --timestamp-jitter-ms auto --output build/arms-imperfect-capture
           ./scripts/run_arm_identification.sh --demo --assets-root build/HumanoidAssets \
             --encoder-outlier-rad 0.15 --output build/arms-encoder-spikes
           ./scripts/run_arm_identification.sh --refit build/arms-encoder-spikes \
