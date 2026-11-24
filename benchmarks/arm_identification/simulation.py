@@ -7,7 +7,7 @@ import mujoco
 import numpy as np
 
 MAX_STEP_SECONDS = 0.001
-WARMUP_SECONDS = 0.5
+WARMUP_SECONDS = 3.0
 POSITION_GAIN_S2 = 10000.0
 VELOCITY_GAIN_S = 200.0
 
@@ -98,19 +98,24 @@ def rollout(plant,
             references,
             effort_limits,
             jitter_seconds=0.0,
-            seed=0):
+            seed=0,
+            replay=False):
     labels = {}
     diagnostics = {}
+    dense_holdout = None
+    plant.model.opt.disableflags |= int(mujoco.mjtDisableBit.mjDSBL_EULERDAMP)
     for name, motion in motions.items():
         noise_seed = np.random.SeedSequence([seed, 2, int(name == "holdout")])
-        labels[name], diagnostics[name] = _rollout_motion(
+        labels[name], diagnostics[name], dense = _rollout_motion(
             plant, controller, motion, references[name], effort_limits, name,
-            jitter_seconds, noise_seed)
-    return labels, diagnostics
+            jitter_seconds, noise_seed, replay and name == "holdout")
+        if dense is not None:
+            dense_holdout = dense
+    return labels, diagnostics, dense_holdout
 
 
 def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
-                    jitter_seconds, noise_seed):
+                    jitter_seconds, noise_seed, save_dense):
     sample_seconds = motion[:, 0]
     duration = sample_seconds[-1]
     interval = duration / (len(motion) - 1)
@@ -140,6 +145,7 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
     reference_states = harmonic_states(reference, ticks * step_seconds)
     label_positions, label_velocities, label_accelerations, label_torques = np.split(
         np.empty_like(motion[:, 1:]), 4, axis=1)
+    dense = np.empty((step_count + 1, motion.shape[1])) if save_dense else None
 
     plant.model.opt.timestep = step_seconds
     plant.model.opt.integrator = mujoco.mjtIntegrator.mjINT_EULER
@@ -184,6 +190,10 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
             raise ValueError(
                 f"{name} MuJoCo constraint or integration warning at t={time:.6g} s"
             )
+        if dense is not None and step >= 0:
+            dense[step, 0] = time
+            dense[step, 1:] = np.concatenate(
+                (position, velocity, plant_data.qacc[plant.dofs], torque))
         if row < len(sample_steps) and step == sample_steps[row]:
             label_positions[row] = position
             label_velocities[row] = velocity
@@ -199,7 +209,7 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
         raise ValueError(f"{name} generated non-finite joint samples")
     tracking_error = label_positions - reference_states[0][sample_steps +
                                                            warmup_steps]
-    return labels, {
+    diagnostics = {
         "simulation_step_s":
             step_seconds,
         "integration_steps":
@@ -217,3 +227,4 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
         "joint_position_tracking_rmse_rad":
             np.sqrt(np.mean(tracking_error**2, axis=0)).tolist(),
     }
+    return labels, diagnostics, dense

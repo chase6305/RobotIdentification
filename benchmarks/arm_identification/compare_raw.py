@@ -9,13 +9,14 @@ import tempfile
 
 from run_experiment import differentiation_metrics, read_motion, run_cpp
 
-WINDOWS = {
+ESTIMATOR_SIZES = {
     "moving-average": (1, 3, 5, 7, 9, 13, 17),
     "local-cubic": (5, 7, 9, 13, 17),
+    "periodic-fourier": (3, 5, 7, 9, 13, 17),
 }
 
 
-def compare_arm(executable, case, report, name, source, windows):
+def compare_arm(executable, case, report, name, source, estimator_sizes):
     joints = source["joint_names"]
     directory = case / name
     splits = ("baseline", "optimized")
@@ -35,7 +36,7 @@ def compare_arm(executable, case, report, name, source, windows):
                          "holdout.csv"):
             (replay / filename).symlink_to(
                 (directory / filename).resolve(strict=True))
-        for method, lengths in windows.items():
+        for method, lengths in estimator_sizes.items():
             for length in lengths:
                 errors = {}
                 for split in splits:
@@ -68,7 +69,7 @@ def compare_arm(executable, case, report, name, source, windows):
                         report["timestamp_jitter_ms"],
                     "method":
                         method,
-                    "window":
+                    "window_or_harmonics":
                         length,
                     "baseline_acceleration_rmse_rad_s2":
                         errors["baseline"]["acceleration_rmse_rad_s2"],
@@ -86,7 +87,7 @@ def compare_arm(executable, case, report, name, source, windows):
                 }
 
 
-def run_cases(executable, cases, windows):
+def run_cases(executable, cases, estimator_sizes):
     for case in cases:
         report = json.loads((case / "report.json").read_text(encoding="utf-8"))
         if report["design_only"] or report["fit_input"] != "simulator":
@@ -95,7 +96,7 @@ def run_cases(executable, cases, windows):
             )
         for name, source in report["robots"].items():
             yield from compare_arm(executable, case, report, name, source,
-                                   windows)
+                                   estimator_sizes)
 
 
 def main():
@@ -112,7 +113,7 @@ def main():
         help="experiment directories generated with --fit-input simulator")
     args = parser.parse_args()
     try:
-        rows = run_cases(args.executable.resolve(), args.cases, WINDOWS)
+        rows = run_cases(args.executable.resolve(), args.cases, ESTIMATOR_SIZES)
         first = next(rows)
         with args.output.open("x", newline="", encoding="utf-8") as stream:
             writer = csv.DictWriter(stream,

@@ -1,4 +1,4 @@
-"""Verify the C++ raw preprocessor on a known nonuniform cubic trajectory."""
+"""Verify raw preprocessing on exact cubic and periodic trajectories."""
 
 import csv
 import json
@@ -8,11 +8,10 @@ import subprocess
 import sys
 import tempfile
 
+TIMESTAMPS = (0.0, 0.025, 0.069, 0.102, 0.16, 0.192, 0.244, 0.287, 0.301)
 
-def check(executable):
-    timestamps = [0.0, 0.025, 0.069, 0.102, 0.16, 0.192, 0.244, 0.287, 0.301]
-    rows = [(time, 2.0 + 0.4 * time - 0.7 * time**2 + 0.9 * time**3, 0.5 - time)
-            for time in timestamps]
+
+def check_analytic(executable, rows, expected, method, size):
     with tempfile.TemporaryDirectory() as directory:
         raw = Path(directory) / "raw.csv"
         output = Path(directory) / "processed.csv"
@@ -23,7 +22,8 @@ def check(executable):
         subprocess.run([
             executable, "preprocess",
             str(raw),
-            str(output), "5", "local-cubic"
+            str(output),
+            str(size), method
         ],
                        check=True,
                        capture_output=True)
@@ -34,11 +34,8 @@ def check(executable):
             ]:
                 raise ValueError("unexpected processed CSV columns")
             actual = [tuple(map(float, row)) for row in reader]
-    expected = [(time, position, 0.4 - 1.4 * time + 2.7 * time**2,
-                 -1.4 + 5.4 * time, torque)
-                for time, position, torque in rows[2:-2]]
     if len(actual) != len(expected):
-        raise ValueError("incorrect local-cubic endpoint trimming")
+        raise ValueError(f"{method}: incorrect endpoint handling")
     for measured, oracle in zip(actual, expected):
         if measured[0] != oracle[0] or measured[-1] != oracle[-1]:
             raise ValueError(
@@ -47,7 +44,30 @@ def check(executable):
                 math.isclose(value, truth, rel_tol=0.0, abs_tol=1e-10)
                 for value, truth in zip(measured, oracle)):
             raise ValueError(
-                "local cubic did not recover analytic state and derivatives")
+                f"{method} did not recover analytic state and derivatives")
+
+
+def check(executable):
+    rows = [(time, 2.0 + 0.4 * time - 0.7 * time**2 + 0.9 * time**3, 0.5 - time)
+            for time in TIMESTAMPS]
+    expected = [(time, position, 0.4 - 1.4 * time + 2.7 * time**2,
+                 -1.4 + 5.4 * time, torque)
+                for time, position, torque in rows[2:-2]]
+    check_analytic(executable, rows, expected, "local-cubic", 5)
+
+    omega = 2 * math.pi / TIMESTAMPS[-1]
+    raw = []
+    expected = []
+    for time in TIMESTAMPS:
+        angle = omega * time
+        position = 2 + 0.3 * math.sin(angle) + 0.1 * math.cos(2 * angle)
+        velocity = omega * (0.3 * math.cos(angle) - 0.2 * math.sin(2 * angle))
+        acceleration = -omega**2 * (0.3 * math.sin(angle) +
+                                    0.4 * math.cos(2 * angle))
+        torque = 0.5 - time
+        raw.append((time, position, torque))
+        expected.append((time, position, velocity, acceleration, torque))
+    check_analytic(executable, raw, expected, "periodic-fourier", 2)
 
 
 def check_report(path):

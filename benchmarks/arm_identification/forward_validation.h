@@ -12,6 +12,20 @@ struct ForwardMetrics {
     std::optional<double> holdout_acceleration_rmse;
 };
 
+struct ReplayMetrics {
+    double requested_window_seconds{0.};
+    std::size_t windows{0};
+    std::size_t complete_windows{0};
+    std::optional<double> position_rmse;
+    std::optional<double> maximum_final_position_error;
+};
+
+[[nodiscard]] ReplayMetrics ReplayForwardWindows(const robot_identification::RegressorBackend& backend,
+                                                 const Eigen::VectorXd& parameters,
+                                                 const robot_identification::Dataset& dense_holdout,
+                                                 const Eigen::VectorXd& minimum_position,
+                                                 const Eigen::VectorXd& maximum_position);
+
 class ForwardValidation {
 public:
     ForwardValidation(const robot_identification::RegressorBackend& backend,

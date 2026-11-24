@@ -42,4 +42,53 @@ robot_identification::Dataset EstimateLocalCubic(const robot_identification::Raw
     return output;
 }
 
+robot_identification::Dataset EstimatePeriodicFourier(const robot_identification::RawDataset& raw,
+                                                      std::size_t harmonics) {
+    constexpr std::size_t maximum_harmonics = 32;
+    const auto rows = raw.time_seconds.size();
+    if (harmonics == 0 || harmonics > maximum_harmonics || static_cast<std::size_t>(rows) < 2 * harmonics + 2)
+        throw std::invalid_argument("periodic Fourier requires 1 to 32 harmonics and at least 2h+2 samples");
+
+    const double origin = raw.time_seconds[0];
+    const double period = raw.time_seconds[rows - 1] - origin;
+    const double cycle_angle = 2. * std::acos(-1.);
+    const double fundamental = cycle_angle / period;
+    if (!std::isfinite(period) || !std::isfinite(fundamental) || fundamental <= 0.)
+        throw std::invalid_argument("periodic Fourier requires a representable sampling period");
+    const auto mode_count = static_cast<Eigen::Index>(harmonics);
+    Eigen::MatrixXd design(rows, 2 * mode_count + 1);
+    design.col(0).setOnes();
+    for (Eigen::Index row = 0; row < rows; ++row) {
+        const double angle = cycle_angle * ((raw.time_seconds[row] - origin) / period);
+        for (Eigen::Index mode = 1; mode <= mode_count; ++mode) {
+            design(row, 2 * mode - 1) = std::sin(mode * angle);
+            design(row, 2 * mode) = std::cos(mode * angle);
+        }
+    }
+    const auto qr = design.colPivHouseholderQr();
+    if (qr.rank() != design.cols())
+        throw std::invalid_argument("periodic Fourier harmonics are rank deficient at these timestamps");
+    const auto offset = raw.position.row(0);
+    const Eigen::MatrixXd coefficients = qr.solve(raw.position.rowwise() - offset);
+    const auto dof = raw.position.cols();
+    robot_identification::Dataset output{raw.joint_names, {}};
+    output.samples.reserve(rows);
+    for (Eigen::Index row = 0; row < rows; ++row) {
+        Eigen::RowVectorXd velocity = Eigen::RowVectorXd::Zero(dof);
+        Eigen::RowVectorXd acceleration = Eigen::RowVectorXd::Zero(dof);
+        for (Eigen::Index mode = 1; mode <= mode_count; ++mode) {
+            const double omega = fundamental * mode;
+            const double sine = design(row, 2 * mode - 1);
+            const double cosine = design(row, 2 * mode);
+            const auto sine_coefficient = coefficients.row(2 * mode - 1);
+            const auto cosine_coefficient = coefficients.row(2 * mode);
+            velocity += omega * (cosine * sine_coefficient - sine * cosine_coefficient);
+            acceleration -= (omega * omega) * (sine * sine_coefficient + cosine * cosine_coefficient);
+        }
+        output.samples.push_back({raw.time_seconds[row], (offset + design.row(row) * coefficients).transpose(),
+                                  velocity.transpose(), acceleration.transpose(), raw.torque.row(row).transpose()});
+    }
+    return output;
+}
+
 }  // namespace arm_identification

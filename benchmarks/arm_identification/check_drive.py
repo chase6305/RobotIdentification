@@ -38,9 +38,21 @@ def check(directory, clean):
                 not forward["holdout_acceleration_rmse_rad_s2"]
                 < (1e-8 if clean else 1.0)):
             raise ValueError(f"{name}: invalid fitted forward predictions")
+        replay = fit["replay"]["optimized_huber"]
+        if (not report["replay"] or replay["windows"] != 16 or
+                replay["complete_windows"] != 16 or
+                not replay["position_rmse_rad"] < (1e-9 if clean else 0.004)):
+            raise ValueError(
+                f"{name}: fitted forward replay did not match the recorded plant"
+            )
         model = mujoco.MjModel.from_binary_path(
             str(directory / name / "truth.mjb"))
         joints = robot["joint_names"]
+        dense = read_motion(directory / name / "holdout_dense.csv", joints)
+        if len(dense
+              ) != robot["acquisition"]["holdout"]["integration_steps"] + 1:
+            raise ValueError(
+                f"{name}: replay trace is missing integration steps")
         observed = read_motion(directory / name / "holdout.csv", joints)
         predicted = read_motion(
             directory / name / "holdout_predicted_optimized_huber.csv", joints)

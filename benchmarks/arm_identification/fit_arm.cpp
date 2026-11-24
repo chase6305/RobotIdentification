@@ -245,6 +245,21 @@ void WriteForwardMetrics(const arm_identification::ForwardMetrics& forward) {
     std::cout << '}';
 }
 
+void WriteReplayMetrics(const arm_identification::ReplayMetrics& replay) {
+    std::cout << "{\"window_seconds\":" << replay.requested_window_seconds << ",\"windows\":" << replay.windows
+              << ",\"complete_windows\":" << replay.complete_windows << ",\"position_rmse_rad\":";
+    if (replay.position_rmse)
+        std::cout << *replay.position_rmse;
+    else
+        std::cout << "null";
+    std::cout << ",\"maximum_final_position_error_rad\":";
+    if (replay.maximum_final_position_error)
+        std::cout << *replay.maximum_final_position_error;
+    else
+        std::cout << "null";
+    std::cout << '}';
+}
+
 Eigen::VectorXd WriteFit(const RegressionProblem& train,
                          const RegressionProblem& holdout,
                          const Eigen::VectorXd& oracle,
@@ -336,13 +351,14 @@ void Fit(const char* nominal_urdf,
     WriteVector(oracle);
     std::cout << ",\"nominal_forward_validation\":";
     WriteForwardMetrics(validation.Evaluate(nominal));
+    Eigen::VectorXd optimized_parameters;
     for (const auto& name : {"baseline", "optimized"}) {
         const auto filename = std::string("train_") + name + ".csv";
         const auto train = basis.ReduceProblem(build(filename.c_str()));
         std::cout << ",\"" << name << "\":{\"ols\":";
         WriteFit(train, holdout, oracle, 0., validation);
         std::cout << ",\"huber\":";
-        const auto parameters = WriteFit(train, holdout, oracle, huber_delta, validation);
+        auto parameters = WriteFit(train, holdout, oracle, huber_delta, validation);
         std::cout << '}';
         if (std::string_view(name) == "optimized") {
             const Eigen::VectorXd prediction = holdout.regressor * parameters;
@@ -351,7 +367,23 @@ void Fit(const char* nominal_urdf,
             for (std::size_t sample = 0; sample < predicted_data.samples.size(); ++sample)
                 predicted_data.samples[sample].torque = prediction.segment(sample * dof, dof);
             WriteDatasetCsv(predicted_data, (directory / "holdout_predicted_optimized_huber.csv").string());
+            optimized_parameters = std::move(parameters);
         }
+    }
+    const auto replay_path = directory / "holdout_dense.csv";
+    if (fs::is_regular_file(replay_path)) {
+        const auto dense = ReadDatasetCsv(replay_path.string());
+        if (dense.joint_names != holdout_data.joint_names)
+            throw std::invalid_argument("dense holdout joint order does not match captured data");
+        const auto replay = [&](const Eigen::VectorXd& parameters) {
+            return arm_identification::ReplayForwardWindows(base, parameters, dense, model->lowerPositionLimit,
+                                                            model->upperPositionLimit);
+        };
+        std::cout << ",\"replay\":{\"nominal\":";
+        WriteReplayMetrics(replay(nominal));
+        std::cout << ",\"optimized_huber\":";
+        WriteReplayMetrics(replay(optimized_parameters));
+        std::cout << '}';
     }
     if (actuator_terms) {
         const auto build_rigid = [&](const char* filename) {
@@ -382,12 +414,15 @@ Dataset EstimateMovingAverage(const RawDataset& raw, std::size_t window) {
     return PreprocessPositionAndTorque(raw, options);
 }
 
-void ProcessRaw(const char* input, const char* output, std::size_t window, std::string_view method) {
+void ProcessRaw(const char* input, const char* output, std::size_t size, std::string_view method) {
     const auto raw = ReadRawDatasetCsv(input);
-    if (method != "moving-average" && method != "local-cubic")
-        throw std::invalid_argument("raw method must be moving-average or local-cubic");
-    const auto dataset = method == "local-cubic" ? arm_identification::EstimateLocalCubic(raw, window)
-                                                 : EstimateMovingAverage(raw, window);
+    const auto process = [&] {
+        if (method == "moving-average") return EstimateMovingAverage(raw, size);
+        if (method == "local-cubic") return arm_identification::EstimateLocalCubic(raw, size);
+        if (method == "periodic-fourier") return arm_identification::EstimatePeriodicFourier(raw, size);
+        throw std::invalid_argument("raw method must be moving-average, local-cubic or periodic-fourier");
+    };
+    const auto dataset = process();
     WriteDatasetCsv(dataset, output);
     std::cout << "{\"input_samples\":" << raw.time_seconds.size() << ",\"used_samples\":" << dataset.samples.size()
               << "}\n";
@@ -429,12 +464,12 @@ int main(int argc, char** argv) {
                 drive_parameters.push_back(ParseNonnegative(argv[index], "drive parameter"));
             Fit(argv[2], argv[3], delta, drive_parameters);
         } else if ((argc == 5 || argc == 6) && mode == "preprocess") {
-            ProcessRaw(argv[2], argv[3], ParseCount(argv[4], "raw smoothing window"),
+            ProcessRaw(argv[2], argv[3], ParseCount(argv[4], "raw estimator size"),
                        argc == 6 ? argv[5] : "moving-average");
         } else {
             std::cerr << "usage: arm_identification design NOMINAL_URDF DIRECTORY [SAMPLES EVALUATIONS [actuators]]\n"
                          "       arm_identification fit NOMINAL_URDF DIRECTORY HUBER_DELTA_NM [J1 B1 ...]\n"
-                         "       arm_identification preprocess RAW_CSV PROCESSED_CSV WINDOW [METHOD]\n";
+                         "       arm_identification preprocess RAW_CSV PROCESSED_CSV WINDOW_OR_HARMONICS [METHOD]\n";
             return 2;
         }
     } catch (const std::exception& error) {

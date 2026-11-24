@@ -245,16 +245,17 @@ def run_arm(name, args):
                 "viscous_nm_s_per_rad": float(viscous)
             } for name, (armature, viscous) in zip(arm.joints, drive_parameters)
         }
-        mujoco.mj_saveModel(plant.model, str(directory / "truth.mjb"))
     acquisition = {}
+    dense_holdout = None
     if args.acquisition == "rollout":
         controller = ArmDynamics.from_urdf(nominal_path, arm.joints)
-        labels, acquisition = rollout(plant, controller, motions,
-                                      design["references"], effort,
-                                      args.timestamp_jitter_ms / 1000,
-                                      args.seed)
+        labels, acquisition, dense_holdout = rollout(
+            plant, controller, motions, design["references"], effort,
+            args.timestamp_jitter_ms / 1000, args.seed, args.replay)
     else:
         labels = inverse_dynamics(plant, motions, effort)
+    if drive_parameters is not None or args.replay:
+        mujoco.mj_saveModel(plant.model, str(directory / "truth.mjb"))
     dof = len(arm.joints)
     if labels["baseline"].shape != labels["optimized"].shape:
         raise ValueError(
@@ -269,6 +270,7 @@ def run_arm(name, args):
                                           args.encoder_noise_rad,
                                           size=noise.shape)
     processed = {}
+    estimator_size = args.raw_harmonics if args.raw_estimator == "periodic-fourier" else args.raw_window
     for split in ("baseline", "optimized"):
         training = labels[split].copy()
         training[:, -dof:] += noise
@@ -277,7 +279,7 @@ def run_arm(name, args):
         write_raw(raw_path, training, arm.joints, encoder_noise)
         if args.fit_input == "raw":
             processed[split] = run_cpp(args.executable, "preprocess", raw_path,
-                                       processed_path, args.raw_window,
+                                       processed_path, estimator_size,
                                        args.raw_estimator)
             estimated = read_motion(processed_path, arm.joints)
             processed[split].update(
@@ -287,6 +289,9 @@ def run_arm(name, args):
     write_raw(directory / "holdout_raw.csv", labels["holdout"], arm.joints, 0.0)
     write_dataset(directory / "holdout.csv", labels["holdout"],
                   dataset_header(arm.joints))
+    if dense_holdout is not None:
+        write_dataset(directory / "holdout_dense.csv", dense_holdout,
+                      dataset_header(arm.joints))
     fit = run_cpp(args.executable, "fit", nominal_path, directory,
                   args.huber_delta_nm, *drive_options)
 
@@ -341,6 +346,10 @@ def main():
         help=
         "prescribed-state inverse dynamics or torque-driven forward simulation")
     parser.add_argument(
+        "--replay",
+        action="store_true",
+        help="replay short measured-torque windows with the fitted model")
+    parser.add_argument(
         "--fit-input",
         choices=("simulator", "raw"),
         default="simulator",
@@ -363,9 +372,14 @@ def main():
                         help="positive odd smoothing window for raw input")
     parser.add_argument(
         "--raw-estimator",
-        choices=("moving-average", "local-cubic"),
+        choices=("moving-average", "local-cubic", "periodic-fourier"),
         default="moving-average",
         help="position derivative estimator for recorder-format input")
+    parser.add_argument(
+        "--raw-harmonics",
+        type=int,
+        default=7,
+        help="harmonics fitted over one capture period for periodic-fourier")
     parser.add_argument("--seed",
                         type=int,
                         default=20261124,
@@ -409,8 +423,17 @@ def main():
         parser.error("--raw-window must be positive and odd")
     if args.raw_estimator == "local-cubic" and args.raw_window < 5:
         parser.error("local-cubic requires --raw-window of at least five")
+    if not 1 <= args.raw_harmonics <= 32:
+        parser.error("--raw-harmonics must be between 1 and 32")
+    if (args.fit_input == "raw" and args.raw_estimator == "periodic-fourier" and
+            args.sample_count < 2 * args.raw_harmonics + 2):
+        parser.error("periodic-fourier requires at least 2h+2 samples")
     if args.timestamp_jitter_ms > 0.0 and args.acquisition != "rollout":
         parser.error("--timestamp-jitter-ms requires --acquisition rollout")
+    if args.replay and (args.acquisition != "rollout" or args.design_only):
+        parser.error(
+            "--replay requires --acquisition rollout with simulation and fitting"
+        )
     args.executable = args.executable.resolve()
     robots = ARMS if args.robot == "both" else (args.robot,)
     try:
@@ -425,6 +448,7 @@ def main():
             "mujoco_version": mujoco.__version__,
             "numpy_version": np.__version__,
             "acquisition": args.acquisition,
+            "replay": args.replay,
             "design_only": args.design_only,
             "sample_count": args.sample_count,
             "design_evaluations": args.design_evaluations,
@@ -441,6 +465,7 @@ def main():
             "timestamp_jitter_ms": args.timestamp_jitter_ms,
             "raw_window": args.raw_window,
             "raw_estimator": args.raw_estimator,
+            "raw_harmonics": args.raw_harmonics,
             "outlier_nm": args.outlier_nm,
             "outlier_probability": OUTLIER_PROBABILITY,
             "huber_delta_nm": args.huber_delta_nm,
