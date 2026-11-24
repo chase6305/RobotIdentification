@@ -80,7 +80,12 @@ jobs:
             --torque-delay-ms 8 --output build/arms-delayed-torque
           ./scripts/run_arm_identification.sh --refit build/arms-delayed-torque \
             --align-torque-ms 8 --output build/arms-delay-aligned
-          python benchmarks/arm_identification/check_delay.py build/arms-delayed-torque build/arms-delay-aligned
+          ./scripts/run_arm_identification.sh --refit build/arms-delayed-torque \
+            --search-torque-delay-ms 20 --output build/arms-delay-searched
+          ./scripts/run_arm_identification.sh --refit build/arms-drive-raw \
+            --search-torque-delay-ms 20 --output build/arms-delay-synchronous
+          python benchmarks/arm_identification/check_delay.py build/arms-delayed-torque build/arms-delay-aligned \
+            build/arms-delay-searched build/arms-delay-synchronous
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_raw_preprocessing.py \
             build/arm-identification/benchmark/arm_identification build/arms-rollout-raw/report.json \
             build/arms-encoder-spikes/report.json build/arms-encoder-robust/report.json

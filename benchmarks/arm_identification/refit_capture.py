@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import math
 from pathlib import Path
 import shutil
 import sys
@@ -12,8 +11,10 @@ import mujoco
 import numpy as np
 
 from run_experiment import (ARMS, FOURIER_ESTIMATORS, RAW_ESTIMATORS,
+                            add_torque_alignment_arguments,
                             differentiation_metrics, fit_captured_arm,
-                            print_summary, read_motion, run_cpp)
+                            print_summary, read_motion, run_cpp,
+                            select_torque_alignment)
 
 
 def refit_arm(args, source_report, name):
@@ -30,6 +31,11 @@ def refit_arm(args, source_report, name):
     for filename in files:
         shutil.copyfile(source / filename, directory / filename)
 
+    result.setdefault("torque_alignment",
+                      {"delay_ms": source_report.get("align_torque_ms", 0.0)})
+    result["torque_alignment"] = select_torque_alignment(
+        args, directory, result)
+    delay = result["torque_alignment"]["delay_ms"]
     joints = metadata["joint_names"]
     estimator_size = (args.raw_harmonics if args.raw_estimator
                       in FOURIER_ESTIMATORS else args.raw_window)
@@ -39,9 +45,8 @@ def refit_arm(args, source_report, name):
         processed[split] = run_cpp(args.executable, "preprocess",
                                    directory / f"train_{split}_raw.csv",
                                    processed_path, estimator_size,
-                                   args.raw_estimator, args.align_torque_ms)
-        if source_report[
-                "fit_input"] == "simulator" and not args.align_torque_ms:
+                                   args.raw_estimator, delay)
+        if source_report["fit_input"] == "simulator" and delay == 0.0:
             measured = read_motion(source / f"train_{split}.csv", joints)
             estimated = read_motion(processed_path, joints)
             processed[split].update(
@@ -66,21 +71,18 @@ def run(args):
         raise ValueError("the requested arm is missing from the capture")
     for name, default in (("raw_estimator", "periodic-fourier"),
                           ("raw_harmonics", 7), ("raw_window", 5),
-                          ("estimate_arm", False), ("estimate_payload", False),
-                          ("align_torque_ms", 0.0)):
+                          ("estimate_arm", False), ("estimate_payload", False)):
         if getattr(args, name) is None:
             setattr(args, name, source.get(name, default))
     if not args.huber_auto and args.huber_delta_nm is None:
         args.huber_auto = source.get("huber_auto", False)
         args.huber_delta_nm = source.get("huber_delta_nm", .06)
-    if not math.isfinite(args.align_torque_ms) or (args.align_torque_ms and
-                                                   args.raw_estimator
-                                                   not in FOURIER_ESTIMATORS):
-        raise ValueError(
-            "--align-torque-ms requires a finite delay and a periodic Fourier estimator"
-        )
     args.executable = args.executable.resolve(strict=True)
     args.output.mkdir(parents=True, exist_ok=False)
+    manual_delay = args.align_torque_ms
+    if manual_delay is None:
+        manual_delay = 0.0 if args.search_torque_delay_ms is not None else source.get(
+            "align_torque_ms", 0.0)
     report = dict(
         source,
         refit_source=str(args.capture),
@@ -92,7 +94,8 @@ def run(args):
         raw_estimator=args.raw_estimator,
         raw_harmonics=args.raw_harmonics,
         raw_window=args.raw_window,
-        align_torque_ms=args.align_torque_ms,
+        align_torque_ms=manual_delay,
+        search_torque_delay_ms=args.search_torque_delay_ms,
         huber_auto=args.huber_auto,
         huber_delta_nm=None if args.huber_auto else args.huber_delta_nm,
         estimate_arm=args.estimate_arm,
@@ -120,10 +123,7 @@ def main():
     parser.add_argument("--raw-estimator", choices=RAW_ESTIMATORS)
     parser.add_argument("--raw-window", type=int)
     parser.add_argument("--raw-harmonics", type=int)
-    parser.add_argument(
-        "--align-torque-ms",
-        type=float,
-        help="correct a known signed torque delay during raw Fourier fitting")
+    add_torque_alignment_arguments(parser)
     parser.add_argument("--estimate-arm", action=argparse.BooleanOptionalAction)
     parser.add_argument("--estimate-payload",
                         action=argparse.BooleanOptionalAction)

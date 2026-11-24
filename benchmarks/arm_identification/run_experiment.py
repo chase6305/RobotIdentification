@@ -390,6 +390,48 @@ def fit_captured_arm(args, directory, metadata, holdout, dense_holdout):
     return fit
 
 
+def add_torque_alignment_arguments(parser):
+    alignment = parser.add_mutually_exclusive_group()
+    alignment.add_argument(
+        "--align-torque-ms",
+        type=float,
+        help="correct a known signed torque delay during raw Fourier fitting")
+    alignment.add_argument(
+        "--search-torque-delay-ms",
+        type=float,
+        metavar="BOUND",
+        help=
+        "estimate a signed torque delay within plus or minus BOUND milliseconds"
+    )
+
+
+def select_torque_alignment(args, directory, metadata):
+    if args.search_torque_delay_ms is not None:
+        bound = args.search_torque_delay_ms
+        if not math.isfinite(
+                bound
+        ) or bound <= 0.0 or args.raw_estimator not in FOURIER_ESTIMATORS:
+            raise ValueError(
+                "--search-torque-delay-ms requires a finite positive bound and periodic Fourier fitting"
+            )
+        actuator_options = ["actuators"] if metadata.get("actuators") else []
+        search_delta = 0.06 if args.huber_auto else args.huber_delta_nm
+        return run_cpp(args.executable, "align", directory / "nominal.urdf",
+                       directory, bound, args.raw_harmonics, args.raw_estimator,
+                       search_delta, *actuator_options)
+    if args.align_torque_ms is not None:
+        alignment = {"delay_ms": args.align_torque_ms}
+    else:
+        alignment = metadata.get("torque_alignment", {"delay_ms": 0.0})
+    delay = alignment["delay_ms"]
+    if not math.isfinite(delay) or (delay and args.raw_estimator
+                                    not in FOURIER_ESTIMATORS):
+        raise ValueError(
+            "torque alignment requires a finite delay and periodic Fourier fitting"
+        )
+    return alignment
+
+
 def run_arm(name, args):
     arm = ARMS[name]
     source_bytes = (args.assets_root / arm.urdf).read_bytes()
@@ -483,16 +525,22 @@ def run_arm(name, args):
         processed_path = directory / f"train_{split}.csv"
         write_raw(raw_path, training, arm.joints, encoder_noise,
                   args.encoder_resolution_rad)
-        if args.fit_input == "raw":
+        if args.fit_input == "simulator":
+            write_dataset(processed_path, training, dataset_header(arm.joints))
+    if args.fit_input == "raw":
+        alignment = select_torque_alignment(args, directory, result)
+        result["torque_alignment"] = alignment
+        delay = alignment["delay_ms"]
+        for split in ("baseline", "optimized"):
+            raw_path = directory / f"train_{split}_raw.csv"
+            processed_path = directory / f"train_{split}.csv"
             processed[split] = run_cpp(args.executable, "preprocess", raw_path,
                                        processed_path, estimator_size,
-                                       args.raw_estimator, args.align_torque_ms)
-            if args.align_torque_ms == 0.0:
+                                       args.raw_estimator, delay)
+            if delay == 0.0:
                 estimated = read_motion(processed_path, arm.joints)
                 processed[split].update(
                     differentiation_metrics(estimated, labels[split], dof))
-        else:
-            write_dataset(processed_path, training, dataset_header(arm.joints))
     write_raw(directory / "holdout_raw.csv", labels["holdout"], arm.joints, 0.0)
     write_dataset(directory / "holdout.csv", labels["holdout"],
                   dataset_header(arm.joints))
@@ -625,11 +673,7 @@ def main():
         type=float,
         default=0.0,
         help="signed simulated offset of the training torque channel")
-    parser.add_argument(
-        "--align-torque-ms",
-        type=float,
-        default=0.0,
-        help="correct a known signed torque delay during raw Fourier fitting")
+    add_torque_alignment_arguments(parser)
     parser.add_argument(
         "--encoder-noise-rad",
         type=float,
@@ -753,16 +797,22 @@ def main():
             "periodic Fourier estimators require at least 2h+2 samples")
     if args.timestamp_jitter_ms > 0.0 and args.acquisition != "rollout":
         parser.error("--timestamp-jitter-ms requires --acquisition rollout")
-    if not all(map(math.isfinite,
-                   (args.torque_delay_ms, args.align_torque_ms))):
+    if not math.isfinite(
+            args.torque_delay_ms) or (args.align_torque_ms is not None and
+                                      not math.isfinite(args.align_torque_ms)):
         parser.error("torque delay and alignment must be finite")
     if args.torque_delay_ms and (args.acquisition != "rollout" or
                                  args.design_only):
         parser.error("--torque-delay-ms requires simulated rollout capture")
-    if args.align_torque_ms and (args.fit_input != "raw" or args.raw_estimator
-                                 not in FOURIER_ESTIMATORS or args.design_only):
+    if args.search_torque_delay_ms is not None and (not math.isfinite(
+            args.search_torque_delay_ms) or args.search_torque_delay_ms <= 0.0):
         parser.error(
-            "--align-torque-ms requires fitting raw data with a periodic Fourier estimator"
+            "--search-torque-delay-ms requires a finite positive bound")
+    align_requested = args.align_torque_ms or args.search_torque_delay_ms is not None
+    if align_requested and (args.fit_input != "raw" or args.raw_estimator
+                            not in FOURIER_ESTIMATORS or args.design_only):
+        parser.error(
+            "torque alignment requires fitting raw data with a periodic Fourier estimator"
         )
     if args.replay and (args.acquisition != "rollout" or args.design_only):
         parser.error(
@@ -807,7 +857,8 @@ def main():
             "capture_dropout": args.capture_dropout,
             "timestamp_jitter_ms": args.timestamp_jitter_ms,
             "torque_delay_ms": args.torque_delay_ms,
-            "align_torque_ms": args.align_torque_ms,
+            "align_torque_ms": args.align_torque_ms or 0.0,
+            "search_torque_delay_ms": args.search_torque_delay_ms,
             "raw_window": args.raw_window,
             "raw_estimator": args.raw_estimator,
             "raw_harmonics": args.raw_harmonics,

@@ -605,6 +605,101 @@ void ProcessRaw(
     std::cout << "}\n";
 }
 
+double MeanHuberLoss(const RegressionProblem& problem, const Eigen::VectorXd& parameters, double delta) {
+    const Eigen::VectorXd absolute = (problem.observation - problem.regressor * parameters).cwiseAbs();
+    const Eigen::ArrayXd quadratic = absolute.array().min(delta);
+    return (.5 * quadratic.square() + delta * (absolute.array() - quadratic)).mean();
+}
+
+RawDataset DelaySearchSamples(RawDataset raw) {
+    constexpr Eigen::Index kMaximumSearchSamples = 801;
+    if (raw.time_seconds.size() <= kMaximumSearchSamples) return raw;
+    const Eigen::Index dof = raw.position.cols();
+    RawDataset reduced{std::move(raw.joint_names), Eigen::VectorXd(kMaximumSearchSamples),
+                       Eigen::MatrixXd(kMaximumSearchSamples, dof), Eigen::MatrixXd(kMaximumSearchSamples, dof)};
+    const Eigen::Index span = raw.time_seconds.size() - 1;
+    const Eigen::Index intervals = kMaximumSearchSamples - 1;
+    for (Eigen::Index row = 0; row < kMaximumSearchSamples; ++row) {
+        const Eigen::Index index = row * (span / intervals) + row * (span % intervals) / intervals;
+        reduced.time_seconds[row] = raw.time_seconds[index];
+        reduced.position.row(row) = raw.position.row(index);
+        reduced.torque.row(row) = raw.torque.row(index);
+    }
+    return reduced;
+}
+
+void EstimateTorqueDelay(const char* nominal_urdf,
+                         const fs::path& directory,
+                         double maximum_delay_ms,
+                         std::size_t harmonics,
+                         std::string_view method,
+                         double huber_delta,
+                         bool actuator_terms) {
+    if (method != "periodic-fourier" && method != "periodic-fourier-huber")
+        throw std::invalid_argument("torque delay search requires a periodic Fourier estimator");
+    if (maximum_delay_ms <= 0. || huber_delta <= 0.)
+        throw std::invalid_argument("torque delay search requires a positive bound and Huber threshold");
+    const ArmRegression arm(LoadModel(nominal_urdf), actuator_terms);
+    const auto calibration = arm.BuildProblem(ReadDatasetCsv((directory / "calibration.csv").string()));
+    const BaseParameterBasis basis(calibration.regressor);
+    const auto baseline = DelaySearchSamples(ReadRawDatasetCsv((directory / "train_baseline_raw.csv").string()));
+    const auto optimized = DelaySearchSamples(ReadRawDatasetCsv((directory / "train_optimized_raw.csv").string()));
+    const bool robust = method == "periodic-fourier-huber";
+    SolverOptions options;
+    options.huber_delta = huber_delta;
+    options.max_iterations = 12;
+    options.convergence_tolerance = 1e-6;
+    const auto build = [&](const RawDataset& raw, double seconds) {
+        const auto estimate = arm_identification::EstimatePeriodicFourier(raw, harmonics, robust, seconds);
+        return basis.ReduceProblem(arm.BuildProblem(estimate.dataset));
+    };
+    constexpr int kSearchSteps = 20;
+    constexpr int kCoarseStep = 5;
+    std::size_t evaluations = 0;
+    const auto milliseconds = [&](int index) { return (static_cast<double>(index) / kSearchSteps) * maximum_delay_ms; };
+    const auto score = [&](int index) {
+        ++evaluations;
+        const double seconds = milliseconds(index) / 1000.;
+        const auto a = build(baseline, seconds);
+        const auto b = build(optimized, seconds);
+        const auto fit_a = Solve(a, options);
+        const auto fit_b = Solve(b, options);
+        if (fit_a.rank != basis.parameter_count() || fit_b.rank != basis.parameter_count())
+            throw std::runtime_error("torque delay search lost identifiable directions");
+        // Transfer each trajectory's fitted model to the other training trajectory.
+        const double loss =
+            .5 * (MeanHuberLoss(a, fit_b.parameters, huber_delta) + MeanHuberLoss(b, fit_a.parameters, huber_delta));
+        if (!std::isfinite(loss)) throw std::runtime_error("torque delay search loss is non-finite");
+        return loss;
+    };
+    const double zero_loss = score(0);
+    int best_index = 0;
+    double best_loss = zero_loss;
+    const auto test = [&](int index) {
+        const double loss = score(index);
+        if (loss < best_loss) {
+            best_loss = loss;
+            best_index = index;
+        }
+    };
+    for (int index = -kSearchSteps; index <= kSearchSteps; index += kCoarseStep)
+        if (index != 0) test(index);
+    const int lowest_index = std::max(-kSearchSteps, best_index - kCoarseStep + 1);
+    const int highest_index = std::min(kSearchSteps, best_index + kCoarseStep - 1);
+    for (int index = lowest_index; index <= highest_index; ++index)
+        if (index % kCoarseStep != 0) test(index);
+
+    constexpr double kMinimumRelativeImprovement = .02;
+    const bool accepted = best_index != 0 && best_loss <= (1. - kMinimumRelativeImprovement) * zero_loss;
+    std::cout << "{\"delay_ms\":" << (accepted ? milliseconds(best_index) : 0.)
+              << ",\"best_trial_delay_ms\":" << milliseconds(best_index) << ",\"tested_delays\":" << evaluations
+              << ",\"baseline_samples\":" << baseline.time_seconds.size()
+              << ",\"optimized_samples\":" << optimized.time_seconds.size()
+              << ",\"zero_delay_huber_loss\":" << zero_loss << ",\"best_trial_huber_loss\":" << best_loss
+              << ",\"minimum_relative_improvement\":" << kMinimumRelativeImprovement
+              << ",\"maximum_delay_ms\":" << maximum_delay_ms << ",\"huber_delta_nm\":" << huber_delta << "}\n";
+}
+
 std::size_t ParseCount(std::string_view value, const char* label) {
     std::size_t count = 0;
     const auto* end = value.data() + value.size();
@@ -668,6 +763,12 @@ int main(int argc, char** argv) {
             for (int index = first_drive_argument; index < argc; ++index)
                 drive_parameters.push_back(ParseNonnegative(argv[index], "drive parameter"));
             Fit(argv[2], argv[3], delta, drive_parameters, estimate_payload, estimate_physical_arm);
+        } else if ((argc == 8 || argc == 9) && mode == "align") {
+            const bool actuators = argc == 9 && std::string_view(argv[8]) == "actuators";
+            if (argc == 9 && !actuators) throw std::invalid_argument("expected actuators as the final alignment flag");
+            EstimateTorqueDelay(argv[2], argv[3], ParseNonnegative(argv[4], "maximum delay"),
+                                ParseCount(argv[5], "Fourier harmonics"), argv[6],
+                                ParseNonnegative(argv[7], "Huber delta"), actuators);
         } else if (argc >= 5 && argc <= 7 && mode == "preprocess") {
             ProcessRaw(argv[2], argv[3], ParseCount(argv[4], "raw estimator size"),
                        argc >= 6 ? argv[5] : "moving-average",
@@ -677,6 +778,8 @@ int main(int argc, char** argv) {
                          "[SAMPLES EVALUATIONS [TRAIN_PERIOD_S HOLDOUT_PERIOD_S] [actuators]]\n"
                          "       arm_identification fit NOMINAL_URDF DIRECTORY HUBER_DELTA_NM_OR_AUTO "
                          "[payload] [physical] [J1 B1 ...]\n"
+                         "       arm_identification align NOMINAL_URDF DIRECTORY MAX_DELAY_MS HARMONICS FOURIER_METHOD "
+                         "HUBER_DELTA_NM [actuators]\n"
                          "       arm_identification preprocess RAW_CSV PROCESSED_CSV WINDOW_OR_HARMONICS "
                          "[METHOD [TORQUE_DELAY_MS]]\n";
             return 2;
