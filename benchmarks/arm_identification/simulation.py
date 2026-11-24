@@ -64,7 +64,7 @@ class ArmDynamics:
         return data.qfrc_inverse[self.dofs]
 
 
-def inverse_dynamics(plant, motions, effort_limits):
+def inverse_dynamics(plant, motions, effort_limits=None):
     data = mujoco.MjData(plant.model)
     dof = len(plant.dofs)
     result = {}
@@ -78,12 +78,80 @@ def inverse_dynamics(plant, motions, effort_limits):
                 raise ValueError(
                     f"active MuJoCo constraints in {name} at t={row[0]:.6g} s")
             row[-dof:] = torque
-        torque_ratio = np.abs(labels[:, -dof:]) / effort_limits
-        if not np.isfinite(torque_ratio).all() or np.any(torque_ratio > 1.0):
+        if not np.isfinite(labels[:, -dof:]).all():
+            raise ValueError(
+                f"{name} inverse dynamics produced nonfinite torque")
+        if effort_limits is not None and np.any(
+                np.abs(labels[:, -dof:]) > effort_limits):
             raise ValueError(
                 f"{name} inverse dynamics exceeded a URDF joint effort limit")
         result[name] = labels
     return result
+
+
+def configure_integrator(model, step_seconds):
+    model.opt.timestep = step_seconds
+    model.opt.integrator = mujoco.mjtIntegrator.mjINT_EULER
+    model.opt.disableflags |= int(mujoco.mjtDisableBit.mjDSBL_EULERDAMP)
+
+
+def replay_windows(plant, dense, window_count, window_seconds):
+    """Re-integrate a reloaded model under the recorded holdout torques."""
+    time = dense[:, 0]
+    last_start = int(np.searchsorted(time, time[-1] - window_seconds)) - 1
+    if (window_seconds <= 0.0 or last_start < 0 or
+            not 1 <= window_count <= last_start + 1):
+        raise ValueError(
+            "dense holdout cannot provide the requested replay windows")
+    positions, velocities, _, torques = np.split(dense[:, 1:], 4, axis=1)
+    dt = time[1] - time[0]
+    if not np.allclose(np.diff(time), dt, rtol=0.0, atol=1e-12):
+        raise ValueError("MuJoCo replay requires a uniform integration grid")
+    model = plant.model
+    configure_integrator(model, dt)
+    limits = model.jnt_range[model.dof_jntid[plant.dofs]]
+    data = mujoco.MjData(model)
+    complete = 0
+    squared_error = 0.0
+    terms = 0
+    maximum_final_error = 0.0
+    for window in range(window_count):
+        start = window * last_start // max(1, window_count - 1)
+        end = int(np.searchsorted(time, time[start] + window_seconds))
+        mujoco.mj_resetData(model, data)
+        data.qpos[plant.positions] = positions[start]
+        data.qvel[plant.dofs] = velocities[start]
+        window_error = 0.0
+        for index in range(start, end):
+            data.qfrc_applied[plant.dofs] = torques[index]
+            mujoco.mj_step(model, data)
+            position = data.qpos[plant.positions]
+            if (data.nefc or data.warning.number.any() or
+                    not np.isfinite(position).all() or
+                    np.any(position < limits[:, 0]) or
+                    np.any(position > limits[:, 1])):
+                break
+            error = position - positions[index + 1]
+            window_error += np.dot(error, error)
+        else:
+            complete += 1
+            squared_error += window_error
+            terms += (end - start) * positions.shape[1]
+            maximum_final_error = max(maximum_final_error,
+                                      float(np.max(np.abs(error))))
+    all_complete = complete == window_count
+    return {
+        "window_seconds":
+            window_seconds,
+        "windows":
+            window_count,
+        "complete_windows":
+            complete,
+        "position_rmse_rad":
+            math.sqrt(squared_error / terms) if all_complete else None,
+        "maximum_final_position_error_rad":
+            maximum_final_error if all_complete else None,
+    }
 
 
 def harmonic_states(coefficients, time):
@@ -112,7 +180,6 @@ def rollout(plant,
     labels = {}
     diagnostics = {}
     dense_holdout = None
-    plant.model.opt.disableflags |= int(mujoco.mjtDisableBit.mjDSBL_EULERDAMP)
     for name, motion in motions.items():
         noise_seed = np.random.SeedSequence([seed, 2, int(name == "holdout")])
         labels[name], diagnostics[name], dense = _rollout_motion(
@@ -156,8 +223,7 @@ def _rollout_motion(plant, controller, motion, reference, effort_limits, name,
         np.empty_like(motion[:, 1:]), 4, axis=1)
     dense = np.empty((step_count + 1, motion.shape[1])) if save_dense else None
 
-    plant.model.opt.timestep = step_seconds
-    plant.model.opt.integrator = mujoco.mjtIntegrator.mjINT_EULER
+    configure_integrator(plant.model, step_seconds)
     plant_data = mujoco.MjData(plant.model)
     control_data = mujoco.MjData(controller.model)
     plant_data.qpos[plant.positions] = reference_states[0][0]

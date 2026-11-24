@@ -10,7 +10,7 @@ The launcher builds the C++ tools and creates an isolated Python environment usi
 ./scripts/run_arm_identification.sh --demo --output build/arms-demo
 ```
 
-The demo prepares both arms, generates reference points, captures raw encoder and torque data in MuJoCo, fits with periodic Fourier derivatives, replays 16 validation windows, and exports the identified payload models. With the default build directory, native build output is saved to `build/arm-identification/build.log`. The runner prints the results and the path to `report.json`.
+The demo prepares both arms, generates reference points, captures raw encoder and torque data in MuJoCo, and estimates derivatives with a periodic Fourier fit. It exports the identified whole-arm and payload models and replays 16 validation windows in the reloaded arm model. With the default build directory, native build output is saved to `build/arm-identification/build.log`. The runner prints the results and the path to `report.json`.
 
 To run forward acquisition using the simulated derivative states, use the simpler rollout command.
 
@@ -58,6 +58,10 @@ For a complete example with drive dynamics, raw encoder measurements, and forwar
 
 Add `--estimate-payload` when the arm and drive dynamics are known. The solver subtracts that prior model's torque and identifies the 10 inertial coefficients of the terminal payload. It preserves the fitted mass and center of mass while projecting the centered second-moment matrix onto positive eigenvalues when needed. The resulting `identified_payload.urdf` and `identified_payload.mjb` can be loaded again, and the runner checks the binary model's holdout torque against the native regression prediction.
 
+Add `--estimate-arm` to fit the moving links and drive coefficients together. The solver takes the optimized trajectory and final Huber weights, then fits link pseudo-inertia matrices constrained to be at least 2% of their nominal matrices. Rotor inertia and viscous damping are nonnegative. The prior weight in normalized coordinates is the squared robust torque residual scale divided by the observation count, limited to `[1e-11, 1e-6]`. The nominal URDF helps select a full parameter vector among dynamically equivalent models. Each reported moving-link inertia includes any welded descendants, and the terminal payload can be absorbed into the last moving link. See [Wensing, Kim and Slotine on physically consistent inertial identification](https://arxiv.org/abs/1701.04395).
+
+`identified_arm.urdf` preserves the joint kinematics and contains the estimated link inertias. `identified_arm.mjb` also contains the estimated drive coefficients when they are fitted. The runner reloads the binary from disk and compares every predicted holdout torque with `holdout_predicted_physical_arm.csv` to within `1e-7 N·m`. With `--replay`, it also steps the reloaded binary under the recorded holdout torques. `physical_arm_fit` in the report contains the full coordinates, solver convergence, holdout errors, and replay results. The demo summary shows this model's metrics.
+
 An existing core and Pinocchio installation can also build the benchmark with `cmake -S benchmarks/arm_identification -B build/arm-bench` and `cmake --build build/arm-bench --parallel 2`. In that case, run `run_experiment.py` with `--executable build/arm-bench/arm_identification` and a Python environment containing MuJoCo and NumPy. See the [standalone installation guide](../../README_EN.md#standalone-build).
 
 ## Protocol
@@ -94,3 +98,12 @@ Prescribed-state inverse dynamics holdout torque RMSE in N·m, with fitted resul
 | OpenArm | 43 / 70 | 0.23947 | 0.03789 | 0.01160 | 0.01109 | 0.00337 |
 
 In the clean control, the relative error against the known base coordinates is about `1.04e-8` for PM01 and `6.54e-9` for OpenArm. These figures characterize rigid-body inverse dynamics along prescribed trajectories in simulation.
+
+The default torque-driven demo uses the constrained whole-arm model for the following measurements. The payload mass is fitted separately with a known arm and drive model. Its simulated value is `0.35 kg`.
+
+| Left arm | Holdout torque RMSE [N·m] | Reloaded replay position RMSE [rad] | Fitted payload [kg] |
+| --- | ---: | ---: | ---: |
+| PM01 | 0.00373 | 0.000108 | 0.350844 |
+| OpenArm | 0.00406 | 0.000606 | 0.350644 |
+
+At torque noise `0.20 N·m` and encoder noise `0.0008 rad`, the OpenArm median holdout torque RMSE over six seeds was `0.05235 N·m` for optimized Huber and `0.02119 N·m` for the constrained model. The reloaded constrained model finished all 16 replay windows on each seed.

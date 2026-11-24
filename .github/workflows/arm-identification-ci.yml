@@ -57,12 +57,15 @@ jobs:
             build/arms-rollout-clean/report.json build/arms-rollout-noisy-*/report.json
           run_experiment --acquisition rollout --fit-input raw --raw-estimator local-cubic \
             --raw-window 9 --timestamp-jitter-ms 2 --output build/arms-rollout-raw
-          run_experiment --acquisition rollout --actuator-scale 1 --estimate-payload --replay \
+          run_experiment --acquisition rollout --actuator-scale 1 --estimate-payload --estimate-arm --replay \
             --torque-noise-nm 0 --outlier-nm 0 --output build/arms-drive-clean
           ./scripts/run_arm_identification.sh --demo --assets-root build/HumanoidAssets --output build/arms-drive-raw
           run_experiment --acquisition rollout --actuator-scale 1 --fit-input raw --raw-estimator periodic-fourier \
             --design-evaluations 240 --huber-auto --torque-noise-nm 0.08 --timestamp-jitter-ms 2 \
             --output build/arms-drive-high-noise
+          run_experiment --acquisition rollout --actuator-scale 1 --fit-input raw --raw-estimator periodic-fourier \
+            --estimate-arm --replay --timestamp-jitter-ms 2 --huber-auto --torque-noise-nm 0.20 --encoder-noise-rad 0.0008 \
+            --output build/arms-physical-high-noise
           run_experiment --design-only --sample-count 161 --design-evaluations 120 \
             --training-period-s 3.5 --holdout-period-s 5.5 --output build/arms-points
           run_experiment --acquisition rollout --actuator-scale 1 --training-period-s 4 --holdout-period-s 5.5 \
@@ -75,6 +78,8 @@ jobs:
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_drive.py \
             build/arms-drive-clean build/arms-drive-raw
           python benchmarks/arm_identification/check_huber.py build/arms-drive-high-noise/report.json
+          python benchmarks/arm_identification/check_physical_arm.py \
+            build/arms-drive-clean build/arms-drive-raw build/arms-physical-high-noise
           build/arm-identification/venv/bin/python benchmarks/arm_identification/compare_raw.py \
             --executable build/arm-identification/benchmark/arm_identification \
             --output build/arm-window-comparison.csv build/arms-rollout-noisy-11
@@ -87,3 +92,11 @@ jobs:
             build/arms-*/report.json
             build/arm-window-comparison.csv
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arm-identification-demo-models
+          path: |
+            build/arms-drive-raw/*/identified_*.urdf
+            build/arms-drive-raw/*/identified_*.mjb
+            build/arms-drive-raw/report.json
+          if-no-files-found: error

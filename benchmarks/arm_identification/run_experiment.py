@@ -15,7 +15,8 @@ import xml.etree.ElementTree as ET
 import mujoco
 import numpy as np
 
-from simulation import ArmDynamics, inverse_dynamics, rollout
+from simulation import (ArmDynamics, configure_integrator, inverse_dynamics,
+                        replay_windows, rollout)
 
 
 @dataclass(frozen=True)
@@ -113,7 +114,23 @@ def add_payload(robot, terminal, mass):
 
 def add_payload_inertia(robot, terminal, mass, center, matrix):
     box = ET.SubElement(robot, "link", name="experiment_payload")
-    inertia = ET.SubElement(box, "inertial")
+    set_link_inertia(box, mass, matrix)
+    joint = ET.SubElement(robot,
+                          "joint",
+                          name="experiment_payload_mount",
+                          type="fixed")
+    ET.SubElement(joint, "parent", link=terminal)
+    ET.SubElement(joint, "child", link="experiment_payload")
+    ET.SubElement(joint, "origin", xyz=center, rpy="0 0 0")
+
+
+def set_link_inertia(link, mass, matrix, center=None):
+    inertia = ET.SubElement(link, "inertial")
+    if center is not None:
+        ET.SubElement(inertia,
+                      "origin",
+                      xyz=" ".join(map(str, center)),
+                      rpy="0 0 0")
     ET.SubElement(inertia, "mass", value=str(mass))
     ET.SubElement(inertia,
                   "inertia",
@@ -123,13 +140,6 @@ def add_payload_inertia(robot, terminal, mass, center, matrix):
                   ixy=str(matrix[0, 1]),
                   ixz=str(matrix[0, 2]),
                   iyz=str(matrix[1, 2]))
-    joint = ET.SubElement(robot,
-                          "joint",
-                          name="experiment_payload_mount",
-                          type="fixed")
-    ET.SubElement(joint, "parent", link=terminal)
-    ET.SubElement(joint, "child", link="experiment_payload")
-    ET.SubElement(joint, "origin", xyz=center, rpy="0 0 0")
 
 
 def write_urdf(robot, path):
@@ -228,6 +238,72 @@ def export_payload(candidate, nominal, terminal, directory, joints,
            candidate["holdout_rmse_nm"]) > 1e-7:
         raise ValueError(
             "exported payload disagrees with the native holdout prediction")
+
+
+def export_identified_arm(fit, nominal, directory, joints, holdout,
+                          dense_holdout):
+    candidate = fit["physical_arm_fit"]
+    estimated = copy.deepcopy(nominal)
+    links = {link.attrib["name"]: link for link in estimated.findall("link")}
+    moving_links = {
+        joint.attrib["name"]: joint.find("child").attrib["link"]
+        for joint in estimated.findall("joint")
+        if joint.get("type") == "revolute"
+    }
+    for link in links.values():
+        inertia = link.find("inertial")
+        if inertia is not None:
+            link.remove(inertia)
+    dof = len(joints)
+    parameters = np.asarray(candidate["full_parameters"])
+    for name, body in zip(joints,
+                          parameters[:10 * dof].reshape(dof, 10),
+                          strict=True):
+        mass, hx, hy, hz, ixx, ixy, iyy, ixz, iyz, izz = body
+        center = np.array([hx, hy, hz]) / mass
+        origin = np.array([[ixx, ixy, ixz], [ixy, iyy, iyz], [ixz, iyz, izz]])
+        centered = origin - mass * (np.dot(center, center) * np.eye(3) -
+                                    np.outer(center, center))
+        # The estimated joint-frame inertia already includes fixed descendants.
+        set_link_inertia(links[moving_links[name]], mass, centered, center)
+
+    drive = parameters[10 * dof:]
+    drive = drive.reshape(dof, 2) if drive.size else None
+    urdf = directory / "identified_arm.urdf"
+    binary = directory / "identified_arm.mjb"
+    write_urdf(estimated, urdf)
+    model = ArmDynamics.from_urdf(urdf, joints, drive)
+    if dense_holdout is not None:
+        configure_integrator(model.model,
+                             dense_holdout[1, 0] - dense_holdout[0, 0])
+    mujoco.mj_saveModel(model.model, str(binary))
+    reloaded = ArmDynamics.from_mjb(binary, joints)
+    predicted = inverse_dynamics(reloaded,
+                                 {"holdout": holdout})["holdout"][:, -dof:]
+    native = read_motion(directory / "holdout_predicted_physical_arm.csv",
+                         joints)[:, -dof:]
+    candidate["reloaded_mujoco_holdout_rmse_nm"] = float(
+        np.sqrt(np.mean((predicted - holdout[:, -dof:])**2)))
+    candidate["reloaded_max_difference_nm"] = float(
+        np.max(np.abs(predicted - native)))
+    if candidate["reloaded_max_difference_nm"] > 1e-7:
+        raise ValueError(
+            "exported arm disagrees with the native holdout prediction")
+    if dense_holdout is not None:
+        native_replay = fit["replay"]["physical_arm"]
+        replay = replay_windows(reloaded, dense_holdout,
+                                native_replay["windows"],
+                                native_replay["window_seconds"])
+        candidate["reloaded_mujoco_replay"] = replay
+        if replay["complete_windows"] != native_replay["complete_windows"]:
+            raise ValueError(
+                "exported arm disagrees with the native replay completion")
+        if (replay["position_rmse_rad"] is not None and
+                native_replay["position_rmse_rad"] is not None and
+                abs(replay["position_rmse_rad"] -
+                    native_replay["position_rmse_rad"]) > 1e-7):
+            raise ValueError(
+                "exported arm disagrees with the native replay position error")
 
 
 def run_arm(name, args):
@@ -339,15 +415,22 @@ def run_arm(name, args):
     if dense_holdout is not None:
         write_dataset(directory / "holdout_dense.csv", dense_holdout,
                       dataset_header(arm.joints))
-    payload_options = ["payload"] if args.estimate_payload else []
+    fit_options = []
+    if args.estimate_payload:
+        fit_options.append("payload")
+    if args.estimate_arm:
+        fit_options.append("physical")
     huber = "auto" if args.huber_auto else args.huber_delta_nm
     fit = run_cpp(args.executable, "fit", nominal_path, directory, huber,
-                  *payload_options, *drive_options)
+                  *fit_options, *drive_options)
     if args.estimate_payload and fit["payload_fit"][
             "physical_candidate"] is not None:
         export_payload(fit["payload_fit"]["physical_candidate"], nominal,
                        terminal, directory, arm.joints, drive_parameters,
                        labels["holdout"], effort)
+    if args.estimate_arm:
+        export_identified_arm(fit, nominal, directory, arm.joints,
+                              labels["holdout"], dense_holdout)
 
     result.update({
         "payload_parent": terminal,
@@ -372,20 +455,32 @@ def print_summary(report):
             f"Exported {report['sample_count']} points per trajectory for {', '.join(report['robots'])}.",
             file=sys.stderr)
         return
+    if report["estimate_arm"]:
+        print("Physically constrained arm fit", file=sys.stderr)
     print(
         f"{'Arm':<10}{'Base rank':>10}{'Torque RMSE [N m]':>20}"
         f"{'Replay RMSE [rad]':>20}{'Payload [kg]':>16}",
         file=sys.stderr)
     for name, robot in report["robots"].items():
         fit = robot["fit"]
-        replay = fit.get("replay", {}).get("optimized_huber",
-                                           {}).get("position_rmse_rad")
+        physical = fit.get("physical_arm_fit")
+        if physical is None:
+            torque = fit["optimized"]["huber"]["holdout_rmse_nm"]
+            replay = fit.get("replay", {}).get("optimized_huber",
+                                               {}).get("position_rmse_rad")
+        else:
+            torque = physical["holdout_rmse_nm"]
+            replay = physical.get("reloaded_mujoco_replay",
+                                  {}).get("position_rmse_rad")
+            if not physical["converged"]:
+                print(f"{name}: physical fit reached its solver limit",
+                      file=sys.stderr)
         payload = fit.get("payload_fit", {}).get("physical_candidate")
         replay_value = f"{replay:.5g}" if replay is not None else "—"
         payload_value = f"{payload['mass_kg']:.6g}" if payload is not None else "—"
         print(
             f"{name:<10}{fit['base_parameter_count']:>10}"
-            f"{fit['optimized']['huber']['holdout_rmse_nm']:>20.5g}"
+            f"{torque:>20.5g}"
             f"{replay_value:>20}{payload_value:>16}",
             file=sys.stderr)
 
@@ -500,6 +595,10 @@ def main():
         help=
         "calibrate and export payload inertia using the known arm and drive model"
     )
+    parser.add_argument(
+        "--estimate-arm",
+        action="store_true",
+        help="fit and export a physically consistent arm and drive model")
     parser.add_argument("--torque-noise-nm",
                         type=float,
                         default=0.02,
@@ -555,6 +654,8 @@ def main():
     args.executable = args.executable.resolve()
     if args.estimate_payload and args.design_only:
         parser.error("--estimate-payload requires simulated torque")
+    if args.estimate_arm and args.design_only:
+        parser.error("--estimate-arm requires simulated torque")
     robots = ARMS if args.robot == "both" else (args.robot,)
     try:
         for name in robots:
@@ -578,6 +679,7 @@ def main():
             "seed": args.seed,
             "payload_kg": args.payload_kg,
             "estimate_payload": args.estimate_payload,
+            "estimate_arm": args.estimate_arm,
             "actuator_scale": args.actuator_scale,
             "payload_box_size_m": PAYLOAD_SIZE_METERS,
             "payload_center_xyz_m": [

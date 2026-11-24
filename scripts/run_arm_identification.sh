@@ -18,7 +18,7 @@ The asset checkout defaults to ../HumanoidAssets relative to the repository.
 Pass --assets-root to choose a different location or --robot pm01 / openarm
 to run one arm. Pass --acquisition rollout for torque-driven simulation
 or --design-only to export automatic reference points.
-The demo runs capture, raw-data fitting, forward replay, and payload export.
+The demo runs capture, raw-data fitting, forward replay, and model export.
 Use a new output directory for each experiment. The demo creates one by default.
 
 PYTHON selects the base interpreter. ARM_IDENTIFICATION_BUILD_DIR selects the
@@ -30,7 +30,7 @@ if [[ "$1" == --demo ]]; then
   shift
   demo_output="$ROOT_DIR/build/arm-demo-$(date +%Y%m%d-%H%M%S)-$$"
   set -- --acquisition rollout --fit-input raw --raw-estimator periodic-fourier \
-    --timestamp-jitter-ms 2 --actuator-scale 1 --replay --estimate-payload \
+    --timestamp-jitter-ms 2 --actuator-scale 1 --replay --estimate-payload --estimate-arm \
     --summary --output "$demo_output" "$@"
 fi
 if [[ "$WORKERS" != 1 && "$WORKERS" != 2 ]]; then

@@ -18,6 +18,7 @@
 #include "forward_validation.h"
 #include "observable_parameters.h"
 #include "payload_fit.h"
+#include "physical_arm_fit.h"
 #include "raw_preprocessing.h"
 
 namespace {
@@ -374,11 +375,19 @@ void WriteFit(const IdentificationResult& result,
     std::cout << '}';
 }
 
+void WriteTorquePrediction(Dataset dataset, const Eigen::VectorXd& prediction, const fs::path& path) {
+    const auto dof = static_cast<Eigen::Index>(dataset.dof());
+    for (std::size_t sample = 0; sample < dataset.samples.size(); ++sample)
+        dataset.samples[sample].torque = prediction.segment(sample * dof, dof);
+    WriteDatasetCsv(dataset, path.string());
+}
+
 void Fit(const char* nominal_urdf,
          const fs::path& directory,
          std::optional<double> huber_delta,
          const std::vector<double>& drive_parameters,
-         bool estimate_payload) {
+         bool estimate_payload,
+         bool estimate_physical_arm) {
     const auto model = LoadModel(nominal_urdf);
     const bool actuator_terms = !drive_parameters.empty();
     if (actuator_terms && drive_parameters.size() != static_cast<std::size_t>(2 * model->nv))
@@ -393,8 +402,8 @@ void Fit(const char* nominal_urdf,
     const auto holdout_data = ReadDatasetCsv((directory / "holdout.csv").string());
     const auto full_holdout = arm.BuildProblem(holdout_data);
     const auto holdout = basis.ReduceProblem(full_holdout);
-    const auto nominal =
-        basis.ToBaseParameters(DynamicParameters(*model, std::vector<double>(drive_parameters.size())));
+    const auto full_nominal = DynamicParameters(*model, std::vector<double>(drive_parameters.size()));
+    const auto nominal = basis.ToBaseParameters(full_nominal);
     const double nominal_rmse = ValidateParameters(holdout, nominal).rmse;
 
     const auto truth = LoadModel((directory / "truth.urdf").c_str());
@@ -445,6 +454,7 @@ void Fit(const char* nominal_urdf,
     arm_identification::DriveProjection drive_projection;
     double optimized_delta = 0.;
     std::optional<arm_identification::PayloadFit> payload;
+    std::optional<arm_identification::PhysicalArmFit> physical_arm;
     for (const auto& name : {"baseline", "optimized"}) {
         const auto filename = std::string("train_") + name + ".csv";
         const auto full_train = build(filename.c_str());
@@ -459,12 +469,13 @@ void Fit(const char* nominal_urdf,
         WriteFit(robust, holdout, oracle, options.huber_delta, validation);
         std::cout << '}';
         if (std::string_view(name) == "optimized") {
-            const Eigen::VectorXd prediction = holdout.regressor * robust.parameters;
-            auto predicted_data = holdout_data;
-            const auto dof = static_cast<Eigen::Index>(predicted_data.dof());
-            for (std::size_t sample = 0; sample < predicted_data.samples.size(); ++sample)
-                predicted_data.samples[sample].torque = prediction.segment(sample * dof, dof);
-            WriteDatasetCsv(predicted_data, (directory / "holdout_predicted_optimized_huber.csv").string());
+            WriteTorquePrediction(holdout_data, holdout.regressor * robust.parameters,
+                                  directory / "holdout_predicted_optimized_huber.csv");
+            if (estimate_physical_arm) {
+                const double residual_scale = EstimateHuberDelta(train, robust) / 1.345;
+                physical_arm = arm_identification::FitPhysicalArm(full_train, robust.final_row_weights, full_nominal,
+                                                                  model->nv, residual_scale);
+            }
             if (actuator_terms) {
                 drive_projection = arm_identification::ProjectNonnegativeDrive(
                     train.regressor, robust.final_row_weights, robust.parameters, drive_coordinates);
@@ -482,6 +493,22 @@ void Fit(const char* nominal_urdf,
         std::cout << ",\"payload_fit\":";
         WritePayloadFit(*payload);
     }
+    Eigen::VectorXd physical_base;
+    if (physical_arm) {
+        physical_base = basis.ToBaseParameters(physical_arm->parameters);
+        const auto metrics = ValidateParameters(holdout, physical_base);
+        WriteTorquePrediction(holdout_data, holdout.regressor * physical_base,
+                              directory / "holdout_predicted_physical_arm.csv");
+        std::cout << ",\"physical_arm_fit\":{\"holdout_rmse_nm\":" << metrics.rmse
+                  << ",\"iterations\":" << physical_arm->iterations << ",\"converged\":" << std::boolalpha
+                  << physical_arm->converged << ",\"prior_weight\":" << physical_arm->prior_weight
+                  << ",\"minimum_relative_moment\":" << physical_arm->minimum_relative_moment
+                  << ",\"full_parameters\":";
+        WriteVector(physical_arm->parameters);
+        std::cout << ",\"forward_validation\":";
+        WriteForwardMetrics(validation.Evaluate(physical_base));
+        std::cout << '}';
+    }
     const auto replay_path = directory / "holdout_dense.csv";
     if (fs::is_regular_file(replay_path)) {
         const auto dense = ReadDatasetCsv(replay_path.string());
@@ -495,6 +522,10 @@ void Fit(const char* nominal_urdf,
         WriteReplayMetrics(replay(nominal));
         std::cout << ",\"optimized_huber\":";
         WriteReplayMetrics(replay(optimized_parameters));
+        if (physical_arm) {
+            std::cout << ",\"physical_arm\":";
+            WriteReplayMetrics(replay(physical_base));
+        }
         std::cout << '}';
     }
     if (actuator_terms) {
@@ -600,11 +631,22 @@ int main(int argc, char** argv) {
                 delta = ParseNonnegative(argv[4], "Huber delta");
                 if (*delta == 0.) throw std::invalid_argument("Huber delta must be positive");
             }
-            const bool estimate_payload = argc > 5 && std::string_view(argv[5]) == "payload";
+            bool estimate_payload = false;
+            bool estimate_physical_arm = false;
+            int first_drive_argument = 5;
+            for (; first_drive_argument < argc; ++first_drive_argument) {
+                const std::string_view flag(argv[first_drive_argument]);
+                if (flag == "payload")
+                    estimate_payload = true;
+                else if (flag == "physical")
+                    estimate_physical_arm = true;
+                else
+                    break;
+            }
             std::vector<double> drive_parameters;
-            for (int index = estimate_payload ? 6 : 5; index < argc; ++index)
+            for (int index = first_drive_argument; index < argc; ++index)
                 drive_parameters.push_back(ParseNonnegative(argv[index], "drive parameter"));
-            Fit(argv[2], argv[3], delta, drive_parameters, estimate_payload);
+            Fit(argv[2], argv[3], delta, drive_parameters, estimate_payload, estimate_physical_arm);
         } else if ((argc == 5 || argc == 6) && mode == "preprocess") {
             ProcessRaw(argv[2], argv[3], ParseCount(argv[4], "raw estimator size"),
                        argc == 6 ? argv[5] : "moving-average");
@@ -612,7 +654,7 @@ int main(int argc, char** argv) {
             std::cerr << "usage: arm_identification design NOMINAL_URDF DIRECTORY "
                          "[SAMPLES EVALUATIONS [TRAIN_PERIOD_S HOLDOUT_PERIOD_S] [actuators]]\n"
                          "       arm_identification fit NOMINAL_URDF DIRECTORY HUBER_DELTA_NM_OR_AUTO "
-                         "[payload] [J1 B1 ...]\n"
+                         "[payload] [physical] [J1 B1 ...]\n"
                          "       arm_identification preprocess RAW_CSV PROCESSED_CSV WINDOW_OR_HARMONICS [METHOD]\n";
             return 2;
         }
