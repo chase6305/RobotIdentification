@@ -1,11 +1,13 @@
 """Read and write the processed and recorder-format arm CSV files."""
 
 import csv
-from itertools import islice, zip_longest
+from itertools import zip_longest
+import warnings
 
 import numpy as np
 
 _MEDIAN_BLOCK_ROWS = 256
+_CSV_FLOAT_FORMAT = "%.17g"
 
 
 def dataset_header(joints, fields=("q", "dq", "ddq", "tau")):
@@ -34,7 +36,7 @@ def read_motion(path, joints, *, max_rows=None):
 def write_dataset(path, labels, header):
     np.savetxt(path,
                labels,
-               fmt="%.17g",
+               fmt=_CSV_FLOAT_FORMAT,
                delimiter=",",
                header=",".join(header),
                comments="")
@@ -49,14 +51,22 @@ def _raw_blocks(path, header):
                 _check_header(stream, path, header)
             else:
                 stream.seek(position)
-            rows = (line for line in iter(stream.readline, "")
-                    if line not in ("\n", "\r",
-                                    "\r\n") and not line.startswith("#"))
-            lines = list(islice(rows, _MEDIAN_BLOCK_ROWS))
+            with warnings.catch_warnings():
+                # EOF, blank lines and comments are expected when batching rows.
+                warnings.filterwarnings("ignore",
+                                        r"loadtxt: input contained no data:",
+                                        category=UserWarning)
+                warnings.filterwarnings(
+                    "ignore",
+                    r"Input line [0-9]+ contained no data and will not be counted",
+                    category=UserWarning)
+                samples = np.loadtxt(iter(stream.readline, ""),
+                                     delimiter=",",
+                                     ndmin=2,
+                                     max_rows=_MEDIAN_BLOCK_ROWS)
             position = stream.tell()
-        if not lines:
+        if not len(samples):
             return
-        samples = np.loadtxt(lines, delimiter=",", ndmin=2)
         if samples.shape[1] != len(header) or not np.isfinite(samples).all():
             raise ValueError(f"invalid motion samples in {path}")
         yield samples
@@ -64,6 +74,7 @@ def _raw_blocks(path, header):
 
 def write_median_raw(path, inputs, joints):
     header = dataset_header(joints, ("q", "tau"))
+    row_format = ",".join([_CSV_FLOAT_FORMAT] * len(header)) + "\n"
     captures = [_raw_blocks(filename, header) for filename in inputs]
     count = 0
     last_time = -np.inf
@@ -82,7 +93,8 @@ def write_median_raw(path, inputs, joints):
                         f"repeat capture timestamps differ in {filename}")
             values = np.stack([block[:, 1:] for block in (reference, *repeats)])
             reference[:, 1:] = np.median(values, axis=0, overwrite_input=True)
-            write_dataset(output, reference, ())
+            output.write("".join(
+                row_format % tuple(row) for row in reference.tolist()))
             last_time = times[-1]
             count += len(reference)
         if count < 3:
