@@ -138,7 +138,11 @@ def differentiation_metrics(estimated, measured, dof):
     }
 
 
-def fit_captured_arm(args, directory, metadata, holdout, dense_holdout):
+def fit_captured_arm(args,
+                     directory,
+                     metadata,
+                     holdout=None,
+                     dense_holdout=None):
     nominal_path = directory / "nominal.urdf"
     joints = metadata["joint_names"]
     actuators = metadata.get("actuators")
@@ -159,6 +163,15 @@ def fit_captured_arm(args, directory, metadata, holdout, dense_holdout):
     fit = run_cpp(args.executable, "fit", nominal_path, directory, huber,
                   *options, *drive_options)
     if args.estimate_payload or args.estimate_arm:
+        if holdout is None:
+            holdout = read_motion(directory / "holdout.csv", joints)
+            dense_path = directory / "holdout_dense.csv"
+            if dense_path.is_file():
+                # Payload-only exports use the trace to recover its time step.
+                max_rows = None if args.estimate_arm else 3
+                dense_holdout = read_motion(dense_path,
+                                            joints,
+                                            max_rows=max_rows)
         nominal = ET.parse(nominal_path).getroot()
         effort = np.asarray(metadata["joint_effort_limits_nm"])
         if args.estimate_payload:
@@ -226,6 +239,15 @@ def select_torque_alignment(args, directory, metadata):
     return alignment
 
 
+def preprocess_training_split(args, directory, split, delay):
+    size = (args.raw_harmonics
+            if args.raw_estimator in FOURIER_ESTIMATORS else args.raw_window)
+    return run_cpp(args.executable, "preprocess",
+                   directory / f"train_{split}_raw.csv",
+                   directory / f"train_{split}.csv", size, args.raw_estimator,
+                   delay)
+
+
 def run_arm(name, args):
     arm = ARMS[name]
     source_bytes = (args.assets_root / arm.urdf).read_bytes()
@@ -265,11 +287,12 @@ def run_arm(name, args):
 
     center = args.payload_center_m
     rotation = None
-    if center is None:
+    if center is None and args.payload_kg > 0.0:
         center, rotation = flange_box_pose(source, arm, terminal,
                                            args.payload_size_m[2])
         result["payload_flange_joint"] = arm.flange_joint
-    result["payload_center_xyz_m"] = np.asarray(center).tolist()
+    if center is not None:
+        result["payload_center_xyz_m"] = np.asarray(center).tolist()
 
     truth_path = directory / "truth.urdf"
     truth = copy.deepcopy(nominal)
@@ -324,7 +347,6 @@ def run_arm(name, args):
         noise.shape, np.random.SeedSequence([args.seed, 1]),
         args.encoder_noise_rad, args.encoder_outlier_rad)
     processed = {}
-    estimator_size = args.raw_harmonics if args.raw_estimator in FOURIER_ESTIMATORS else args.raw_window
     for split in ("baseline", "optimized"):
         training = labels[split].copy()
         training[:, -dof:] += noise
@@ -339,13 +361,11 @@ def run_arm(name, args):
         result["torque_alignment"] = alignment
         delay = alignment["delay_ms"]
         for split in ("baseline", "optimized"):
-            raw_path = directory / f"train_{split}_raw.csv"
-            processed_path = directory / f"train_{split}.csv"
-            processed[split] = run_cpp(args.executable, "preprocess", raw_path,
-                                       processed_path, estimator_size,
-                                       args.raw_estimator, delay)
+            processed[split] = preprocess_training_split(
+                args, directory, split, delay)
             if delay == 0.0:
-                estimated = read_motion(processed_path, arm.joints)
+                estimated = read_motion(directory / f"train_{split}.csv",
+                                        arm.joints)
                 processed[split].update(
                     differentiation_metrics(estimated, labels[split], dof))
     write_raw(directory / "holdout_raw.csv", labels["holdout"], arm.joints, 0.0)

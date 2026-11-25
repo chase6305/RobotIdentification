@@ -73,7 +73,7 @@ When you reuse a plan, the runner verifies the asset hash, joint order, timestam
 
 ## Refit a capture
 
-Refit uses the saved arm models and recorded CSVs. The acquisition settings, Huber threshold, and model export choices carry over unless you override them. The original capture and the refit each have their own output directory.
+Refit uses the saved arm models and recorded CSVs. The acquisition settings, Huber threshold, and model export choices carry over unless you override them. The refit publishes its output when the selected arms and their report are ready. If fitting fails before publication, you can retry with the same output path.
 
 ```bash
 ./scripts/run_arm_identification.sh --refit build/arms-demo --summary --output build/arms-demo-refit
@@ -166,7 +166,7 @@ Add `--estimate-payload` when the arm and drive dynamics are known. The solver s
 
 By default the box sits with one face on the URDF mounting plane. For PM01 the mounting frame is `J_FIXED_ELBOW_END_L`, and the box extends along local −Z. For OpenArm it is `LEFT_HAND_CONNECTOR`, and the box extends along local +Z. The center is half the box depth beyond the mounting plane. The default centers in the last moving link's frame are `[0.03, -0.02, -0.16]` m for PM01 and `[0, 0, 0.1201]` m for OpenArm.
 
-Use `--payload-kg` and `--payload-size-m X Y Z` to change the box. To place its center explicitly in the last moving link's frame, use `--payload-center-m X Y Z`. The report records each arm's resolved `payload_center_xyz_m` and, for the default mount, `payload_flange_joint`. Refitting a capture uses the saved truth URDF and recorded data.
+Use `--payload-kg` and `--payload-size-m X Y Z` to change the box. To place its center explicitly in the last moving link's frame, use `--payload-center-m X Y Z`. For a mounted box, the report records each arm's resolved `payload_center_xyz_m` and, for the default mount, `payload_flange_joint`. Refitting a capture uses the saved truth URDF and recorded data.
 
 Add `--estimate-arm` to fit the moving links and drive coefficients together. The solver takes the optimized trajectory and final Huber weights, then fits link pseudo-inertia matrices constrained to be at least 2% of their nominal matrices. Rotor inertia and viscous damping are nonnegative. The prior weight in normalized coordinates is the squared robust torque residual scale divided by the observation count, limited to `[1e-11, 1e-6]`. The nominal URDF helps select a full parameter vector among dynamically equivalent models. Each reported moving-link inertia includes any welded descendants, and the terminal payload can be absorbed into the last moving link. See [Wensing, Kim and Slotine on physically consistent inertial identification](https://arxiv.org/abs/1701.04395).
 
