@@ -49,6 +49,34 @@ jobs:
             run_experiment --output "build/arms-noisy-$seed" --seed "$seed"
           done
           python benchmarks/arm_identification/check_experiment.py build/arms-clean/report.json build/arms-noisy-*/report.json
+          ./scripts/run_arm_identification.sh --refit build/arms-noisy-11 \
+            --repeat-capture build/arms-noisy-29 --repeat-capture build/arms-noisy-47 \
+            --repeat-capture build/arms-noisy-71 --raw-estimator periodic-fourier \
+            --estimate-payload --output build/arms-repeat-median
+          reject_repeat() {
+            local expected="$1"
+            shift
+            if ./scripts/run_arm_identification.sh --refit "$1" --repeat-capture "$2" \
+                --output build/arms-repeat-invalid >build/arms-repeat-invalid.log 2>&1; then
+              return 1
+            fi
+            grep -F -- "$expected" build/arms-repeat-invalid.log
+            test ! -e build/arms-repeat-invalid
+          }
+          reject_repeat 'is already aggregated.' build/arms-repeat-median build/arms-noisy-11
+          reject_repeat 'is already aggregated.' build/arms-noisy-11 build/arms-repeat-median
+          cp -R build/arms-noisy-29 build/repeat-bad-csv
+          raw_csv=build/repeat-bad-csv/openarm/train_optimized_raw.csv
+          sed -i '301s/,[^,]*/,invalid/' "$raw_csv"
+          reject_repeat "$raw_csv after 256 data rows." build/arms-noisy-11 build/repeat-bad-csv
+          cp build/arms-noisy-29/openarm/train_optimized_raw.csv "$raw_csv"
+          sed -i '301s/^[^,]*/123.456/' "$raw_csv"
+          reject_repeat "$raw_csv at data row 300." build/arms-noisy-11 build/repeat-bad-csv
+          ./scripts/run_arm_identification.sh --refit build/arms-repeat-median \
+            --no-estimate-payload --output build/arms-repeat-refit
+          build/arm-identification/venv/bin/python benchmarks/arm_identification/check_repeat_capture.py \
+            build/arms-repeat-median build/arms-repeat-refit \
+            build/arms-noisy-11 build/arms-noisy-29 build/arms-noisy-47 build/arms-noisy-71
           run_experiment --acquisition rollout --output build/arms-rollout-clean --torque-noise-nm 0 --outlier-nm 0
           for seed in 11 71; do
             run_experiment --acquisition rollout --output "build/arms-rollout-noisy-$seed" --seed "$seed"
@@ -86,6 +114,20 @@ jobs:
             --search-torque-delay-ms 20 --output build/arms-delay-synchronous
           python benchmarks/arm_identification/check_delay.py build/arms-delayed-torque build/arms-delay-aligned \
             build/arms-delay-searched build/arms-delay-synchronous
+          run_experiment --acquisition rollout --actuator-scale 1 --fit-input raw --replay --estimate-arm \
+            --raw-estimator periodic-fourier --raw-harmonics 14 --sample-count 801 --training-period-s 5.5 \
+            --torque-delay-ms 8.3 --torque-noise-nm 0 --outlier-nm 0 --encoder-noise-rad 0 \
+            --output build/arms-subgrid-delay
+          ./scripts/run_arm_identification.sh --refit build/arms-subgrid-delay \
+            --search-torque-delay-ms 20 --output build/arms-subgrid-searched
+          PYTHONPATH=benchmarks/arm_identification python - <<'PY'
+          from pathlib import Path
+
+          from check_delay import check_search
+
+          check_search(Path("build/arms-subgrid-delay"), Path("build/arms-subgrid-searched"),
+                       Path("build/arms-delay-synchronous"), max_error_ms=0.25)
+          PY
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_raw_preprocessing.py \
             build/arm-identification/benchmark/arm_identification build/arms-rollout-raw/report.json \
             build/arms-encoder-spikes/report.json build/arms-encoder-robust/report.json

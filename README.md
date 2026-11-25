@@ -85,6 +85,8 @@ python3 -m pip install -r requirements-dev.txt
 
 结果见 `build/arms-demo/report.json`，两条臂的点位、原始数据和 URDF、MJCF、MJB 模型分别保存在 `pm01/` 和 `openarm/`。每次运行使用新的输出目录。`--refit` 可用已有采集重跑辨识。[默认结果](benchmarks/arm_identification/README.md#default-demo-results) · [输出文件](benchmarks/arm_identification/README.md#outputs) · [重拟合](benchmarks/arm_identification/README.md#refit-a-capture)
 
+同一份点位计划可用于多次同步采集。`--refit` 支持用 `--repeat-capture` 合并训练数据，再在主采集的独立验证轨迹上评估。[同步采集和聚合命令](benchmarks/arm_identification/README.md#refit-synchronized-repeats)
+
 ## 离线工具
 
 ```bash

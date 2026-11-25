@@ -3,6 +3,7 @@
 #include <robot_identification_pinocchio/pinocchio_regressor.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <filesystem>
@@ -686,27 +687,39 @@ void EstimateTorqueDelay(const char* nominal_urdf,
     constexpr int kSearchSteps = 20;
     constexpr int kCoarseStep = 5;
     std::size_t evaluations = 0;
-    const auto milliseconds = [&](int index) { return (static_cast<double>(index) / kSearchSteps) * maximum_delay_ms; };
-    const auto score = [&](int index) {
+    const auto milliseconds = [&](double index) { return (index / kSearchSteps) * maximum_delay_ms; };
+    const auto score = [&](double delay_ms, bool require_valid = true) {
         ++evaluations;
-        const double seconds = milliseconds(index) / 1000.;
+        const double seconds = delay_ms / 1000.;
         const auto a = build(baseline, baseline_model, seconds);
         const auto b = build(optimized, optimized_model, seconds);
         const auto fit_a = Solve(a, options);
         const auto fit_b = Solve(b, options);
-        if (fit_a.rank != basis.parameter_count() || fit_b.rank != basis.parameter_count())
-            throw std::runtime_error("torque delay search lost identifiable directions");
+        if (fit_a.rank != basis.parameter_count() || fit_b.rank != basis.parameter_count()) {
+            if (require_valid) throw std::runtime_error("torque delay search lost identifiable directions");
+            return std::numeric_limits<double>::infinity();
+        }
         // Transfer each trajectory's fitted model to the other training trajectory.
         const double loss =
             .5 * (MeanHuberLoss(a, fit_b.parameters, huber_delta) + MeanHuberLoss(b, fit_a.parameters, huber_delta));
-        if (!std::isfinite(loss)) throw std::runtime_error("torque delay search loss is non-finite");
+        if (!std::isfinite(loss)) {
+            if (require_valid) throw std::runtime_error("torque delay search loss is non-finite");
+            return std::numeric_limits<double>::infinity();
+        }
         return loss;
     };
-    const double zero_loss = score(0);
+    std::array<double, 2 * kSearchSteps + 1> grid_losses;
+    grid_losses.fill(std::numeric_limits<double>::quiet_NaN());
+    const auto score_grid_point = [&](int index) {
+        const double loss = score(milliseconds(index));
+        grid_losses[index + kSearchSteps] = loss;
+        return loss;
+    };
+    const double zero_loss = score_grid_point(0);
     int best_index = 0;
     double best_loss = zero_loss;
     const auto test = [&](int index) {
-        const double loss = score(index);
+        const double loss = score_grid_point(index);
         if (loss < best_loss) {
             best_loss = loss;
             best_index = index;
@@ -721,9 +734,27 @@ void EstimateTorqueDelay(const char* nominal_urdf,
 
     constexpr double kMinimumRelativeImprovement = .02;
     const bool accepted = best_index != 0 && best_loss <= (1. - kMinimumRelativeImprovement) * zero_loss;
-    std::cout << "{\"delay_ms\":" << (accepted ? milliseconds(best_index) : 0.)
-              << ",\"best_trial_delay_ms\":" << milliseconds(best_index) << ",\"tested_delays\":" << evaluations
-              << ",\"baseline_samples\":" << baseline.time_seconds.size()
+    double best_delay_ms = milliseconds(best_index);
+    if (accepted && std::abs(best_index) < kSearchSteps) {
+        // Fit a parabola through the winning grid point and its evaluated neighbors.
+        const auto best_point = best_index + kSearchSteps;
+        const double left_rise = grid_losses[best_point - 1] - best_loss;
+        const double right_rise = grid_losses[best_point + 1] - best_loss;
+        const double curvature = left_rise + right_rise;
+        if (std::isfinite(curvature) && curvature > 0.) {
+            const double offset = .5 * (left_rise - right_rise) / curvature;
+            const double refined_delay_ms = milliseconds(best_index + offset);
+            if (refined_delay_ms != best_delay_ms) {
+                const double refined_loss = score(refined_delay_ms, /*require_valid=*/false);
+                if (refined_loss < best_loss) {
+                    best_delay_ms = refined_delay_ms;
+                    best_loss = refined_loss;
+                }
+            }
+        }
+    }
+    std::cout << "{\"delay_ms\":" << (accepted ? best_delay_ms : 0.) << ",\"best_trial_delay_ms\":" << best_delay_ms
+              << ",\"tested_delays\":" << evaluations << ",\"baseline_samples\":" << baseline.time_seconds.size()
               << ",\"optimized_samples\":" << optimized.time_seconds.size()
               << ",\"zero_delay_huber_loss\":" << zero_loss << ",\"best_trial_huber_loss\":" << best_loss
               << ",\"minimum_relative_improvement\":" << kMinimumRelativeImprovement

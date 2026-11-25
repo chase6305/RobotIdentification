@@ -94,6 +94,36 @@ To compare preprocessing settings on the same capture, select an estimator in th
   --raw-window 17 --huber-auto --output build/arms-local-cubic
 ```
 
+### Refit synchronized repeats
+
+Pass `--repeat-capture` for each additional repetition of the same MuJoCo acquisition. The refit takes a sample-wise median of the encoder position and torque channels before preprocessing.
+
+Each repeat must match the primary capture's selected arm models, joint order, drive, reference trajectories, recorded timestamps, acquisition mode and simulated torque delay.
+
+The primary capture supplies the independent holdout and fit defaults. Its acquisition settings remain at the top level of the report. `training_capture_aggregation` lists every capture that contributed training samples.
+
+To adjust the fit of an existing median, refit it directly. To add a repetition, run the median again with every original capture and the new repetition. A saved median has already reduced the original samples to a single value per channel and timestamp.
+
+The median is calculated in fixed-size row blocks, bounding the working memory for each synchronized repetition during aggregation.
+
+To collect repetitions with different noise seeds, reuse the first capture's point plan and disable timestamp jitter and dropout.
+
+```bash
+./scripts/run_arm_identification.sh --demo --training-period-s 5.5 --sample-count 801 \
+  --raw-harmonics 14 --timestamp-jitter-ms 0 --seed 11 --output build/arms-repeat-11
+for seed in 29 47 71; do
+  ./scripts/run_arm_identification.sh --demo --reference-plan build/arms-repeat-11 \
+    --raw-harmonics 14 --timestamp-jitter-ms 0 --seed "$seed" --output "build/arms-repeat-$seed"
+done
+./scripts/run_arm_identification.sh --refit build/arms-repeat-11 \
+  --repeat-capture build/arms-repeat-29 --repeat-capture build/arms-repeat-47 \
+  --repeat-capture build/arms-repeat-71 --output build/arms-repeat-median
+```
+
+With the default synthetic noise model and two groups of four captures, the median reduced independent payload torque error on both arms compared with the median single-capture result in each group. The comparison uses the same 5.5 s plan and applies to the repeated, synchronized simulation traces.
+
+Refit options apply after aggregation. Use `--raw-estimator periodic-fourier-huber` for encoder spikes or `--search-torque-delay-ms 20` to estimate a common torque delay. Use `--align-torque-ms` when the signed delay is known.
+
 ## Outputs
 
 | Path in the demo output | Contents |
@@ -148,7 +178,7 @@ To test alignment against a known torque latency, simulate the delay in the trai
 
 A positive delay means that torque recorded at time `t` describes the arm at `t - d`. The Fourier estimator evaluates position and derivatives at `t - d`, keeping the original recorded time and torque value in the processed CSV. The alignment uses the periodic extension at the endpoints. The captured holdout stays synchronized and is shared across both fits.
 
-Use `--search-torque-delay-ms 20` to search up to 20 ms in either direction. The search transfers each model between the two training trajectories and accepts a shift when the mean cross-trajectory Huber loss improves by at least 2% compared with zero delay. It fits the encoder harmonics once on up to 801 points per trajectory, searches at most 17 shifts, then refits on all available samples. The per-arm `torque_alignment` report includes the tested range, loss, and applied delay. A refit inherits that delay unless an alignment option is supplied.
+Use `--search-torque-delay-ms 20` to search up to 20 ms in either direction. The search transfers each model between the two training trajectories and accepts a shift when the mean cross-trajectory Huber loss improves by at least 2% compared with zero delay. It fits the encoder harmonics once on up to 801 points per trajectory and checks up to 17 grid shifts. For an accepted interior shift, it can evaluate one candidate between grid points and keeps that candidate if the loss decreases. The final fit uses all available samples. The per-arm `torque_alignment` report includes the tested range, loss, and applied delay. A refit inherits that delay unless an alignment option is supplied.
 
 ## Drive dynamics, whole-arm fit, and payload
 
