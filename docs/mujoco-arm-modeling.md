@@ -121,3 +121,25 @@ common=(--reference-plan build/arms-modeling --acquisition rollout --actuator-sc
 ./scripts/run_arm_identification.sh --refit build/arms-clean-fourier \
   --no-estimate-arm --raw-harmonics 14 --output build/arms-clean-fourier-14
 ```
+
+### 跨种子对照与较短训练轨迹
+
+用默认噪声、401 个参考点和种子 `11、29、47、71` 比较 8 秒和 5.5 秒两套训练计划。每对 7 阶与 14 阶拟合都使用同一份记录的 CSV，同一个种子下的两套计划使用逐字节相同的独立验证 CSV。表内是四个种子的中位数，括号内是 14 阶误差更低的次数。
+
+| 训练周期 | 左臂 | 负载惯量相对误差，7 阶 → 14 阶 | 负载模型验证力矩 RMSE，7 阶 → 14 阶 |
+| --- | --- | ---: | ---: |
+| 8 秒 | PM01 | 166% → 114%（3/4） | 0.001803 → 0.001260 N·m（3/4） |
+| 8 秒 | OpenArm | 299% → 289%（3/4） | 0.001485 → 0.001346 N·m（3/4） |
+| 5.5 秒 | PM01 | 93% → 77%（3/4） | 0.001738 → 0.000982 N·m（4/4） |
+| 5.5 秒 | OpenArm | 180% → 122%（3/4） | 0.001050 → 0.000832 N·m（3/4） |
+
+固定 14 阶时，5.5 秒计划在每个配对种子上都降低了两臂的惯量误差。PM01 的八组阶数对照里有三组出现惯量误差与力矩 RMSE 变化方向不同。选配置时应按目标读取对应的指标。这里的比较基于两套仿真轨迹、固定法兰负载和已知驱动。
+
+用默认种子单独跑完整 Demo 时，5.5 秒和 14 阶组合将 PM01 的负载惯量误差从 119% 降到 65%，OpenArm 从 313% 降到 121%。整臂验证力矩 RMSE 分别从 0.00374 降到 0.00348 N·m、从 0.00243 降到 0.00191 N·m，两臂各完成 16 个回放窗口。
+
+```bash
+./scripts/run_arm_identification.sh --demo --training-period-s 5.5 \
+  --raw-harmonics 14 --output build/arms-5p5-14
+```
+
+复现表格时，用 `--demo` 分别指定 `--training-period-s 8` 或 `--training-period-s 5.5`，同时传入 `--raw-harmonics 7` 和表中的各个 `--seed`。再用 `--refit`、`--no-estimate-arm` 和 `--raw-harmonics 14` 重拟合各自的记录。负载模型的力矩 RMSE 位于 `robots.<arm>.fit.payload_fit.physical_candidate.holdout_rmse_nm`。
