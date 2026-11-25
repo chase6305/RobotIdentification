@@ -92,3 +92,32 @@ $$
 ```
 
 在相应输出目录的 `report.json` 中，用 `robots.<arm>.fit.physical_arm_fit` 查看整臂独立轨迹误差和模型重载回放，用 `robots.<arm>.fit.payload_fit.reference_errors` 查看负载质量、质心和惯量误差。 [输出文件说明](../benchmarks/arm_identification/README.md#outputs)
+
+### 负载惯量对力矩噪声和求导的敏感度
+
+复用上节 Demo 的点位计划，固定随机种子 `20261124`、法兰负载和驱动参数。各组的真值 URDF 和独立验证轨迹数据逐字节一致。下表只改变训练用的导数来源和噪声设置。默认扭矩噪声是标准差 0.02 N·m 的高斯噪声及 1% 概率的 ±0.75 N·m 脉冲，默认位置噪声标准差为 0.00005 rad。 [训练数据生成代码](https://github.com/chase6305/RobotIdentification/blob/1fb32f3232b23c5ec0e4df7ca102a45330ba5eb4/benchmarks/arm_identification/run_experiment.py#L328-L375)
+
+| 训练用速度和加速度 | 力矩噪声 | 拟合用位置噪声 | PM01 惯量相对误差 | OpenArm 惯量相对误差 |
+| --- | --- | --- | ---: | ---: |
+| 仿真真值 | 关闭 | 关闭 | <0.001% | <0.001% |
+| 仿真真值 | 默认 | 关闭 | 133% | 300% |
+| 7 阶傅里叶求导 | 关闭 | 关闭 | 107% | 72% |
+| 7 阶傅里叶求导 | 关闭 | 默认 | 108% | 72% |
+| 7 阶傅里叶求导 | 默认 | 关闭 | 120% | 313% |
+| 7 阶傅里叶求导 | 默认 | 默认 | 119% | 313% |
+
+这组轨迹上，默认力矩噪声和 7 阶傅里叶求导各自都能引入明显的惯量误差，默认位置噪声的影响较小。用同一份无噪声 CSV 重拟合，14 阶将两臂误差降到 **32% 和 8.8%**。用默认噪声的 CSV 重拟合，14 阶的惯量误差为 **107% 和 298%**，OpenArm 负载模型的验证力矩 RMSE 从 0.001690 变为 0.001704 N·m。阶数对照适用于这份采集的轨迹和噪声配置。
+
+用上节生成的 `build/arms-modeling` 复现无噪声对照和调阶。第一条命令直接使用 MuJoCo 记录的导数，第二条命令从同一条无噪声轨迹的编码器位置估计导数。最后一条命令对无噪声采集改用 14 阶傅里叶求导。
+
+```bash
+common=(--reference-plan build/arms-modeling --acquisition rollout --actuator-scale 1
+  --replay --timestamp-jitter-ms auto --estimate-payload
+  --torque-noise-nm 0 --outlier-nm 0 --encoder-noise-rad 0)
+./scripts/run_arm_identification.sh "${common[@]}" --fit-input simulator \
+  --output build/arms-clean-simulator
+./scripts/run_arm_identification.sh "${common[@]}" --fit-input raw \
+  --raw-estimator periodic-fourier --output build/arms-clean-fourier
+./scripts/run_arm_identification.sh --refit build/arms-clean-fourier \
+  --no-estimate-arm --raw-harmonics 14 --output build/arms-clean-fourier-14
+```
