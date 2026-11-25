@@ -96,7 +96,11 @@ To compare preprocessing settings on the same capture, select an estimator in th
 
 ### Refit synchronized repeats
 
-Pass `--repeat-capture` for each additional repetition of the same MuJoCo acquisition. The refit takes a sample-wise median of the encoder position and torque channels before preprocessing. The selected arms must have the same models, joint order, drive, reference trajectories and recorded timestamps. The acquisition mode and simulated torque delay must also match. The first capture supplies the independent holdout and fit defaults, and `training_capture_aggregation` lists the contributing captures in the report.
+Pass `--repeat-capture` for each additional repetition of the same MuJoCo acquisition. The refit takes a sample-wise median of the encoder position and torque channels before preprocessing.
+
+Each repeat must match the primary capture's selected arm models, joint order, drive, reference trajectories, recorded timestamps, acquisition mode and simulated torque delay.
+
+The primary capture supplies the independent holdout and fit defaults. The report lists every contributing capture under `training_capture_aggregation`.
 
 The median is calculated in fixed-size row blocks, bounding the working memory for each synchronized repetition during aggregation.
 
