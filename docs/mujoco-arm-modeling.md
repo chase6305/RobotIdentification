@@ -143,3 +143,22 @@ common=(--reference-plan build/arms-modeling --acquisition rollout --actuator-sc
 ```
 
 复现表格时，用 `--demo` 分别指定 `--training-period-s 8` 或 `--training-period-s 5.5`，同时传入 `--raw-harmonics 7` 和表中的各个 `--seed`。再用 `--refit`、`--no-estimate-arm` 和 `--raw-harmonics 14` 重拟合各自的记录。负载模型的力矩 RMSE 位于 `robots.<arm>.fit.payload_fit.physical_candidate.holdout_rmse_nm`。
+
+### 增加采样点与合并训练的对照
+
+先对上节的 16 个拟合配置及两个默认种子 Demo 做训练合并对照。把基线和优化轨迹都用于独立负载拟合后，PM01 的验证力矩 RMSE 在 18 个配置中全部降低，惯量误差中位数从 91% 降到 80%。OpenArm 的验证力矩 RMSE 在 18 个配置中有 6 个降低，惯量误差中位数从 189% 变为 193%。
+
+单独检验采样密度时，保持 5.5 秒训练计划、14 阶求导和默认噪声幅度，并关闭时间戳抖动。每个种子先采集 801 点，再从同一份训练 CSV 每隔一行取样形成 401 点。两个拟合共用同一份 401 点独立验证 CSV。结果为四个种子的中位数，括号内是 801 点误差更低的次数。
+
+| 左臂 | 负载惯量相对误差，401 → 801 点 | 负载模型验证力矩 RMSE，401 → 801 点 |
+| --- | ---: | ---: |
+| PM01 | 77% → 38%（3/4） | 0.001502 → 0.000704 N·m（4/4） |
+| OpenArm | 115% → 83%（2/4） | 0.000672 → 0.000586 N·m（2/4） |
+
+这组仿真中，两臂的中位误差都降低。OpenArm 的改善随种子变化，选定采样密度后仍需核查独立验证指标。下面的命令运行 801 点配置并导出、回放两条臂。
+
+```bash
+./scripts/run_arm_identification.sh --demo --training-period-s 5.5 \
+  --raw-harmonics 14 --sample-count 801 --timestamp-jitter-ms 0 \
+  --output build/arms-5p5-14-801
+```
