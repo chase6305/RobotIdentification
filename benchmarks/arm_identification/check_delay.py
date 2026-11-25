@@ -33,7 +33,7 @@ def check(capture, aligned):
             raise ValueError(f"{name}: alignment did not recover the holdout")
 
 
-def check_search(capture, searched, undelayed):
+def check_search(capture, searched, undelayed, *, max_error_ms=2.1):
     source = json.loads((capture / "report.json").read_text(encoding="utf-8"))
     estimate = json.loads(
         (searched / "report.json").read_text(encoding="utf-8"))
@@ -45,7 +45,8 @@ def check_search(capture, searched, undelayed):
         rmse = result["fit"]["physical_arm_fit"]["holdout_rmse_nm"]
         initial = source["robots"][name]["fit"]["physical_arm_fit"][
             "holdout_rmse_nm"]
-        if error > 2.1 or timing["tested_delays"] > 17 or rmse >= 0.4 * initial:
+        if error > max_error_ms or timing[
+                "tested_delays"] > 18 or rmse >= 0.4 * initial:
             raise ValueError(
                 f"{name}: search did not recover the delayed torque channel")
         if synchronous["robots"][name]["torque_alignment"]["delay_ms"] != 0.0:

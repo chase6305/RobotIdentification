@@ -138,6 +138,20 @@ jobs:
             --search-torque-delay-ms 20 --output build/arms-delay-synchronous
           python benchmarks/arm_identification/check_delay.py build/arms-delayed-torque build/arms-delay-aligned \
             build/arms-delay-searched build/arms-delay-synchronous
+          run_experiment --acquisition rollout --actuator-scale 1 --fit-input raw --replay --estimate-arm \
+            --raw-estimator periodic-fourier --raw-harmonics 14 --sample-count 801 --training-period-s 5.5 \
+            --torque-delay-ms 8.3 --torque-noise-nm 0 --outlier-nm 0 --encoder-noise-rad 0 \
+            --output build/arms-subgrid-delay
+          ./scripts/run_arm_identification.sh --refit build/arms-subgrid-delay \
+            --search-torque-delay-ms 20 --output build/arms-subgrid-searched
+          PYTHONPATH=benchmarks/arm_identification python - <<'PY'
+          from pathlib import Path
+
+          from check_delay import check_search
+
+          check_search(Path("build/arms-subgrid-delay"), Path("build/arms-subgrid-searched"),
+                       Path("build/arms-delay-synchronous"), max_error_ms=0.25)
+          PY
           build/arm-identification/venv/bin/python benchmarks/arm_identification/check_raw_preprocessing.py \
             build/arm-identification/benchmark/arm_identification build/arms-rollout-raw/report.json \
             build/arms-encoder-spikes/report.json build/arms-encoder-robust/report.json

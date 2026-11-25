@@ -122,6 +122,8 @@ done
 
 With the default synthetic noise model and two groups of four captures, the median reduced independent payload torque error on both arms compared with the median single-capture result in each group. The comparison uses the same 5.5 s plan and applies to the repeated, synchronized simulation traces.
 
+Refit options apply after aggregation. Use `--raw-estimator periodic-fourier-huber` for encoder spikes or `--search-torque-delay-ms 20` to estimate a common torque delay. Use `--align-torque-ms` when the signed delay is known.
+
 ## Outputs
 
 | Path in the demo output | Contents |
@@ -176,7 +178,7 @@ To test alignment against a known torque latency, simulate the delay in the trai
 
 A positive delay means that torque recorded at time `t` describes the arm at `t - d`. The Fourier estimator evaluates position and derivatives at `t - d`, keeping the original recorded time and torque value in the processed CSV. The alignment uses the periodic extension at the endpoints. The captured holdout stays synchronized and is shared across both fits.
 
-Use `--search-torque-delay-ms 20` to search up to 20 ms in either direction. The search transfers each model between the two training trajectories and accepts a shift when the mean cross-trajectory Huber loss improves by at least 2% compared with zero delay. It fits the encoder harmonics once on up to 801 points per trajectory, searches at most 17 shifts, then refits on all available samples. The per-arm `torque_alignment` report includes the tested range, loss, and applied delay. A refit inherits that delay unless an alignment option is supplied.
+Use `--search-torque-delay-ms 20` to search up to 20 ms in either direction. The search transfers each model between the two training trajectories and accepts a shift when the mean cross-trajectory Huber loss improves by at least 2% compared with zero delay. It fits the encoder harmonics once on up to 801 points per trajectory and checks up to 17 grid shifts. For an accepted interior shift, it can evaluate one candidate between grid points and keeps that candidate if the loss decreases. The final fit uses all available samples. The per-arm `torque_alignment` report includes the tested range, loss, and applied delay. A refit inherits that delay unless an alignment option is supplied.
 
 ## Drive dynamics, whole-arm fit, and payload
 

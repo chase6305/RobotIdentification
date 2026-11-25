@@ -22,6 +22,7 @@ or --design-only to export automatic reference points.
 The demo runs capture, raw-data fitting, forward replay, and model export.
 Use a new output directory for each experiment. The demo creates one by default.
 The refit reads a saved capture and reruns preprocessing and fitting.
+Pass --repeat-capture DIRECTORY for each additional synchronized original capture.
 
 PYTHON selects the base interpreter. ARM_IDENTIFICATION_BUILD_DIR selects the
 directory for the virtual environment and native build products.
