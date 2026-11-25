@@ -1,0 +1,128 @@
+name: arm-identification-ci
+on:
+  pull_request:
+    paths:
+      - .github/workflows/arm-identification-ci.yml
+      - benchmarks/arm_identification/**
+      - robot_identification/**
+      - robot_identification_pinocchio/**
+      - scripts/run_arm_identification.sh
+  workflow_dispatch:
+jobs:
+  mujoco-arms:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      CTEST_PARALLEL_LEVEL: '1'
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      NUMEXPR_NUM_THREADS: '1'
+      MAX_JOBS: '2'
+      RAYON_NUM_THREADS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: chase6305/HumanoidAssets
+          ref: 067393d2b63b7ffa5b022e847ef2f4436799ad70
+          path: build/HumanoidAssets
+          sparse-checkout: |
+            /Engineai_PM01/urdf/robot.urdf
+            /OpenArm/left_arm.urdf
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install Eigen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+      - name: Build and verify identification on both arms
+        run: |
+          run_experiment() {
+            ./scripts/run_arm_identification.sh --assets-root build/HumanoidAssets "$@"
+          }
+          run_experiment --output build/arms-clean --torque-noise-nm 0 --outlier-nm 0
+          for seed in 20261124 11 29 47 71; do
+            run_experiment --output "build/arms-noisy-$seed" --seed "$seed"
+          done
+          python benchmarks/arm_identification/check_experiment.py build/arms-clean/report.json build/arms-noisy-*/report.json
+          run_experiment --acquisition rollout --output build/arms-rollout-clean --torque-noise-nm 0 --outlier-nm 0
+          for seed in 11 71; do
+            run_experiment --acquisition rollout --output "build/arms-rollout-noisy-$seed" --seed "$seed"
+          done
+          python benchmarks/arm_identification/check_experiment.py \
+            build/arms-rollout-clean/report.json build/arms-rollout-noisy-*/report.json
+          run_experiment --acquisition rollout --fit-input raw --raw-estimator local-cubic \
+            --raw-window 9 --timestamp-jitter-ms 2 --output build/arms-rollout-raw
+          run_experiment --acquisition rollout --actuator-scale 1 --estimate-payload --estimate-arm --replay \
+            --payload-kg 0.61 --payload-size-m 0.08 0.05 0.10 --payload-center-m 0.08 -0.025 0.055 \
+            --torque-noise-nm 0 --outlier-nm 0 --output build/arms-drive-clean
+          ./scripts/run_arm_identification.sh --demo --assets-root build/HumanoidAssets --output build/arms-drive-raw
+          run_experiment --acquisition rollout --actuator-scale 1 --fit-input raw --raw-estimator periodic-fourier \
+            --design-evaluations 240 --huber-auto --torque-noise-nm 0.08 --timestamp-jitter-ms 2 \
+            --output build/arms-drive-high-noise
+          run_experiment --acquisition rollout --actuator-scale 1 --fit-input raw --raw-estimator periodic-fourier \
+            --estimate-arm --replay --timestamp-jitter-ms 2 --huber-auto --torque-noise-nm 0.20 --encoder-noise-rad 0.0008 \
+            --output build/arms-physical-high-noise
+          run_experiment --design-only --sample-count 161 --design-evaluations 120 \
+            --training-period-s 3.5 --holdout-period-s 5.5 --output build/arms-points
+          run_experiment --acquisition rollout --actuator-scale 1 --sample-count 1001 --training-period-s 4 --holdout-period-s 5.5 \
+            --capture-dropout 0.12 --encoder-resolution-rad 0.0001 --fit-input raw \
+            --raw-estimator periodic-fourier --timestamp-jitter-ms auto --output build/arms-imperfect-capture
+          ./scripts/run_arm_identification.sh --demo --assets-root build/HumanoidAssets \
+            --encoder-outlier-rad 0.15 --output build/arms-encoder-spikes
+          ./scripts/run_arm_identification.sh --refit build/arms-encoder-spikes \
+            --raw-estimator periodic-fourier-huber --output build/arms-encoder-robust
+          ./scripts/run_arm_identification.sh --demo --assets-root build/HumanoidAssets \
+            --torque-delay-ms 8.3 --output build/arms-delayed-torque
+          ./scripts/run_arm_identification.sh --refit build/arms-delayed-torque \
+            --align-torque-ms 8.3 --output build/arms-delay-aligned
+          ./scripts/run_arm_identification.sh --refit build/arms-delayed-torque \
+            --search-torque-delay-ms 20 --output build/arms-delay-searched
+          ./scripts/run_arm_identification.sh --refit build/arms-drive-raw \
+            --search-torque-delay-ms 20 --output build/arms-delay-synchronous
+          python benchmarks/arm_identification/check_delay.py build/arms-delayed-torque build/arms-delay-aligned \
+            build/arms-delay-searched build/arms-delay-synchronous
+          build/arm-identification/venv/bin/python benchmarks/arm_identification/check_raw_preprocessing.py \
+            build/arm-identification/benchmark/arm_identification build/arms-rollout-raw/report.json \
+            build/arms-encoder-spikes/report.json build/arms-encoder-robust/report.json
+          build/arm-identification/venv/bin/python benchmarks/arm_identification/check_points.py build/arms-points
+          run_experiment --reference-plan build/arms-points --acquisition rollout --fit-input raw \
+            --raw-estimator periodic-fourier --output build/arms-planned-capture
+          for arm in pm01 openarm; do
+            for split in baseline optimized holdout; do
+              cmp "build/arms-points/$arm/${split}_states.csv" "build/arms-planned-capture/$arm/${split}_states.csv"
+            done
+          done
+          build/arm-identification/venv/bin/python benchmarks/arm_identification/check_capture.py build/arms-imperfect-capture
+          build/arm-identification/venv/bin/python benchmarks/arm_identification/check_drive.py \
+            build/arms-drive-clean build/arms-drive-raw
+          python benchmarks/arm_identification/check_huber.py build/arms-drive-high-noise/report.json
+          python benchmarks/arm_identification/check_physical_arm.py \
+            build/arms-drive-clean build/arms-drive-raw build/arms-physical-high-noise
+          ./scripts/run_arm_identification.sh --refit build/arms-drive-raw --output build/arms-refit
+          for arm in pm01 openarm; do
+            cmp "build/arms-drive-raw/$arm/train_optimized_raw.csv" "build/arms-refit/$arm/train_optimized_raw.csv"
+            cmp "build/arms-drive-raw/$arm/holdout_predicted_physical_arm.csv" \
+              "build/arms-refit/$arm/holdout_predicted_physical_arm.csv"
+          done
+          build/arm-identification/venv/bin/python benchmarks/arm_identification/compare_raw.py \
+            --executable build/arm-identification/benchmark/arm_identification \
+            --output build/arm-window-comparison.csv build/arms-rollout-noisy-11
+          test "$(wc -l < build/arm-window-comparison.csv)" -eq 37
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm-identification-reports
+          path: |
+            build/arms-*/report.json
+            build/arm-window-comparison.csv
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arm-identification-demo
+          path: build/arms-drive-raw/
+          if-no-files-found: error
