@@ -18,23 +18,30 @@ class Arm:
     urdf: str
     base: str
     joints: tuple[str, ...]
+    flange_joint: str
+    flange_z_sign: int
     fixed_joints: tuple[str, ...] = ()
 
 
 ARMS = {
     "pm01":
-        Arm("Engineai_PM01/urdf/robot.urdf", "LINK_TORSO_YAW",
+        Arm("Engineai_PM01/urdf/robot.urdf",
+            "LINK_TORSO_YAW",
             ("J13_SHOULDER_PITCH_L", "J14_SHOULDER_ROLL_L",
              "J15_SHOULDER_YAW_L", "J16_ELBOW_PITCH_L", "J17_ELBOW_YAW_L"),
-            ("J_FIXED_ELBOW_END_L",)),
+            flange_joint="J_FIXED_ELBOW_END_L",
+            flange_z_sign=-1,
+            fixed_joints=("J_FIXED_ELBOW_END_L",)),
     "openarm":
-        Arm("OpenArm/left_arm.urdf", "left_arm_base",
+        Arm("OpenArm/left_arm.urdf",
+            "left_arm_base",
             ("SHOULDER_PITCH_L_J1", "SHOULDER_ROLL_L_J2", "ELBOW_PITCH_L_J3",
              "ELBOW_YAW_L_J4", "WRIST_PITCH_L_J5", "WRIST_YAW_L_J6",
-             "WRIST_ROLL_L_J7")),
+             "WRIST_ROLL_L_J7"),
+            flange_joint="LEFT_HAND_CONNECTOR",
+            flange_z_sign=1),
 }
 PAYLOAD_SIZE_METERS = (0.06, 0.05, 0.04)
-PAYLOAD_CENTER_METERS = (0.05, 0.0, -0.07)
 
 
 def _required(element, path, label):
@@ -93,7 +100,30 @@ def extract_arm(source, arm, name):
     return robot, terminal, np.asarray(effort_limits)
 
 
-def add_payload(robot, terminal, mass, size, center):
+def flange_box_pose(source, arm, terminal, depth):
+    """Place one box face on the flange and return the pose in the terminal link."""
+    name = arm.flange_joint
+    joint = _required(source, f"joint[@name='{name}']", "source URDF")
+    parent = _required(joint, "parent", name).get("link")
+    if joint.get("type") != "fixed" or parent != terminal:
+        raise ValueError(f"{name} must be a fixed joint on {terminal}")
+    origin = _required(joint, "origin", name)
+    position = np.asarray(list(map(float, origin.get("xyz", "0 0 0").split())))
+    rpy = np.asarray(list(map(float, origin.get("rpy", "0 0 0").split())))
+    if not (position.shape == rpy.shape ==
+            (3,) and np.isfinite(position).all() and np.isfinite(rpy).all()):
+        raise ValueError(f"{name} must have a finite flange origin")
+
+    quaternion = np.empty(4)
+    rotation = np.empty((3, 3))
+    # URDF roll, pitch, and yaw are rotations about the fixed parent axes.
+    mujoco.mju_euler2Quat(quaternion, rpy, "XYZ")
+    mujoco.mju_quat2Mat(rotation.ravel(), quaternion)
+    center = position + rotation[:, 2] * (arm.flange_z_sign * depth / 2.0)
+    return center, rotation
+
+
+def add_payload(robot, terminal, mass, size, center, rotation=None):
     if mass == 0.0:
         return
     x, y, z = size
@@ -103,7 +133,11 @@ def add_payload(robot, terminal, mass, size, center):
     ]
     if not all(math.isfinite(value) and value > 0.0 for value in diagonal):
         raise ValueError("payload box inertia must be finite and positive")
-    add_payload_inertia(robot, terminal, mass, center, np.diag(diagonal))
+    inertia = np.diag(diagonal)
+    if rotation is not None:
+        # The emitted payload frame shares the terminal link's orientation.
+        inertia = rotation @ inertia @ rotation.T
+    add_payload_inertia(robot, terminal, mass, center, inertia)
 
 
 def add_payload_inertia(robot, terminal, mass, center, matrix):

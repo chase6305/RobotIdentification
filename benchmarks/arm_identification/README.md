@@ -46,16 +46,16 @@ The launcher reuses its environment and native build in `build/arm-identificatio
 
 ![MuJoCo holdout motion for the PM01 and OpenArm left arms](../../docs/media/mujoco-arm-holdout.gif)
 
-The animation renders the demo's recorded joint positions from `holdout_dense.csv` using the HumanoidAssets visual meshes. It shows each arm's 6.25 s independent holdout and the simulated 0.35 kg payload.
+The animation renders the demo's recorded joint positions from `holdout_dense.csv` using the HumanoidAssets visual meshes. It shows each arm's 6.25 s independent holdout with a 0.35 kg box at the flange.
 
 The torque RMSE is measured on an independent trajectory. The position RMSE is measured after reloading each whole-arm model and running 16 open-loop windows of 100 ms under recorded torques. The payload mass is fitted separately using the known arm and drive model. The simulated payload is 0.35 kg.
 
 | Left arm | Base / full coordinates | Holdout torque RMSE [N·m] | Reloaded replay position RMSE [rad] | Fitted payload [kg] |
 | --- | ---: | ---: | ---: | ---: |
-| PM01 | 39 / 60 | 0.00382 | 0.000100 | 0.351138 |
-| OpenArm | 55 / 84 | 0.00406 | 0.000606 | 0.350644 |
+| PM01 | 39 / 60 | 0.00374 | 0.000114 | 0.351104 |
+| OpenArm | 55 / 84 | 0.00243 | 0.000350 | 0.350616 |
 
-All 1,024 separately sampled workspace states per arm were within the effort limits. The identified models had positive mass matrices at all of those states and reached workspace torque RMSE of 0.01143 N·m for PM01 and 0.03714 N·m for OpenArm. The same reference points were collected and fitted under MuJoCo 4.0.1. The whole-arm holdout RMSE changed by less than `1e-9 N·m` for each arm.
+All 1,024 separately sampled workspace states per arm were within the effort limits. The identified models had positive mass matrices at all of those states and reached workspace torque RMSE of 0.01129 N·m for PM01 and 0.01549 N·m for OpenArm. Recollecting the same reference plan in MuJoCo 4.0.1 changed the whole-arm holdout RMSE by less than `1e-9 N·m` for each arm.
 
 ## Generate and reuse point plans
 
@@ -164,7 +164,9 @@ The following command collects raw encoder measurements and runs forward replay 
 
 Add `--estimate-payload` when the arm and drive dynamics are known. The solver subtracts that prior model's torque and identifies the 10 inertial coefficients of the terminal payload. It preserves the fitted mass and center of mass while projecting the centered second-moment matrix onto positive eigenvalues when needed. The resulting `identified_payload.urdf` and `identified_payload.mjb` can be loaded again, and the runner checks the binary model's holdout torque against the native regression prediction.
 
-Use `--payload-kg`, `--payload-size-m X Y Z`, and `--payload-center-m X Y Z` to vary the simulated box. The center is relative to the last moving link's joint frame. The report measures mass error, center distance, and the Frobenius norm of the inertia error against the saved truth model.
+By default the box sits with one face on the URDF mounting plane. For PM01 the mounting frame is `J_FIXED_ELBOW_END_L`, and the box extends along local −Z. For OpenArm it is `LEFT_HAND_CONNECTOR`, and the box extends along local +Z. The center is half the box depth beyond the mounting plane. The default centers in the last moving link's frame are `[0.03, -0.02, -0.16]` m for PM01 and `[0, 0, 0.1201]` m for OpenArm.
+
+Use `--payload-kg` and `--payload-size-m X Y Z` to change the box. To place its center explicitly in the last moving link's frame, use `--payload-center-m X Y Z`. The report records each arm's resolved `payload_center_xyz_m` and, for the default mount, `payload_flange_joint`. Refitting a capture uses the saved truth URDF and recorded data.
 
 Add `--estimate-arm` to fit the moving links and drive coefficients together. The solver takes the optimized trajectory and final Huber weights, then fits link pseudo-inertia matrices constrained to be at least 2% of their nominal matrices. Rotor inertia and viscous damping are nonnegative. The prior weight in normalized coordinates is the squared robust torque residual scale divided by the observation count, limited to `[1e-11, 1e-6]`. The nominal URDF helps select a full parameter vector among dynamically equivalent models. Each reported moving-link inertia includes any welded descendants, and the terminal payload can be absorbed into the last moving link. See [Wensing, Kim and Slotine on physically consistent inertial identification](https://arxiv.org/abs/1701.04395).
 
@@ -184,7 +186,7 @@ Before column normalization, the benchmark zeros calibration columns below 64 ma
 
 1. The Pinocchio rigid-body regressor builds the base-parameter basis from 192 deterministic calibration states. These states are used only to learn linear dependencies in the regressor. The existing Fourier optimizer improves the mean log information score in that fixed basis under position, velocity, acceleration, and jerk limits. The position interval has a 5% margin at each end and the speed cap is the smaller of 80% of the URDF limit and 4 rad/s. The acceleration and jerk caps are 25 rad/s² and 160 rad/s³.
 2. The benchmark automatically generates 401 joint references for each 8 s training trajectory and an independent 401-point holdout over 6.25 s. The Fourier coefficients let the rollout evaluate the same continuous reference at every integration step. With `--acquisition rollout`, a computed-torque controller based on the unloaded model tracks the reference while the loaded MuJoCo plant integrates with steps of at most 1 ms. It tracks the periodic reference for 3 s before recording, limits applied torque to each joint's URDF effort, and records position, velocity, acceleration, and applied torque at the same instant. The acceleration feedback gains are 10,000 s⁻² for position error and 200 s⁻¹ for velocity error. The plant and replay both use semi-implicit Euler with the viscous force evaluated explicitly. With `--acquisition inverse`, MuJoCo evaluates the torque at each analytical reference state and rejects torques above the URDF effort. Both modes reject active constraints and use gravity `(0, 0, -9.81) m/s²`. See the [MuJoCo stepping and inverse-dynamics documentation](https://mujoco.readthedocs.io/en/stable/programming/simulation.html).
-3. The truth model includes a fixed 0.35 kg box with its center displaced from the last moving link. For the default noisy experiment, each training torque gets Gaussian noise with 0.02 N·m standard deviation and a 1% chance of an additional signed 0.75 N·m impulse. The baseline and optimized trajectories share the same noise realization by sample index and joint. Holdout labels remain clean. OLS and Huber (threshold 0.06 N·m) fit the loaded-arm inertial combinations using the nominal arm's kinematics. The known payload is used to construct the simulator and the oracle check, and never enters the fitted regression problem.
+3. The truth model includes a fixed 0.35 kg box mounted at the flange. For the default noisy experiment, each training torque gets Gaussian noise with 0.02 N·m standard deviation and a 1% chance of an additional signed 0.75 N·m impulse. The baseline and optimized trajectories share the same noise realization by sample index and joint. Holdout labels remain clean. OLS and Huber (threshold 0.06 N·m) fit the loaded-arm inertial combinations using the nominal arm's kinematics. The known payload is used to construct the simulator and the oracle check, and never enters the fitted regression problem.
 4. The fit solves `tau = Y_base(q, dq, ddq) beta`, where `beta = full_to_base * theta` and `theta` stacks the Pinocchio rigid-body coordinates. The oracle limits the maximum MuJoCo versus full Pinocchio torque error to `1e-7 N·m`, allowing for the URDF importer's conversion of full inertia tensors to principal axes. It independently limits the change introduced by reducing the Pinocchio regressor to `1e-8 N·m`. The reported coordinates describe observable combinations that include the payload. Individual masses, centers of mass, and inertia tensors cannot be recovered uniquely from these data.
 
 `report.json` records source URDF hashes, tool versions, joint order, design scores, ranks, condition numbers, effort fractions, and holdout errors in N·m. It also includes the zero-based selected regressor columns, normalization scales, full-to-base mapping, and fitted and oracle base coordinates. Full coordinates repeat the Pinocchio order `mass, mcx, mcy, mcz, Ixx, Ixy, Iyy, Ixz, Iyz, Izz` for each joint, with inertia about the corresponding joint-frame origin. The per-arm directories contain temporary models and CSVs matching the core contracts. The `*_states.csv` files contain the automatic references with placeholder zero torque. The `*_raw.csv` files contain timestamps, joint positions, and torque. The processed `train_baseline.csv`, `train_optimized.csv`, and `holdout.csv` files also contain velocity and acceleration. Raw training positions include paired encoder noise with a default standard deviation of `5e-5 rad`.
@@ -214,9 +216,9 @@ Prescribed-state inverse dynamics holdout torque RMSE in N·m, with fitted resul
 
 | Left arm | Base / full coordinates | Unloaded nominal | Baseline OLS | Baseline Huber | Optimized OLS | Optimized Huber |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| PM01 | 31 / 50 | 0.41340 | 0.04355 | 0.01103 | 0.01234 | 0.00431 |
-| OpenArm | 43 / 70 | 0.23947 | 0.03789 | 0.01160 | 0.01109 | 0.00337 |
+| PM01 | 31 / 50 | 0.52037 | 0.04355 | 0.01103 | 0.01234 | 0.00431 |
+| OpenArm | 43 / 70 | 0.43266 | 0.03789 | 0.01160 | 0.01109 | 0.00337 |
 
-In the clean control, the relative error against the known base coordinates is about `1.04e-8` for PM01 and `6.54e-9` for OpenArm. These figures characterize rigid-body inverse dynamics along prescribed trajectories in simulation.
+In the clean control, the relative error against the known base coordinates is about `1.38e-9` for PM01 and `6.42e-9` for OpenArm. These figures characterize rigid-body inverse dynamics along prescribed trajectories in simulation.
 
-At torque noise `0.20 N·m` and encoder noise `0.0008 rad`, the OpenArm median holdout torque RMSE over six seeds was `0.05235 N·m` for optimized Huber and `0.02119 N·m` for the constrained model. The reloaded constrained model finished all 16 replay windows on each seed.
+At torque noise `0.20 N·m` and encoder noise `0.0008 rad`, the OpenArm median holdout torque RMSE over six seeds was `0.05153 N·m` for optimized Huber and `0.02148 N·m` for the constrained model. The reloaded constrained model finished all 16 replay windows on each seed.

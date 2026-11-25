@@ -3,11 +3,38 @@
 import json
 from pathlib import Path
 import sys
+import xml.etree.ElementTree as ET
 
 import mujoco
 import numpy as np
 
 from capture_io import read_motion
+
+
+def check_payload_mount(directory, name, robot, report):
+    center = report["payload_center_xyz_m"]
+    if center is None:
+        # Fixed joint origins from the two URDFs pinned in arm-identification-ci.
+        flange, position, sign = {
+            "pm01": ("J_FIXED_ELBOW_END_L", (0.03, -0.02, -0.14), -1),
+            "openarm": ("LEFT_HAND_CONNECTOR", (0.0, 0.0, 0.1001), 1),
+        }[name]
+        if robot["payload_flange_joint"] != flange:
+            raise ValueError(f"{name}: wrong payload flange")
+        center = np.array(position)
+        center[2] += sign * report["payload_box_size_m"][2] / 2.0
+
+    resolved_center = robot.get("payload_center_xyz_m", center)
+    np.testing.assert_allclose(resolved_center, center, rtol=0.0, atol=1e-15)
+    truth = ET.parse(directory / "truth.urdf")
+    mount = truth.find("joint[@name='experiment_payload_mount']")
+    if mount.find("parent").get("link") != robot["payload_parent"]:
+        raise ValueError(f"{name}: wrong payload parent")
+    mounted_center = [
+        float(value) for value in mount.find("origin").get("xyz").split()
+    ]
+    np.testing.assert_allclose(mounted_center, center, rtol=0.0, atol=1e-15)
+    return center
 
 
 def check(directory, clean):
@@ -85,8 +112,9 @@ def check(directory, clean):
         if abs(payload["mass_kg"] -
                report["payload_kg"]) > (1e-7 if clean else 0.01):
             raise ValueError(f"{name}: inaccurate estimated payload mass")
+        center = check_payload_mount(directory / name, name, robot, report)
         np.testing.assert_allclose(payload["center_m"],
-                                   report["payload_center_xyz_m"],
+                                   center,
                                    rtol=0.0,
                                    atol=(1e-7 if clean else 0.005))
         inertia = np.asarray(payload["inertia_at_center_kg_m2"])

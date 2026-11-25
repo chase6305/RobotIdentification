@@ -14,9 +14,9 @@ import xml.etree.ElementTree as ET
 import mujoco
 import numpy as np
 
-from arm_models import (ARMS, PAYLOAD_CENTER_METERS, PAYLOAD_SIZE_METERS,
-                        add_payload, export_identified_arm, export_payload,
-                        extract_arm, payload_reference_errors, write_urdf)
+from arm_models import (ARMS, PAYLOAD_SIZE_METERS, add_payload,
+                        export_identified_arm, export_payload, extract_arm,
+                        flange_box_pose, payload_reference_errors, write_urdf)
 from capture_io import dataset_header, read_motion, write_dataset, write_raw
 from simulation import (ArmDynamics, harmonic_states, inverse_dynamics, rollout,
                         validate_workspace)
@@ -230,8 +230,8 @@ def run_arm(name, args):
     arm = ARMS[name]
     source_bytes = (args.assets_root / arm.urdf).read_bytes()
     source_hash = hashlib.sha256(source_bytes).hexdigest()
-    nominal, terminal, effort = extract_arm(ET.fromstring(source_bytes), arm,
-                                            name)
+    source = ET.fromstring(source_bytes)
+    nominal, terminal, effort = extract_arm(source, arm, name)
     directory = args.output / name
     directory.mkdir()
     nominal_path = directory / "nominal.urdf"
@@ -263,10 +263,18 @@ def run_arm(name, args):
     if args.design_only:
         return result
 
+    center = args.payload_center_m
+    rotation = None
+    if center is None:
+        center, rotation = flange_box_pose(source, arm, terminal,
+                                           args.payload_size_m[2])
+        result["payload_flange_joint"] = arm.flange_joint
+    result["payload_center_xyz_m"] = np.asarray(center).tolist()
+
     truth_path = directory / "truth.urdf"
     truth = copy.deepcopy(nominal)
-    add_payload(truth, terminal, args.payload_kg, args.payload_size_m,
-                args.payload_center_m)
+    add_payload(truth, terminal, args.payload_kg, args.payload_size_m, center,
+                rotation)
     write_urdf(truth, truth_path)
 
     motions = {
@@ -530,8 +538,7 @@ def main():
                         nargs=3,
                         type=float,
                         metavar=("X", "Y", "Z"),
-                        default=PAYLOAD_CENTER_METERS,
-                        help="simulated box center in the terminal joint frame")
+                        help="override box center in the terminal link frame")
     parser.add_argument(
         "--actuator-scale",
         type=float,
@@ -584,7 +591,8 @@ def main():
             math.isfinite(value) and value > 0
             for value in args.payload_size_m):
         parser.error("--payload-size-m requires three finite positive lengths")
-    if not all(map(math.isfinite, args.payload_center_m)):
+    if args.payload_center_m is not None and not all(
+            map(math.isfinite, args.payload_center_m)):
         parser.error("--payload-center-m requires three finite coordinates")
     if args.capture_dropout >= 1.0:
         parser.error("--capture-dropout must be less than one")
