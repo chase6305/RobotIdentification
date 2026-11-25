@@ -94,6 +94,26 @@ To compare preprocessing settings on the same capture, select an estimator in th
   --raw-window 17 --huber-auto --output build/arms-local-cubic
 ```
 
+### Refit synchronized repeats
+
+Pass `--repeat-capture` for each additional repetition of the same MuJoCo acquisition. The refit takes a sample-wise median of the encoder position and torque channels before preprocessing. The selected arms must have the same models, joint order, drive, reference trajectories and recorded timestamps. The acquisition mode and simulated torque delay must also match. The first capture supplies the independent holdout and fit defaults, and `training_capture_aggregation` lists the contributing captures in the report.
+
+For example, reuse a point plan and disable timestamp jitter when collecting repetitions with different noise seeds.
+
+```bash
+./scripts/run_arm_identification.sh --demo --training-period-s 5.5 --sample-count 801 \
+  --raw-harmonics 14 --timestamp-jitter-ms 0 --seed 11 --output build/arms-repeat-11
+for seed in 29 47 71; do
+  ./scripts/run_arm_identification.sh --demo --reference-plan build/arms-repeat-11 \
+    --raw-harmonics 14 --timestamp-jitter-ms 0 --seed "$seed" --output "build/arms-repeat-$seed"
+done
+./scripts/run_arm_identification.sh --refit build/arms-repeat-11 \
+  --repeat-capture build/arms-repeat-29 --repeat-capture build/arms-repeat-47 \
+  --repeat-capture build/arms-repeat-71 --output build/arms-repeat-median
+```
+
+With the default synthetic noise model and two groups of four captures, the median reduced independent payload torque error on both arms compared with the median single-capture result in each group. The comparison uses the same 5.5 s plan and applies to the repeated, synchronized simulation traces.
+
 ## Outputs
 
 | Path in the demo output | Contents |

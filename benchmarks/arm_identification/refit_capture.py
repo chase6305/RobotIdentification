@@ -13,14 +13,49 @@ import mujoco
 import numpy as np
 
 from arm_models import ARMS
-from capture_io import read_motion
+from capture_io import read_motion, write_median_raw
 from run_experiment import (RAW_ESTIMATORS, add_torque_alignment_arguments,
                             differentiation_metrics, fit_captured_arm,
                             preprocess_training_split, print_summary,
                             select_torque_alignment)
 
 
-def refit_arm(args, source_report, name, output):
+def read_repeat_captures(primary_path, paths, primary, robots):
+    repeats = []
+    for path in paths:
+        path = path.resolve(strict=True)
+        if path == primary_path or path in repeats:
+            raise ValueError(f"duplicate repeat capture {path}")
+        report = json.loads((path / "report.json").read_text(encoding="utf-8"))
+        if report["design_only"]:
+            raise ValueError(f"repeat capture {path} has reference points only")
+        if (report["acquisition"] != primary["acquisition"] or report.get(
+                "torque_delay_ms", 0.0) != primary.get("torque_delay_ms", 0.0)):
+            raise ValueError(
+                f"repeat capture {path} has different acquisition settings")
+        for name in robots:
+            original = primary["robots"][name]
+            repeat = report["robots"].get(name)
+            if repeat is None:
+                raise ValueError(
+                    f"{name} is missing from repeat capture {path}")
+            if (repeat["joint_names"] != original["joint_names"] or
+                    repeat.get("actuators") != original.get("actuators") or
+                    repeat["design"]["references"]
+                    != original["design"]["references"]):
+                raise ValueError(
+                    f"{name} uses different joints, drive or references in {path}"
+                )
+            for filename in ("nominal.urdf", "truth.urdf"):
+                if ((path / name / filename).read_bytes()
+                        != (primary_path / name / filename).read_bytes()):
+                    raise ValueError(
+                        f"{name} uses a different {filename} in {path}")
+        repeats.append(path)
+    return repeats
+
+
+def refit_arm(args, source_report, name, output, repeats):
     source = args.capture / name
     metadata = source_report["robots"][name]
     result = dict(metadata)
@@ -30,13 +65,19 @@ def refit_arm(args, source_report, name, output):
     holdout_files = ("holdout.csv",)
     if source_report["replay"]:
         holdout_files += ("holdout_dense.csv",)
-    files = ("nominal.urdf", "truth.urdf", "calibration.csv",
-             "train_baseline_raw.csv", "train_optimized_raw.csv",
-             *holdout_files)
+    files = ("nominal.urdf", "truth.urdf", "calibration.csv", *holdout_files)
     for filename in files:
         shutil.copyfile(source / filename, directory / filename)
 
     joints = metadata["joint_names"]
+    for filename in ("train_baseline_raw.csv", "train_optimized_raw.csv"):
+        if repeats:
+            inputs = [
+                source / filename, *(path / name / filename for path in repeats)
+            ]
+            write_median_raw(directory / filename, inputs, joints)
+        else:
+            shutil.copyfile(source / filename, directory / filename)
     # The native fit checks the remaining rows after this capture-specific prefix.
     for filename in holdout_files:
         read_motion(directory / filename, joints, max_rows=3)
@@ -70,6 +111,8 @@ def run(args):
     if not robots or any(name not in source["robots"] or name not in ARMS
                          for name in robots):
         raise ValueError("the requested arm is missing from the capture")
+    repeats = read_repeat_captures(args.capture, args.repeat_capture, source,
+                                   robots)
     for name, default in (("raw_estimator", "periodic-fourier"),
                           ("raw_harmonics", 7), ("raw_window", 5),
                           ("estimate_arm", False), ("estimate_payload", False)):
@@ -87,7 +130,7 @@ def run(args):
                                          dir=args.output.parent) as temporary:
             staged = Path(temporary) / "capture"
             staged.mkdir()
-            report = write_refit(args, source, robots, staged)
+            report = write_refit(args, source, robots, staged, repeats)
             staged.rename(args.output)
     except BaseException:
         with suppress(OSError):
@@ -98,7 +141,7 @@ def run(args):
     print(args.output / "report.json")
 
 
-def write_refit(args, source, robots, output):
+def write_refit(args, source, robots, output, repeats):
     manual_delay = args.align_torque_ms
     if manual_delay is None:
         manual_delay = 0.0 if args.search_torque_delay_ms is not None else source.get(
@@ -120,7 +163,15 @@ def write_refit(args, source, robots, output):
         huber_delta_nm=None if args.huber_auto else args.huber_delta_nm,
         estimate_arm=args.estimate_arm,
         estimate_payload=args.estimate_payload,
-        robots={name: refit_arm(args, source, name, output) for name in robots})
+        robots={
+            name: refit_arm(args, source, name, output, repeats)
+            for name in robots
+        })
+    if repeats:
+        report["training_capture_aggregation"] = {
+            "method": "median",
+            "captures": [str(path) for path in (args.capture, *repeats)],
+        }
     destination = output / "report.json"
     destination.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n",
                            encoding="utf-8")
@@ -138,6 +189,12 @@ def main():
                         required=True,
                         help="new refit directory")
     parser.add_argument("--robot", choices=("both", *ARMS), default="both")
+    parser.add_argument(
+        "--repeat-capture",
+        type=Path,
+        action="append",
+        default=[],
+        help="add a synchronized capture to the sample-wise median")
     parser.add_argument("--raw-estimator", choices=RAW_ESTIMATORS)
     parser.add_argument("--raw-window", type=int)
     parser.add_argument("--raw-harmonics", type=int)
