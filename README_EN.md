@@ -80,7 +80,7 @@ The demo generates a baseline training trajectory, an optimized training traject
   --output build/arm-planned-demo
 ```
 
-The demo writes `build/arms-demo/report.json` and stores each arm's points, raw samples, and URDF, MJCF, and MJB models under `pm01/` and `openarm/`. Use a new output directory for each run. Pass a saved capture to `--refit` to rerun identification. [Default results](benchmarks/arm_identification/README.md#default-demo-results) · [Output files](benchmarks/arm_identification/README.md#outputs) · [Refit a capture](benchmarks/arm_identification/README.md#refit-a-capture)
+The demo writes `build/arms-demo/report.json` and stores each arm's points, raw samples, and URDF, MJCF, and MJB models under `pm01/` and `openarm/`. Use a new output directory for each run. Pass a saved capture to `--refit` to rerun identification. [Modeling notes (Chinese)](docs/mujoco-arm-modeling.md) · [Default results](benchmarks/arm_identification/README.md#default-demo-results) · [Output files](benchmarks/arm_identification/README.md#outputs) · [Refit a capture](benchmarks/arm_identification/README.md#refit-a-capture)
 
 ## Offline tools
 

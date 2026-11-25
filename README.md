@@ -83,7 +83,7 @@ python3 -m pip install -r requirements-dev.txt
   --output build/arm-planned-demo
 ```
 
-结果见 `build/arms-demo/report.json`，两条臂的点位、原始数据和 URDF、MJCF、MJB 模型分别保存在 `pm01/` 和 `openarm/`。每次运行使用新的输出目录。`--refit` 可用已有采集重跑辨识。[默认结果](benchmarks/arm_identification/README.md#default-demo-results) · [输出文件](benchmarks/arm_identification/README.md#outputs) · [重拟合](benchmarks/arm_identification/README.md#refit-a-capture)
+结果见 `build/arms-demo/report.json`，两条臂的点位、原始数据和 URDF、MJCF、MJB 模型分别保存在 `pm01/` 和 `openarm/`。每次运行使用新的输出目录。`--refit` 可用已有采集重跑辨识。[建模说明](docs/mujoco-arm-modeling.md) · [默认结果](benchmarks/arm_identification/README.md#default-demo-results) · [输出文件](benchmarks/arm_identification/README.md#outputs) · [重拟合](benchmarks/arm_identification/README.md#refit-a-capture)
 
 ## 离线工具
 
