@@ -60,6 +60,7 @@ def _read_csv_block(stream):
 
 def _raw_blocks(path, header):
     position = None
+    rows_read = 0
     while True:
         # Close each file between blocks so the descriptor count stays fixed.
         with path.open(newline="", encoding="utf-8") as stream:
@@ -67,13 +68,41 @@ def _raw_blocks(path, header):
                 _check_header(stream, path, header)
             else:
                 stream.seek(position)
-            samples = _read_csv_block(stream)
+            try:
+                samples = _read_csv_block(stream)
+            except ValueError as error:
+                raise ValueError(
+                    f"invalid motion samples in {path} after {rows_read} data rows. {error}"
+                ) from error
             position = stream.tell()
         if not len(samples):
             return
         if samples.shape[1] != len(header) or not np.isfinite(samples).all():
             raise ValueError(f"invalid motion samples in {path}")
+        rows_read += len(samples)
         yield samples
+
+
+def _check_repeat_timestamps(path, rows, timestamps, rows_written):
+    if rows is None:
+        raise ValueError(
+            f"repeat capture {path} ended after {rows_written} data rows")
+    repeat_timestamps = rows[:, 0]
+    if np.array_equal(repeat_timestamps, timestamps):
+        return
+    shared_rows = min(len(timestamps), len(repeat_timestamps))
+    mismatches = np.flatnonzero(
+        repeat_timestamps[:shared_rows] != timestamps[:shared_rows])
+    if mismatches.size:
+        offset = int(mismatches[0])
+        row = rows_written + offset + 1
+        raise ValueError(
+            f"repeat capture timestamps differ in {path} at data row {row}. "
+            f"Expected {timestamps[offset]:.17g} s, got {repeat_timestamps[offset]:.17g} s."
+        )
+    raise ValueError(
+        f"repeat capture length differs in {path} after {rows_written + shared_rows} data rows"
+    )
 
 
 def write_median_raw(path, inputs, joints):
@@ -90,17 +119,20 @@ def write_median_raw(path, inputs, joints):
         output.write(",".join(header) + "\n")
         for primary_rows, *repeat_rows in zip_longest(*capture_blocks):
             if primary_rows is None:
+                longer_path = next(
+                    repeat_path
+                    for repeat_path, rows in zip(repeat_paths, repeat_rows)
+                    if rows is not None)
                 raise ValueError(
-                    f"repeat capture has more samples than {primary_path}")
+                    f"repeat capture {longer_path} has more samples than {primary_path} "
+                    f"({rows_written} data rows)")
             timestamps = primary_rows[:, 0]
             if timestamps[0] <= previous_time or np.any(
                     timestamps[1:] <= timestamps[:-1]):
                 raise ValueError(f"invalid motion samples in {primary_path}")
             for repeat_path, samples in zip(repeat_paths, repeat_rows):
-                if samples is None or not np.array_equal(
-                        samples[:, 0], timestamps):
-                    raise ValueError(
-                        f"repeat capture timestamps differ in {repeat_path}")
+                _check_repeat_timestamps(repeat_path, samples, timestamps,
+                                         rows_written)
 
             channels = np.stack(
                 [rows[:, 1:] for rows in (primary_rows, *repeat_rows)])

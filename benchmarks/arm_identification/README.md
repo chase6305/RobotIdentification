@@ -100,11 +100,13 @@ Pass `--repeat-capture` for each additional repetition of the same MuJoCo acquis
 
 Each repeat must match the primary capture's selected arm models, joint order, drive, reference trajectories, recorded timestamps, acquisition mode and simulated torque delay.
 
-The primary capture supplies the independent holdout and fit defaults. The report lists every contributing capture under `training_capture_aggregation`.
+The primary capture supplies the independent holdout and fit defaults. Its acquisition settings remain at the top level of the report. `training_capture_aggregation` lists every capture that contributed training samples.
+
+To adjust the fit of an existing median, refit it directly. To add a repetition, run the median again with every original capture and the new repetition. A saved median has already reduced the original samples to a single value per channel and timestamp.
 
 The median is calculated in fixed-size row blocks, bounding the working memory for each synchronized repetition during aggregation.
 
-For example, reuse a point plan and disable timestamp jitter when collecting repetitions with different noise seeds.
+To collect repetitions with different noise seeds, reuse the first capture's point plan and disable timestamp jitter and dropout.
 
 ```bash
 ./scripts/run_arm_identification.sh --demo --training-period-s 5.5 --sample-count 801 \

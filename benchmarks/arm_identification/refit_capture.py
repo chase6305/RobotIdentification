@@ -23,8 +23,16 @@ _ARM_MODEL_FILES = ("nominal.urdf", "truth.urdf")
 _TRAINING_SPLITS = ("baseline", "optimized")
 
 
+def _check_median_input(capture_dir, report):
+    if "training_capture_aggregation" in report:
+        raise ValueError(f"capture {capture_dir} is already aggregated. "
+                         "Use the original captures to compute a new median.")
+
+
 def collect_capture_dirs(primary_dir, repeat_paths, primary_report, arm_names):
     """Return the primary capture followed by the validated repeats."""
+    if repeat_paths:
+        _check_median_input(primary_dir, primary_report)
     capture_dirs = [primary_dir]
     for repeat_path in repeat_paths:
         repeat_dir = repeat_path.resolve(strict=True)
@@ -35,6 +43,7 @@ def collect_capture_dirs(primary_dir, repeat_paths, primary_report, arm_names):
         if repeat_report["design_only"]:
             raise ValueError(
                 f"repeat capture {repeat_dir} has reference points only")
+        _check_median_input(repeat_dir, repeat_report)
         primary_delay = primary_report.get("torque_delay_ms", 0.0)
         repeat_delay = repeat_report.get("torque_delay_ms", 0.0)
         if (repeat_report["acquisition"] != primary_report["acquisition"] or
