@@ -74,33 +74,9 @@ jobs:
           reject_repeat "$raw_csv at data row 300." build/arms-noisy-11 build/repeat-bad-csv
           ./scripts/run_arm_identification.sh --refit build/arms-repeat-median \
             --no-estimate-payload --output build/arms-repeat-refit
-          build/arm-identification/venv/bin/python - <<'PY'
-          from pathlib import Path
-          import json
-          import numpy as np
-
-          median_dir = Path("build/arms-repeat-median")
-          refit_dir = Path("build/arms-repeat-refit")
-          median_report = json.loads((median_dir / "report.json").read_text())
-          refit_report = json.loads((refit_dir / "report.json").read_text())
-          aggregation = median_report["training_capture_aggregation"]
-          assert refit_report["training_capture_aggregation"] == aggregation
-          captures = [Path(path) for path in aggregation["captures"]]
-          assert aggregation["method"] == "median"
-          assert [capture.name for capture in captures] == [
-              "arms-noisy-11", "arms-noisy-29", "arms-noisy-47", "arms-noisy-71",
-          ]
-          for arm in ("pm01", "openarm"):
-              for filename in ("train_baseline_raw.csv", "train_optimized_raw.csv"):
-                  median_csv = median_dir / arm / filename
-                  refit_csv = refit_dir / arm / filename
-                  observed = np.loadtxt(median_csv, delimiter=",", skiprows=1)
-                  inputs = [np.loadtxt(capture / arm / filename, delimiter=",", skiprows=1)
-                            for capture in captures]
-                  expected = np.median(inputs, axis=0)
-                  np.testing.assert_array_equal(observed, expected)
-                  assert refit_csv.read_bytes() == median_csv.read_bytes()
-          PY
+          build/arm-identification/venv/bin/python benchmarks/arm_identification/check_repeat_capture.py \
+            build/arms-repeat-median build/arms-repeat-refit \
+            build/arms-noisy-11 build/arms-noisy-29 build/arms-noisy-47 build/arms-noisy-71
           run_experiment --acquisition rollout --output build/arms-rollout-clean --torque-noise-nm 0 --outlier-nm 0
           for seed in 11 71; do
             run_experiment --acquisition rollout --output "build/arms-rollout-noisy-$seed" --seed "$seed"
