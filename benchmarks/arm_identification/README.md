@@ -79,6 +79,8 @@ Refit uses the saved arm models and recorded CSVs. The acquisition settings, Hub
 ./scripts/run_arm_identification.sh --refit build/arms-demo --summary --output build/arms-demo-refit
 ```
 
+For a native fit with validation metrics, pass `--no-estimate-arm --no-estimate-payload`. The refit runs forward replay when the capture includes `holdout_dense.csv`.
+
 The `arm-identification-demo` artifact from a successful CI run includes the URDFs and CSV inputs required to refit both arms. Extract it so `report.json`, `pm01/`, and `openarm/` are directly inside `build/arms-from-ci/`, then run the command below. [Arm identification workflow runs](https://github.com/chase6305/RobotIdentification/actions/workflows/arm-identification-ci.yml)
 
 ```bash
