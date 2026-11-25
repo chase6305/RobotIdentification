@@ -10,11 +10,11 @@ def dataset_header(joints, fields=("q", "dq", "ddq", "tau")):
            ] + [f"{name}/{joint}" for name in fields for joint in joints]
 
 
-def read_motion(path, joints):
+def read_motion(path, joints, *, max_rows=None):
     with path.open(newline="", encoding="utf-8") as stream:
         if next(csv.reader(stream), None) != dataset_header(joints):
             raise ValueError(f"unexpected dataset header in {path}")
-        motion = np.loadtxt(stream, delimiter=",", ndmin=2)
+        motion = np.loadtxt(stream, delimiter=",", ndmin=2, max_rows=max_rows)
     if (motion.shape[0] < 3 or motion.shape[1] != 1 + 4 * len(joints) or
             not np.isfinite(motion).all() or
             not np.all(np.diff(motion[:, 0]) > 0)):

@@ -1,10 +1,12 @@
 """Refit a saved MuJoCo capture from its recorded encoder and torque CSVs."""
 
 import argparse
+from contextlib import suppress
 import json
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 import mujoco
@@ -12,52 +14,50 @@ import numpy as np
 
 from arm_models import ARMS
 from capture_io import read_motion
-from run_experiment import (FOURIER_ESTIMATORS, RAW_ESTIMATORS,
-                            add_torque_alignment_arguments,
+from run_experiment import (RAW_ESTIMATORS, add_torque_alignment_arguments,
                             differentiation_metrics, fit_captured_arm,
-                            print_summary, run_cpp, select_torque_alignment)
+                            preprocess_training_split, print_summary,
+                            select_torque_alignment)
 
 
-def refit_arm(args, source_report, name):
+def refit_arm(args, source_report, name, output):
     source = args.capture / name
     metadata = source_report["robots"][name]
     result = dict(metadata)
-    directory = args.output / name
+    directory = output / name
     directory.mkdir()
 
-    files = ("nominal.urdf", "truth.urdf", "calibration.csv", "holdout.csv",
-             "train_baseline_raw.csv", "train_optimized_raw.csv")
+    holdout_files = ("holdout.csv",)
     if source_report["replay"]:
-        files += ("holdout_dense.csv",)
+        holdout_files += ("holdout_dense.csv",)
+    files = ("nominal.urdf", "truth.urdf", "calibration.csv",
+             "train_baseline_raw.csv", "train_optimized_raw.csv",
+             *holdout_files)
     for filename in files:
         shutil.copyfile(source / filename, directory / filename)
+
+    joints = metadata["joint_names"]
+    # The native fit checks the remaining rows after this capture-specific prefix.
+    for filename in holdout_files:
+        read_motion(directory / filename, joints, max_rows=3)
 
     result.setdefault("torque_alignment",
                       {"delay_ms": source_report.get("align_torque_ms", 0.0)})
     result["torque_alignment"] = select_torque_alignment(
         args, directory, result)
     delay = result["torque_alignment"]["delay_ms"]
-    joints = metadata["joint_names"]
-    estimator_size = (args.raw_harmonics if args.raw_estimator
-                      in FOURIER_ESTIMATORS else args.raw_window)
     processed = {}
     for split in ("baseline", "optimized"):
-        processed_path = directory / f"train_{split}.csv"
-        processed[split] = run_cpp(args.executable, "preprocess",
-                                   directory / f"train_{split}_raw.csv",
-                                   processed_path, estimator_size,
-                                   args.raw_estimator, delay)
+        processed[split] = preprocess_training_split(args, directory, split,
+                                                     delay)
         if source_report["fit_input"] == "simulator" and delay == 0.0:
             measured = read_motion(source / f"train_{split}.csv", joints)
-            estimated = read_motion(processed_path, joints)
+            estimated = read_motion(directory / f"train_{split}.csv", joints)
             processed[split].update(
                 differentiation_metrics(estimated, measured, len(joints)))
 
-    holdout = read_motion(directory / "holdout.csv", joints)
-    dense = read_motion(directory / "holdout_dense.csv",
-                        joints) if source_report["replay"] else None
     result["preprocessing"] = processed
-    result["fit"] = fit_captured_arm(args, directory, metadata, holdout, dense)
+    result["fit"] = fit_captured_arm(args, directory, metadata)
     return result
 
 
@@ -79,7 +79,26 @@ def run(args):
         args.huber_auto = source.get("huber_auto", False)
         args.huber_delta_nm = source.get("huber_delta_nm", .06)
     args.executable = args.executable.resolve(strict=True)
+
+    # Reserve the final path before work. Publish both arms and the report together.
     args.output.mkdir(parents=True, exist_ok=False)
+    try:
+        with tempfile.TemporaryDirectory(prefix=".arm-refit-",
+                                         dir=args.output.parent) as temporary:
+            staged = Path(temporary) / "capture"
+            staged.mkdir()
+            report = write_refit(args, source, robots, staged)
+            staged.rename(args.output)
+    except BaseException:
+        with suppress(OSError):
+            args.output.rmdir()
+        raise
+    if args.summary:
+        print_summary(report)
+    print(args.output / "report.json")
+
+
+def write_refit(args, source, robots, output):
     manual_delay = args.align_torque_ms
     if manual_delay is None:
         manual_delay = 0.0 if args.search_torque_delay_ms is not None else source.get(
@@ -101,13 +120,11 @@ def run(args):
         huber_delta_nm=None if args.huber_auto else args.huber_delta_nm,
         estimate_arm=args.estimate_arm,
         estimate_payload=args.estimate_payload,
-        robots={name: refit_arm(args, source, name) for name in robots})
-    destination = args.output / "report.json"
+        robots={name: refit_arm(args, source, name, output) for name in robots})
+    destination = output / "report.json"
     destination.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n",
                            encoding="utf-8")
-    if args.summary:
-        print_summary(report)
-    print(destination)
+    return report
 
 
 def main():

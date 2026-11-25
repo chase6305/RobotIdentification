@@ -103,6 +103,11 @@ jobs:
           python benchmarks/arm_identification/check_huber.py build/arms-drive-high-noise/report.json
           python benchmarks/arm_identification/check_physical_arm.py \
             build/arms-drive-clean build/arms-drive-raw build/arms-physical-high-noise
+          if ./scripts/run_arm_identification.sh --refit build/arms-drive-raw \
+              --raw-estimator local-cubic --raw-window 2 --output build/arms-refit; then
+            exit 1
+          fi
+          test ! -e build/arms-refit
           ./scripts/run_arm_identification.sh --refit build/arms-drive-raw --output build/arms-refit
           for arm in pm01 openarm; do
             cmp "build/arms-drive-raw/$arm/train_optimized_raw.csv" "build/arms-refit/$arm/train_optimized_raw.csv"
